@@ -61,6 +61,35 @@ describe('invite lifetime across restarts (C1)', () => {
   }, 30_000);
 });
 
+describe('recovery from an older export (C2)', () => {
+  it('a device added after the export stays a member and the new hub adopts its newer list', async () => {
+    const H = await make(tmpDir(), { alias: 'hub' });
+    await H.e.hubInit([]);
+    await H.e.start();
+    await H.e.setHubUrls([`ws://127.0.0.1:${H.e.hubIngressPort}/mesh/v1/hub`]);
+    const A = await make(tmpDir(), { alias: 'a' });
+    await A.e.start();
+    expect(await A.e.join(H.e.createInvite().uri)).toBe('member');
+    await until(() => A.e.hubStatus().online);
+    const text = H.e.exportRecovery('correct horse battery'); // exported now ...
+    const dHome = tmpDir();
+    const D = await make(dHome, { alias: 'late' }); // ... then a device is added
+    await D.e.start();
+    expect(await D.e.join(H.e.createInvite().uri)).toBe('member');
+    await until(() => D.e.hubStatus().online && A.e.members().length === 3);
+    const ingress = H.e.hubIngressPort;
+    await H.e.stop();
+    const H2 = await make(tmpDir(), { alias: 'hub2', hub: { ingressPort: ingress } });
+    await H2.e.importRecovery(text, 'correct horse battery');
+    await H2.e.start();
+    await until(() => D.e.hubStatus().online && D.e.hubStatus().hubId === H2.e.identity.deviceId, 15_000);
+    expect(meshEvents(D.events, 'revoked')).toEqual([]);
+    expect(existsSync(join(dHome, 'mesh'))).toBe(true);
+    await until(() => A.e.hubStatus().hubId === H2.e.identity.deviceId && A.e.members().some((m) => m.alias === 'late'), 15_000);
+    expect(H2.e.members().map((m) => m.alias).sort()).toEqual(['a', 'hub2', 'late']);
+  }, 60_000);
+});
+
 describe('engine with a hub', () => {
   it('init, join by QR (LAN), relay, held, revoke and recovery, end to end', async () => {
     // Hub

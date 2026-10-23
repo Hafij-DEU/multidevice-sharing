@@ -205,6 +205,64 @@ describe('HubClient', () => {
   });
 });
 
+describe('revocation must be proven (I1)', () => {
+  /** A hub endpoint that answers every auth with {t:'revoked', s?} and close 4403. */
+  async function revokingHub(s?: SignedMembership): Promise<number> {
+    const https = createServer(serverTlsOptions(H));
+    const wss = new WebSocketServer({ noServer: true });
+    https.on('upgrade', (req, socket, head) => {
+      wss.handleUpgrade(req, socket, head, (ws) => {
+        ws.on('error', () => {});
+        ws.once('message', () => {
+          ws.send(JSON.stringify(s ? { t: 'revoked', s } : { t: 'revoked' }));
+          ws.close(4403);
+        });
+        ws.send(JSON.stringify({ t: 'hello', v: 1, hub: H.deviceId, nonce: randomBytes(32).toString('base64') }));
+      });
+    });
+    await new Promise<void>((r) => https.listen(0, '127.0.0.1', () => r()));
+    closers.push(async () => { https.closeAllConnections(); await new Promise<void>((r) => https.close(() => r())); });
+    return (https.address() as { port: number }).port;
+  }
+
+  it('an unsigned revoked notice only stops the link; the mesh state stays', async () => {
+    const mesh = await makeMesh();
+    const port = await revokingHub();
+    const a = await device(mesh, A, () => port);
+    let revoked = 0;
+    a.client.on('revoked', () => { revoked++; });
+    a.client.start();
+    await until(() => a.client.state === 'refused');
+    await sleep(300);
+    expect(revoked).toBe(0);
+    expect(a.members.isTrusted(A.deviceId)).toBe(true);
+  });
+
+  it('a revoked notice carrying a root-signed list without this device revokes it', async () => {
+    const mesh = await makeMesh();
+    const v2 = signList({ ...mesh.v1.list, version: 2, members: mesh.v1.list.members.filter((m) => m.deviceId !== A.deviceId), revoked: [{ deviceId: A.deviceId, revokedAt: 1 }] }, mesh.rootKey);
+    const port = await revokingHub(v2);
+    const a = await device(mesh, A, () => port);
+    let revoked = 0;
+    a.client.on('revoked', () => { revoked++; });
+    a.client.start();
+    await until(() => a.client.state === 'revoked');
+    expect(revoked).toBe(1);
+  });
+
+  it('a revoked notice with a list from another root is ignored', async () => {
+    const mesh = await makeMesh();
+    const evil = await makeMesh();
+    const port = await revokingHub(evil.v1);
+    const a = await device(mesh, A, () => port);
+    let revoked = 0;
+    a.client.on('revoked', () => { revoked++; });
+    a.client.start();
+    await until(() => a.client.state === 'refused');
+    expect(revoked).toBe(0);
+  });
+});
+
 describe('HubClient inbound relay', () => {
   async function linked() {
     const mesh = await makeMesh();

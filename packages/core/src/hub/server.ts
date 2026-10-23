@@ -23,7 +23,7 @@ import { decodeFrame, encodeFrame, openEnvelope, sealEnvelope, type Envelope } f
 import { heldSessionOf, type HeldSession, type HeldStore } from './held.ts';
 import type { InviteBook } from '../mesh/invite.ts';
 import type { MembershipStore } from '../mesh/members.ts';
-import { signList, type Member, type MembershipList, type SignedMembership } from '../mesh/membership.ts';
+import { signList, verifySigned, type Member, type MembershipList, type SignedMembership } from '../mesh/membership.ts';
 import { peerDeviceId } from '../tls.ts';
 import { canonicalSpki } from '../trust.ts';
 
@@ -390,6 +390,44 @@ export class HubServer extends EventEmitter {
     return this.#addMemberSync(m);
   }
 
+  /**
+   * A device presented a root-signed list at least as new as ours (this hub was recovered from an
+   * older export, or its own file went back). Merge it: members of either list, revocations of
+   * either list (a revocation always wins), this device as the hub, any other hub id revoked; then
+   * sign it with a version above both.
+   */
+  #adoptNewer(raw: unknown): void {
+    const members = this.#opts.members;
+    const cur = members.current();
+    let theirs: MembershipList;
+    try {
+      theirs = verifySigned(raw as SignedMembership, createPublicKey(this.#opts.rootKey));
+    } catch {
+      return;
+    }
+    const mine = cur.list;
+    if (theirs.version < mine.version || (theirs.version === mine.version && (raw as SignedMembership).sig === cur.sig)) return;
+    const me = this.#opts.id.deviceId;
+    const now = this.#now();
+    const revoked = new Map<string, number>();
+    for (const r of [...mine.revoked, ...theirs.revoked]) if (r.deviceId !== me && !revoked.has(r.deviceId)) revoked.set(r.deviceId, r.revokedAt);
+    for (const hubId of [mine.hub.deviceId, theirs.hub.deviceId]) if (hubId !== me && !revoked.has(hubId)) revoked.set(hubId, now);
+    const byId = new Map<string, Member>();
+    for (const m of [...theirs.members, ...mine.members]) if (!revoked.has(m.deviceId) && m.deviceId !== me) byId.set(m.deviceId, { ...m, role: 'member' });
+    const self = mine.members.find((m) => m.deviceId === me)!;
+    const list: MembershipList = {
+      ...mine,
+      version: Math.max(mine.version, theirs.version) + 1,
+      issuedAt: now,
+      members: [...byId.values(), { ...self, role: 'hub' }],
+      revoked: [...revoked].map(([deviceId, revokedAt]) => ({ deviceId, revokedAt })),
+    };
+    const s = signList(list, this.#opts.rootKey);
+    if (members.accept(s) !== 'updated') return;
+    this.#broadcast(JSON.stringify({ t: 'membership', s }));
+    this.emit('membership', s);
+  }
+
   /** The mesh root public key as SPKI PEM (what a joining device pins). */
   get anchorPem(): string {
     return createPublicKey(this.#opts.rootKey).export({ type: 'spki', format: 'pem' }) as string;
@@ -486,7 +524,7 @@ export class HubServer extends EventEmitter {
       }
       this.#onAuthed(c, data, isBinary);
     });
-    ws.send(JSON.stringify({ t: 'hello', v: 1, hub: this.#opts.id.deviceId, nonce }));
+    ws.send(JSON.stringify({ t: 'hello', v: 1, hub: this.#opts.id.deviceId, nonce, hv: this.#opts.members.list().version }));
   }
 
   #handshake(c: Conn, data: RawData, isBinary: boolean, hubNonce: string, tlsPeer: string | null): void {
@@ -525,6 +563,7 @@ export class HubServer extends EventEmitter {
     if (!verifyDomain(HUB_AUTH_DOMAIN, `${hub}\0${deviceId}\0${hubNonce}`, sig, pub)) return fail();
 
     const members = this.#opts.members;
+    if (m.membership !== undefined) this.#adoptNewer(m.membership);
     if (joining && !members.isTrusted(deviceId)) {
       // A QR invite redeemed over the internet: the invite must be one this hub enforces.
       const inviter = m.inviter as string;
@@ -632,7 +671,8 @@ export class HubServer extends EventEmitter {
 
   #reject(c: Conn, code: number): void {
     try {
-      c.ws.send(JSON.stringify({ t: 'revoked' }));
+      // The current root-signed list is the device's proof that it is out (it ignores a bare notice).
+      c.ws.send(JSON.stringify({ t: 'revoked', s: this.#opts.members.current() }));
     } finally {
       c.ws.close(code);
     }

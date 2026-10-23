@@ -12,7 +12,7 @@ import { deviceIdOf, type Identity } from '../identity.ts';
 import { signDomain, verifyDomain } from '../mesh/canonical.ts';
 import { ReplayGuard, decodeFrame, encodeFrame, openEnvelope, sealEnvelope, type Envelope } from '../mesh/envelope.ts';
 import type { MembershipStore } from '../mesh/members.ts';
-import type { SignedMembership } from '../mesh/membership.ts';
+import { verifySigned, type SignedMembership } from '../mesh/membership.ts';
 import type { Invite } from '../mesh/invite.ts';
 import { CLOSE_REVOKED, HUB_AUTH_DOMAIN, HUB_PATH, MAX_FRAME_BYTES, type DirectoryEntry, type LanAddr } from './server.ts';
 
@@ -49,7 +49,8 @@ export interface HubClientOptions {
   pingMs?: number;
 }
 
-export type HubClientState = 'idle' | 'connecting' | 'online' | 'revoked';
+/** 'refused': the hub turned this device away without proof of revocation; the link stops, the mesh state stays. */
+export type HubClientState = 'idle' | 'connecting' | 'online' | 'revoked' | 'refused';
 
 interface Target { url: string; pinned: boolean }
 interface Pending { resolve: (e: Envelope) => void; reject: (e: Error) => void; timer: NodeJS.Timeout; cleanup: () => void }
@@ -239,10 +240,12 @@ export class HubClient extends EventEmitter {
       let authed = false;
       let helloHub = hubId;
       ws.on('error', () => {});
+      let pinnedId: string | null = null;
       ws.on('upgrade', (res: IncomingMessage) => {
         if (!t.pinned) return;
         const raw = (res.socket as TLSSocket).getPeerCertificate?.(true)?.raw;
-        if (!raw || deviceIdOf(raw) !== hubId) ws.terminate();
+        if (!raw) return ws.terminate();
+        pinnedId = deviceIdOf(raw); // the hello must name this device (checked there)
       });
       ws.on('message', (data: RawData, isBinary: boolean) => {
         if (!authed) {
@@ -257,16 +260,20 @@ export class HubClient extends EventEmitter {
             if (typeof m.hub !== 'string' || !/^[0-9a-f]{64}$/.test(m.hub) || typeof m.nonce !== 'string') return ws.terminate();
             // A different hub id is only possible after a recovery (a new hub took over the mesh);
             // it must then hand us a newer list, signed by the mesh root, naming it as the hub.
-            if (m.hub !== hubId && t.pinned) return ws.terminate();
+            if (t.pinned && m.hub !== pinnedId) return ws.terminate();
             helloHub = m.hub;
             const sig = signDomain(HUB_AUTH_DOMAIN, `${helloHub}\0${id.deviceId}\0${m.nonce}`, id.privateKey);
-            ws.send(JSON.stringify({
+            const auth: Record<string, unknown> = {
               t: 'auth', deviceId: id.deviceId, cert: id.certDer.toString('base64'), nonce: myNonce, sig,
               lan: this.#o.lanAddrs(), mv: members.list().version,
-            }));
+            };
+            // Our list is at least as new as the hub's: hand it over (e.g. a hub recovered from an
+            // older export adopts it). The hub verifies it against the mesh root like anyone else.
+            if (typeof m.hv === 'number' && members.list().version >= m.hv) auth.membership = members.current();
+            ws.send(JSON.stringify(auth));
             return;
           }
-          if (m.t === 'revoked') return this.#revoked();
+          if (m.t === 'revoked') return this.#onRevokedNotice(m.s);
           if (m.t !== 'welcome') return ws.terminate();
           if (helloHub !== hubId) {
             if (!m.membership) return ws.terminate();
@@ -293,7 +300,7 @@ export class HubClient extends EventEmitter {
         this.#onMessage(ws, data, isBinary);
       });
       ws.on('close', (code: number) => {
-        if (code === CLOSE_REVOKED) this.#revoked();
+        if (code === CLOSE_REVOKED && this.#state !== 'revoked') this.#refused();
         if (!authed) return done(false);
         this.#offline(ws);
       });
@@ -335,6 +342,42 @@ export class HubClient extends EventEmitter {
     this.emit('revoked');
   }
 
+  /**
+   * A revocation counts only with proof: a list signed by the mesh root, at least as new as ours,
+   * without this device. Anything else (no list, a foreign or older list) only stops the link.
+   */
+  #onRevokedNotice(s: unknown): void {
+    const members = this.#o.members;
+    const me = this.#o.id.deviceId;
+    try {
+      const list = verifySigned(s as SignedMembership, members.anchor);
+      if (list.version >= members.list().version && !list.members.some((x) => x.deviceId === me)) {
+        try {
+          members.accept(s as SignedMembership);
+        } catch {
+          /* same version, other content: still proof that we are out */
+        }
+        this.#revoked();
+        return;
+      }
+    } catch {
+      /* not proof */
+    }
+    this.#refused();
+  }
+
+  #refused(): void {
+    if (this.#state === 'revoked' || this.#state === 'refused') return;
+    this.#state = 'refused';
+    this.#stopped = true;
+    this.#clearTimers();
+    const ws = this.#ws;
+    this.#ws = null;
+    ws?.terminate();
+    this.#failPending(new HubOfflineError());
+    this.emit('refused');
+  }
+
   #clearTimers(): void {
     for (const t of [this.#retry, this.#stable]) if (t) clearTimeout(t);
     if (this.#ping) clearInterval(this.#ping);
@@ -365,7 +408,7 @@ export class HubClient extends EventEmitter {
         }
         return;
       case 'revoked':
-        this.#revoked();
+        this.#onRevokedNotice(m.s);
         return;
       case 'invite-used':
         this.emit('invite-used');

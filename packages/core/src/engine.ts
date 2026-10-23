@@ -918,7 +918,9 @@ export class Engine extends EventEmitter {
   /** While the hub is unreachable, a peer with a newer list version shares it over the LAN. */
   private async maybePull(p: PeerInfo): Promise<void> {
     const mesh = this.mesh;
-    if (!mesh || !mesh.isTrusted(p.deviceId) || this.hubOnline()) return;
+    // Any LAN peer may hand us a newer list (e.g. a hub recovered under a new id): it only counts
+    // if it verifies against our anchor.
+    if (!mesh || this.hubOnline()) return;
     const last = this.lastPull.get(p.deviceId) ?? 0;
     if (Date.now() - last < PULL_INTERVAL_MS) return;
     this.lastPull.set(p.deviceId, Date.now());
