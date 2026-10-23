@@ -19,7 +19,9 @@ Implemented in `identity.ts` and `x509.ts`.
   wire the id is always recomputed from the certificate the peer presented.
 - Stored as `<config>/identity/key.pem` (PKCS#8, mode 0600) and `<config>/identity/cert.der`. Config dir:
   `$MESHDROP_HOME`, else `$XDG_CONFIG_HOME/meshdrop`, else `~/.config/meshdrop`. On load the certificate must
-  verify under the stored key.
+  verify under the stored key. If only one of the two files exists, loading fails with an error naming the
+  missing file; the engine never regenerates half an identity (that would silently change the device id).
+  A new identity is written to a temporary directory and renamed into place, so a crash cannot leave half of one.
 - A device id stays valid as long as the certificate DER is unchanged; re-issuing the certificate (even for
   the same key) is a new device id and needs re-pairing.
 

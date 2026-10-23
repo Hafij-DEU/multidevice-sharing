@@ -7,7 +7,7 @@ import {
   randomBytes,
   type KeyObject,
 } from 'node:crypto';
-import { chmod, mkdir, readFile, rename, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { configDir } from './paths.ts';
 import { buildSelfSignedCert } from './x509.ts';
@@ -60,7 +60,8 @@ async function writeAtomic(path: string, data: string | Buffer, mode: number): P
 
 /**
  * Loads the device identity from `<dir>/identity/{key.pem,cert.der}`, creating a fresh
- * P-256 key and self-signed certificate on first run.
+ * P-256 key and self-signed certificate on first run (neither file exists). If only one of the two
+ * files exists it throws instead of regenerating: the device id must never change silently.
  */
 export async function loadOrCreateIdentity(dir: string = configDir()): Promise<Identity> {
   const idDir = join(dir, 'identity');
@@ -77,10 +78,17 @@ export async function loadOrCreateIdentity(dir: string = configDir()): Promise<I
     }
     return fromParts(privateKey, certDer);
   }
+  // Half an identity is never "repaired": a new cert (even for the same key) or a new key is a new
+  // device id, which silently breaks every pairing. Make the user restore the file or remove both.
+  if (keyPem || certDer) {
+    const missing = keyPem ? 'cert.der' : 'key.pem';
+    throw new Error(
+      `identity in ${idDir} is incomplete: ${missing} is missing. Restore it from a backup, or delete ` +
+        `${keyPem ? 'key.pem' : 'cert.der'} too to create a new device identity (this device will need to be paired again).`,
+    );
+  }
 
-  const { publicKey, privateKey } = keyPem
-    ? { privateKey: createPrivateKey(keyPem), publicKey: createPublicKey(keyPem) }
-    : generateKeyPairSync('ec', { namedCurve: 'P-256' });
+  const { publicKey, privateKey } = generateKeyPairSync('ec', { namedCurve: 'P-256' });
   const spkiHash = createHash('sha256').update(publicKey.export({ type: 'spki', format: 'der' })).digest('hex');
   const serial = randomBytes(16);
   serial[0] = serial[0]! & 0x7f; // keep the serial a small positive integer
@@ -91,8 +99,23 @@ export async function loadOrCreateIdentity(dir: string = configDir()): Promise<I
     serial,
   });
 
-  await mkdir(idDir, { recursive: true, mode: 0o700 });
-  if (!keyPem) await writeAtomic(keyPath, privateKey.export({ type: 'pkcs8', format: 'pem' }), 0o600);
-  await writeAtomic(certPath, cert, 0o644);
+  // Created atomically: both files go into a temp dir that is renamed to identity/ in one step, so a
+  // crash can never leave half an identity behind (which the check above would refuse).
+  await mkdir(dir, { recursive: true, mode: 0o700 });
+  const tmpDir = join(dir, `identity.${process.pid}.${randomBytes(6).toString('hex')}.tmp`);
+  await mkdir(tmpDir, { mode: 0o700 });
+  try {
+    await writeAtomic(join(tmpDir, 'key.pem'), privateKey.export({ type: 'pkcs8', format: 'pem' }), 0o600);
+    await writeAtomic(join(tmpDir, 'cert.der'), cert, 0o644);
+    try {
+      await rename(tmpDir, idDir); // replaces an empty identity/ dir
+    } catch (e) {
+      const c = (e as NodeJS.ErrnoException).code;
+      if (c === 'ENOTEMPTY' || c === 'EEXIST') return loadOrCreateIdentity(dir); // lost a race: use theirs
+      throw e;
+    }
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+  }
   return fromParts(privateKey, cert);
 }

@@ -1,5 +1,5 @@
 import { X509Certificate, createHash, createPrivateKey, createPublicKey, verify } from 'node:crypto';
-import { mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { connect, createServer } from 'node:tls';
@@ -63,6 +63,20 @@ describe('device identity', () => {
     expect(statSync(join(dir, 'identity', 'key.pem')).mode & 0o777).toBe(0o600);
     expect(a.keyPem).toContain('BEGIN PRIVATE KEY');
     expect(a.certPem).toContain('BEGIN CERTIFICATE');
+  });
+
+  it('a key without a cert, or a cert without a key, is an error (never a silent new device id)', async () => {
+    for (const keep of ['key.pem', 'cert.der'] as const) {
+      const dir = tmpDir();
+      await loadOrCreateIdentity(dir);
+      const lose = keep === 'key.pem' ? 'cert.der' : 'key.pem';
+      const keptBefore = readFileSync(join(dir, 'identity', keep));
+      rmSync(join(dir, 'identity', lose));
+      await expect(loadOrCreateIdentity(dir), keep).rejects.toThrow(new RegExp(`identity.*${lose.replace('.', '\\.')}.*missing`));
+      // nothing was regenerated or overwritten
+      expect(existsSync(join(dir, 'identity', lose)), keep).toBe(false);
+      expect(readFileSync(join(dir, 'identity', keep)).equals(keptBefore), keep).toBe(true);
+    }
   });
 
   it('frozen vector: TBSCertificate bytes are stable', () => {
