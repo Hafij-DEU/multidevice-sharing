@@ -1,7 +1,7 @@
 // Receiver HTTP API (protocol v1), plain node:https. All routes live under /mesh/v1/.
 //
 // Trust: the TLS layer accepts any client certificate; here every route except `GET info`
-// requires peerDeviceId(socket) to be in the TrustStore (else 403 {"error":"untrusted"}).
+// requires peerDeviceId(socket) to be in the trust source (else 403 {"error":"untrusted"}).
 // A session belongs to the peer named in its manifest (`from`); no other peer may touch it.
 import { createPublicKey } from 'node:crypto';
 import type { IncomingMessage, ServerResponse } from 'node:http';
@@ -30,7 +30,9 @@ import {
   UnsafePathError,
 } from '../inbox.ts';
 import { peerDeviceId, serverTlsOptions } from '../tls.ts';
-import type { TrustStore } from '../trust.ts';
+import type { TrustSource } from '../trust.ts';
+
+export type { TrustSource };
 
 export type ReceiverEvent =
   | { type: 'offer'; sessionId: string; from: string; manifest: Manifest }
@@ -43,7 +45,7 @@ export type ReceiverEvent =
 
 export interface MeshServerOptions {
   id: Identity;
-  trust: TrustStore;
+  trust: TrustSource;
   inbox: Inbox;
   onEvent: (e: ReceiverEvent) => void;
   /** Shown by GET info (default: the host name). */

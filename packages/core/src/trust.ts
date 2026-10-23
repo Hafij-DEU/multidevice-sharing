@@ -1,5 +1,5 @@
 import { createPublicKey, randomBytes } from 'node:crypto';
-import { chmodSync, closeSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, unlinkSync, writeSync } from 'node:fs';
+import { chmodSync, closeSync, fsyncSync, linkSync, mkdirSync, openSync, readFileSync, renameSync, unlinkSync, writeSync } from 'node:fs';
 import { dirname } from 'node:path';
 
 export interface TrustedDevice {
@@ -12,7 +12,13 @@ export interface TrustedDevice {
   addedAt: number;
 }
 
-const DEVICE_ID_RE = /^[0-9a-f]{64}$/;
+/** What the HTTP API needs to decide whether a peer may talk to us (TrustStore, MembershipStore, CompositeTrust). */
+export interface TrustSource {
+  isTrusted(deviceId: string): boolean;
+  get(deviceId: string): TrustedDevice | undefined;
+}
+
+export const DEVICE_ID_RE = /^[0-9a-f]{64}$/;
 
 /** Validates `d` and returns a normalized copy (canonical SPKI PEM). */
 function validate(d: TrustedDevice): TrustedDevice {
@@ -31,7 +37,7 @@ function validate(d: TrustedDevice): TrustedDevice {
  * let secret key material be persisted into trust.json; so we require that re-exporting as SPKI
  * reproduces the input (modulo line endings / surrounding whitespace).
  */
-function canonicalSpki(pem: string): string {
+export function canonicalSpki(pem: string): string {
   const bad = () => new Error('invalid public key: expected an EC P-256 SPKI PEM');
   let key;
   try {
@@ -59,7 +65,7 @@ function copy(d: TrustedDevice): TrustedDevice {
  * A corrupt file is an error rather than an empty store, so a damaged file can never silently
  * drop (or be replaced by) trust decisions.
  */
-export class TrustStore {
+export class TrustStore implements TrustSource {
   private readonly file: string;
   private readonly devices = new Map<string, TrustedDevice>();
 
@@ -125,38 +131,51 @@ export class TrustStore {
   }
 
   private persist(): void {
-    const dir = dirname(this.file);
-    mkdirSync(dir, { recursive: true, mode: 0o700 });
-    const tmp = `${this.file}.${process.pid}.${randomBytes(6).toString('hex')}.tmp`;
-    const data = JSON.stringify({ devices: this.list() }, null, 2) + '\n';
-    const fd = openSync(tmp, 'wx', 0o600);
+    writeFileAtomic(this.file, JSON.stringify({ devices: this.list() }, null, 2) + '\n');
+  }
+}
+
+/**
+ * Atomically replaces `file`: unique tmp file in the same directory (mode 0600), fsync, rename, then
+ * a best-effort directory fsync. The directory is created with mode 0700. With `noClobber` the final
+ * step is a hard link instead of a rename, so an existing `file` is never replaced (throws EEXIST).
+ */
+export function writeFileAtomic(file: string, data: string | Buffer, opts: { noClobber?: boolean } = {}): void {
+  const dir = dirname(file);
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  const tmp = `${file}.${process.pid}.${randomBytes(6).toString('hex')}.tmp`;
+  const fd = openSync(tmp, 'wx', 0o600);
+  try {
     try {
-      try {
-        writeSync(fd, data);
-        fsyncSync(fd);
-      } finally {
-        closeSync(fd);
-      }
-      chmodSync(tmp, 0o600); // open() mode is subject to umask; be explicit
-      renameSync(tmp, this.file);
-    } catch (e) {
-      try {
-        unlinkSync(tmp);
-      } catch {
-        /* already gone */
-      }
-      throw e;
+      writeSync(fd, typeof data === 'string' ? Buffer.from(data, 'utf8') : data);
+      fsyncSync(fd);
+    } finally {
+      closeSync(fd);
     }
-    // Persist the rename itself (best effort: directory fsync is unsupported on some platforms).
+    chmodSync(tmp, 0o600); // open() mode is subject to umask; be explicit
+    if (opts.noClobber) {
+      linkSync(tmp, file);
+      unlinkSync(tmp);
+    } else {
+      renameSync(tmp, file);
+    }
+  } catch (e) {
     try {
-      const dfd = openSync(dir, 'r');
-      try {
-        fsyncSync(dfd);
-      } finally {
-        closeSync(dfd);
-      }
+      unlinkSync(tmp);
     } catch {
-      /* ignore */
+      /* already gone */
     }
+    throw e;
+  }
+  // Persist the rename itself (best effort: directory fsync is unsupported on some platforms).
+  try {
+    const dfd = openSync(dir, 'r');
+    try {
+      fsyncSync(dfd);
+    } finally {
+      closeSync(dfd);
+    }
+  } catch {
+    /* ignore */
   }
 }
