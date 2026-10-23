@@ -175,7 +175,7 @@ export function createMeshServer(opts: MeshServerOptions): Server {
   const alias = opts.alias ?? hostname();
   const deviceType = opts.deviceType ?? 'desktop';
   const live = new Map<string, LiveSession>();
-  const offerLocks = new Map<string, Promise<unknown>>();
+  const sessionLocks = new Map<string, Promise<unknown>>();
 
   const emit = (e: ReceiverEvent): void => {
     try {
@@ -185,13 +185,16 @@ export function createMeshServer(opts: MeshServerOptions): Server {
     }
   };
 
-  /** Serializes offers per sessionId so two racing offers cannot both create the session. */
-  function withOfferLock<T>(sessionId: string, fn: () => Promise<T>): Promise<T> {
-    const prev = offerLocks.get(sessionId) ?? Promise.resolve();
+  /**
+   * Serializes offer, finish and cancel per sessionId: two racing offers cannot both create the
+   * session, and two racing finishes cannot both deliver it (one 'received', one tombstone).
+   */
+  function withSessionLock<T>(sessionId: string, fn: () => Promise<T>): Promise<T> {
+    const prev = sessionLocks.get(sessionId) ?? Promise.resolve();
     const run = prev.then(fn, fn);
     const tail = run.then(() => undefined, () => undefined);
-    offerLocks.set(sessionId, tail);
-    void tail.then(() => { if (offerLocks.get(sessionId) === tail) offerLocks.delete(sessionId); });
+    sessionLocks.set(sessionId, tail);
+    void tail.then(() => { if (sessionLocks.get(sessionId) === tail) sessionLocks.delete(sessionId); });
     return run;
   }
 
@@ -235,7 +238,7 @@ export function createMeshServer(opts: MeshServerOptions): Server {
     if (!device) throw new HttpError(403, 'untrusted');
     const senderPub = createPublicKey(device.publicKeyPem);
 
-    await withOfferLock(sessionId, async () => {
+    await withSessionLock(sessionId, async () => {
       let accepted;
       try {
         accepted = acceptOffer(id, senderPub, o);
@@ -305,48 +308,52 @@ export function createMeshServer(opts: MeshServerOptions): Server {
 
   async function handleFinish(res: ServerResponse, peer: string, seg: string[]): Promise<void> {
     const sessionId = sessionIdParam(seg[1]);
-    // A tombstone means this session was already delivered: a retried finish gets the same answer.
-    const tomb = await inbox.finished(sessionId);
-    if (tomb) {
-      if (tomb.from !== peer) throw new HttpError(403, 'forbidden');
-      if (live.delete(sessionId) || (await inbox.load(sessionId))) await inbox.drop(sessionId).catch(() => {});
-      send(res, 200, { files: tomb.files });
-      return;
-    }
-    const s = await requireOwned(sessionId, peer);
-    const done = new Set(await inbox.completed(sessionId));
-    const abs: string[] = [];
-    for (const f of s.manifest.files) {
-      if (!done.has(f.fileId)) throw new HttpError(409, 'incomplete');
-      abs.push(await inbox.finalize(sessionId, f.fileId)); // already done: returns the stored path
-    }
-    const files = abs.map((p) => inbox.relative(p)); // the wire and the tombstone: inbox-relative
-    await inbox.finalizeDirs(sessionId);
-    await inbox.markFinished(sessionId, { from: peer, files });
-    const ev: ReceiverEvent = { type: 'received', sessionId, from: peer, files: abs };
-    if (s.manifest.text !== undefined) ev.text = s.manifest.text;
-    emit(ev);
-    live.delete(sessionId);
-    try {
-      await inbox.drop(sessionId);
-    } catch {
-      /* the data is delivered; leftover partial state is harmless */
-    }
-    send(res, 200, { files });
+    await withSessionLock(sessionId, async () => {
+      // A tombstone means this session was already delivered: a retried finish gets the same answer.
+      const tomb = await inbox.finished(sessionId);
+      if (tomb) {
+        if (tomb.from !== peer) throw new HttpError(403, 'forbidden');
+        if (live.delete(sessionId) || (await inbox.load(sessionId))) await inbox.drop(sessionId).catch(() => {});
+        send(res, 200, { files: tomb.files });
+        return;
+      }
+      const s = await requireOwned(sessionId, peer);
+      const done = new Set(await inbox.completed(sessionId));
+      const abs: string[] = [];
+      for (const f of s.manifest.files) {
+        if (!done.has(f.fileId)) throw new HttpError(409, 'incomplete');
+        abs.push(await inbox.finalize(sessionId, f.fileId)); // already done: returns the stored path
+      }
+      const files = abs.map((p) => inbox.relative(p)); // the wire and the tombstone: inbox-relative
+      await inbox.finalizeDirs(sessionId);
+      await inbox.markFinished(sessionId, { from: peer, files });
+      const ev: ReceiverEvent = { type: 'received', sessionId, from: peer, files: abs };
+      if (s.manifest.text !== undefined) ev.text = s.manifest.text;
+      emit(ev);
+      live.delete(sessionId);
+      try {
+        await inbox.drop(sessionId);
+      } catch {
+        /* the data is delivered; leftover partial state is harmless */
+      }
+      send(res, 200, { files });
+    });
   }
 
   async function handleCancel(res: ServerResponse, peer: string, seg: string[]): Promise<void> {
     const sessionId = sessionIdParam(seg[1]);
-    const s = await getLive(sessionId);
-    if (!s) {
-      send(res, 204); // already gone: cancel is idempotent
-      return;
-    }
-    if (s.manifest.from !== peer) throw new HttpError(403, 'forbidden');
-    live.delete(sessionId);
-    await inbox.drop(sessionId);
-    emit({ type: 'cancelled', sessionId, from: peer });
-    send(res, 204);
+    await withSessionLock(sessionId, async () => {
+      const s = await getLive(sessionId);
+      if (!s) {
+        send(res, 204); // already gone: cancel is idempotent
+        return;
+      }
+      if (s.manifest.from !== peer) throw new HttpError(403, 'forbidden');
+      live.delete(sessionId);
+      await inbox.drop(sessionId);
+      emit({ type: 'cancelled', sessionId, from: peer });
+      send(res, 204);
+    });
   }
 
   async function route(req: IncomingMessage, res: ServerResponse, who: { peer?: string; sessionId?: string }): Promise<void> {

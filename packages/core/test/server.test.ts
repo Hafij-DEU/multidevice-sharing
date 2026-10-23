@@ -337,6 +337,30 @@ describe('receiver API', () => {
     expect(existsSync(join(root, '.meshdrop-partial', sid, '0.part'))).toBe(true);
   });
 
+  it('two concurrent finish requests: one received event, both answered with the same files', async () => {
+    const root = tmpDir();
+    // widen the window between "no tombstone yet" and "tombstone written"
+    const slow = {
+      ...fsp,
+      readFile: async (path: string, ...rest: unknown[]) => {
+        if (String(path).includes('.finished')) await new Promise((r) => setTimeout(r, 40));
+        return (fsp.readFile as (...a: unknown[]) => Promise<unknown>)(path, ...rest);
+      },
+    } as unknown as typeof fsp;
+    const h = await startServer({ root, fs: slow });
+    const data = Buffer.from('once only');
+    const sid = newSessionId();
+    const { offer, ctx } = mkOffer(mk(sid, [{ path: 'c.txt', data }]));
+    await call(h, B, 'POST', 'offer', offer);
+    await putChunk(h, sid, 0, 0, sealChunk(ctx, sid, 0, 0, data));
+    expect((await call(h, B, 'POST', `complete/${sid}/0`)).status).toBe(200);
+    const [r1, r2] = await Promise.all([call(h, B, 'POST', `finish/${sid}`), call(h, B, 'POST', `finish/${sid}`)]);
+    expect([r1.status, r2.status]).toEqual([200, 200]);
+    expect(r1.json).toEqual({ files: ['c.txt'] });
+    expect(r2.json).toEqual({ files: ['c.txt'] });
+    expect(h.events.filter((e) => e.type === 'received')).toHaveLength(1);
+  });
+
   it('text only: received carries the text', async () => {
     const h = await startServer();
     const sid = newSessionId();
