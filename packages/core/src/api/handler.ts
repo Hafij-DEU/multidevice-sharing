@@ -200,7 +200,7 @@ function sessionIdParam(s: string | undefined): string {
 
 export interface MeshHandler {
   handle(req: MeshRequest): Promise<MeshResponse>;
-  info(): { v: 1; deviceId: string; alias: string; deviceType: string };
+  info(): { v: 1; deviceId: string; alias: string; deviceType: string; mv: number };
 }
 
 export function createMeshHandler(opts: MeshServerOptions): MeshHandler {
@@ -251,7 +251,12 @@ export function createMeshHandler(opts: MeshServerOptions): MeshHandler {
     return s;
   }
 
-  const info = () => ({ v: 1 as const, deviceId: id.deviceId, alias, deviceType });
+  /** The version of the mesh list this device holds (0: not in a mesh), so peers can pull a newer one. */
+  const meshVersion = (): number => {
+    const v = (opts.membership?.() as { list?: { version?: unknown } } | null | undefined)?.list?.version;
+    return typeof v === 'number' && Number.isSafeInteger(v) ? v : 0;
+  };
+  const info = () => ({ v: 1 as const, deviceId: id.deviceId, alias, deviceType, mv: meshVersion() });
 
   // ---- routes ----------------------------------------------------------------------------------
 
