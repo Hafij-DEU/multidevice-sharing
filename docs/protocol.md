@@ -126,6 +126,11 @@ segment (longer names are truncated, keeping an extension of up to 16 bytes) and
 already exists in the inbox becomes `stem (n).ext`; nothing is ever overwritten. The sender numbers files
 `0..n-1`; `sha256` is checked by the receiver on `complete` (`422 integrity`).
 
+**Clipboard messages (M3).** A manifest may carry `"clipboard": true` after `text`, only together with `text` and
+with no files and no dirs. It marks the text as clipboard content: the receiving app places it on its clipboard
+(and shows a notification); it is never opened or executed. When false the field is absent, so manifests without
+it serialize exactly as before (all vectors unchanged).
+
 ## Endpoints (v1)
 
 Transport: HTTPS/1.1 over mutual TLS 1.3 on TCP 53318. All paths are under `/mesh/v1/`. Every route except

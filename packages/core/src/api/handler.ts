@@ -38,7 +38,7 @@ export type ReceiverEvent =
   | { type: 'progress'; sessionId: string; from: string; fileId: number; chunks: number; total: number }
   /** `path` / `files` are absolute local paths (the wire carries them relative to the inbox root). */
   | { type: 'file'; sessionId: string; from: string; fileId: number; path: string }
-  | { type: 'received'; sessionId: string; from: string; files: string[]; text?: string }
+  | { type: 'received'; sessionId: string; from: string; files: string[]; text?: string; clipboard?: true }
   | { type: 'error'; sessionId: string; from: string; code: string }
   | { type: 'cancelled'; sessionId: string; from: string };
 
@@ -366,6 +366,7 @@ export function createMeshHandler(opts: MeshServerOptions): MeshHandler {
       await inbox.markFinished(sessionId, { from: peer, files });
       const ev: ReceiverEvent = { type: 'received', sessionId, from: peer, files: abs };
       if (s.manifest.text !== undefined) ev.text = s.manifest.text;
+      if (s.manifest.clipboard) ev.clipboard = true;
       emit(ev);
       live.delete(sessionId);
       try {

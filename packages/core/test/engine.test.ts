@@ -61,6 +61,33 @@ beforeAll(async () => {
 });
 const mcast = multicastIt(() => multicastOk);
 
+describe('Engine clipboard and resume progress', () => {
+  it('sendClipboard delivers text flagged clipboard', async () => {
+    const { a, b } = await pairedPair();
+    const [r] = await a.e.sendClipboard([b.e.identity.deviceId.slice(0, 8)], 'hello');
+    expect(r).toMatchObject({ status: 'done' });
+    const got = b.events.find((x) => x.source === 'receiver' && x.type === 'received');
+    expect(got).toMatchObject({ text: 'hello', clipboard: true, files: [] });
+  });
+
+  it('resumePending emits sender progress events like send', async () => {
+    const { a, b } = await pairedPair();
+    const f = join(tmp(), 'big.bin');
+    writeFileSync(f, randomBytes(3 * 4 * 1024 * 1024));
+    const p = a.e.send([b.e.identity.deviceId.slice(0, 8)], [{ kind: 'file', srcPath: f }]);
+    const t0 = Date.now();
+    while (!a.events.some((x) => x.source === 'sender' && x.type === 'progress') && Date.now() - t0 < 10_000) await new Promise((r) => setTimeout(r, 5));
+    await a.e.stop(); // pause the send
+    await p;
+    await a.e.start();
+    a.events.length = 0;
+    await a.e.pairManual('127.0.0.1', b.e.port, 'bee');
+    const res = await a.e.resumePending();
+    expect(res.some((x) => x.status === 'done')).toBe(true);
+    expect(a.events.some((x) => x.source === 'sender' && x.type === 'progress')).toBe(true);
+  });
+});
+
 describe('Engine', () => {
   it('two engines pairManual each other, then send("all", [file]) delivers it', async () => {
     const { a, b, ta, tb } = await pairedPair();

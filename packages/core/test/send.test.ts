@@ -101,6 +101,20 @@ describe('aborting while the items are hashed', () => {
   });
 });
 
+describe('local path precheck', () => {
+  it('a path the receiver would refuse fails locally with local-path, before any request', async () => {
+    const [a, b] = await makeEngines(2);
+    let deep = join(tmpDir(), 'root');
+    const top = deep;
+    for (let i = 0; i < 33; i++) deep = join(deep, `d${i}`);
+    mkdirSync(deep, { recursive: true });
+    writeFileSync(join(deep, 'f.txt'), 'x');
+    const r = await sendTo(a!.id, b!.target(), [{ kind: 'dir', srcPath: top }]);
+    expect(r).toMatchObject({ status: 'failed', error: 'local-path' });
+    expect(b!.events.length).toBe(0);
+  });
+});
+
 describe('sendTo', () => {
   it('exact multiple: an 8 MiB file sends exactly 2 chunk PUTs', async () => {
     const [a, b] = await makeEngines(2);

@@ -742,6 +742,11 @@ export class Engine extends EventEmitter {
     return this.track(run());
   }
 
+  /** Sends `text` as clipboard content (the receiving app puts it on its clipboard). */
+  async sendClipboard(deviceIds: string[] | 'all', text: string): Promise<SendResult[]> {
+    return this.send(deviceIds, [{ kind: 'text', text, clipboard: true }]);
+  }
+
   /**
    * Resumes every unfinished send in the outbox. Targets come from the trust store and the current
    * peers; an entry whose device is not trusted or not present stays in the outbox and is reported
@@ -760,6 +765,7 @@ export class Engine extends EventEmitter {
       };
       const results = await this.outbox.resumeAll(this.identity, resolve, {
         signal: r.abort.signal,
+        onProgress: (p) => this.emitEvent({ source: 'sender', type: 'progress', ...p }),
         // Held mode only for a fresh upload; a resumed entry goes live (relay) or over the LAN.
         transport: (t) => this.transportFor(routes.get(t.deviceId)!.kind === 'held' ? { kind: 'relay' } : routes.get(t.deviceId)!, t, 0),
       });

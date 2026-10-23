@@ -86,6 +86,24 @@ describe('chunk arithmetic', () => {
   });
 });
 
+describe('clipboard messages', () => {
+  it('a text-only manifest may carry clipboard:true and round-trips', async () => {
+    const [alice, bob] = await twoIdentities();
+    const m = { ...sampleManifest(alice.deviceId, bob.deviceId), files: [], dirs: [], text: 'copied', clipboard: true as const };
+    const { offer } = createOffer(alice, bob.publicKey, m);
+    expect(acceptOffer(bob, alice.publicKey, JSON.parse(JSON.stringify(offer))).manifest).toEqual(m);
+  });
+
+  it('clipboard is refused with files, dirs or without text, and must be exactly true', async () => {
+    const [alice, bob] = await twoIdentities();
+    const base = sampleManifest(alice.deviceId, bob.deviceId);
+    expect(() => createOffer(alice, bob.publicKey, { ...base, text: 'x', clipboard: true })).toThrow(/clipboard/);
+    const { text: _t, ...noText } = base;
+    expect(() => createOffer(alice, bob.publicKey, { ...noText, files: [], dirs: [], clipboard: true })).toThrow(/clipboard/);
+    expect(() => createOffer(alice, bob.publicKey, { ...base, files: [], dirs: [], text: 'x', clipboard: false as unknown as true })).toThrow(/clipboard/);
+  });
+});
+
 describe('offer / manifest sealing', () => {
   it('offer round trip', async () => {
     const [alice, bob] = await twoIdentities();

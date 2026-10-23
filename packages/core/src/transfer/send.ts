@@ -45,9 +45,11 @@ import type { HpkeContext } from '../crypto/hpke.ts';
 import type { Identity } from '../identity.ts';
 import { configDir } from '../paths.ts';
 import { PinMismatchError, type PinnedResponse } from '../tls.ts';
+import { safeRelPath } from '../sanitize.ts';
 import { LanTransport, NoRouteError, RelayReplyError, type Transport } from './transport.ts';
 
-export interface SendItem { kind: 'file' | 'dir' | 'text'; srcPath?: string; text?: string }
+/** `clipboard` (text items only): the text is clipboard content for the receiver. */
+export interface SendItem { kind: 'file' | 'dir' | 'text'; srcPath?: string; text?: string; clipboard?: true }
 export interface Target { deviceId: string; host?: string; port?: number; publicKey: KeyObject }
 /** 'held': the hub stores the session for an offline target and owns its delivery from now on. */
 export type SendResult = { deviceId: string; status: 'done' | 'held' | 'failed' | 'cancelled'; sessionId: string; error?: string };
@@ -101,6 +103,16 @@ export class HttpStatusError extends Error {
   }
 }
 /** A source file changed (size/mtime) after the manifest was built. Never retried. */
+/** A name in the items cannot be sent as is (too deep, too long, reserved, unsafe characters). */
+export class LocalPathError extends Error {
+  readonly path: string;
+  constructor(path: string, reason: string) {
+    super(`cannot send ${JSON.stringify(path)}: ${reason}`);
+    this.name = 'LocalPathError';
+    this.path = path;
+  }
+}
+
 export class SourceChangedError extends Error {
   constructor(path: string) {
     super(`source changed: ${path}`);
@@ -176,6 +188,7 @@ export function errorString(e: unknown): string {
   if (e instanceof PinMismatchError) return 'pin-mismatch';
   if (e instanceof ProtocolError || e instanceof RelayReplyError) return 'bad-response';
   if (e instanceof NoRouteError) return 'no-route';
+  if (e instanceof LocalPathError) return 'local-path';
   if (e instanceof Error) return e.message || e.name;
   return String(e);
 }
@@ -201,6 +214,7 @@ export interface PreparedItems {
   files: FileEntry[];
   dirs: DirEntry[];
   text?: string;
+  clipboard?: true;
   sources: Map<number, string>;
   stats: Map<number, SourceStat>;
   /** Per-chunk plaintext SHA-256 (hex) for every fileId. */
@@ -266,6 +280,7 @@ export async function prepareItems(items: SendItem[], signal?: AbortSignal): Pro
   const stats = new Map<number, SourceStat>();
   const chunkHashes = new Map<number, string[]>();
   let text: string | undefined;
+  let clipboard = false;
 
   const addFile = async (abs: string, rel: string, follow: boolean) => {
     const { sha256, chunks, stat } = await hashFile(abs, follow, signal);
@@ -301,6 +316,7 @@ export async function prepareItems(items: SendItem[], signal?: AbortSignal): Pro
       if (typeof it.text !== 'string') throw new Error('text item without text');
       if (text !== undefined) throw new Error('only one text item per send');
       text = it.text;
+      if (it.clipboard === true) clipboard = true;
       continue;
     }
     if ((it?.kind !== 'file' && it?.kind !== 'dir') || typeof it.srcPath !== 'string') throw new Error('invalid send item');
@@ -316,11 +332,24 @@ export async function prepareItems(items: SendItem[], signal?: AbortSignal): Pro
       await walk(abs, name);
     }
   }
+  // Paths the receiver would refuse or rewrite fail here, with a clear local error, instead of
+  // after hashing everything as the receiver's opaque 422.
+  for (const p of [...files.map((f) => f.path), ...dirs.map((d) => d.path)]) {
+    let safe: string;
+    try {
+      safe = safeRelPath(p);
+    } catch (e) {
+      throw new LocalPathError(p, e instanceof Error ? e.message : String(e));
+    }
+    if (safe !== p) throw new LocalPathError(p, 'the receiver would rename it');
+  }
+  if (clipboard && (files.length > 0 || dirs.length > 0)) throw new Error('clipboard text cannot be sent with files');
   const itemsKey = createHash('sha256')
-    .update(JSON.stringify(items.map((i) => [i.kind, i.srcPath === undefined ? null : resolve(i.srcPath), i.text ?? null])))
+    .update(JSON.stringify(items.map((i) => [i.kind, i.srcPath === undefined ? null : resolve(i.srcPath), i.text ?? null, i.clipboard === true])))
     .digest('hex');
   const out: PreparedItems = { itemsKey, files, dirs, sources, stats, chunkHashes };
   if (text !== undefined) out.text = text;
+  if (clipboard) out.clipboard = true;
   return out;
 }
 
@@ -331,6 +360,7 @@ function manifestFor(p: PreparedItems, from: string, to: string, sessionId: stri
     dirs: p.dirs.map((d) => ({ ...d })),
   };
   if (p.text !== undefined) m.text = p.text;
+  if (p.clipboard) m.clipboard = true;
   return m;
 }
 
@@ -485,7 +515,7 @@ export class Outbox {
   async resumeAll(
     id: Identity,
     resolveTarget: (deviceId: string) => Target | undefined | Promise<Target | undefined>,
-    opts: Omit<SendOptions, 'outbox'> = {},
+    opts: Omit<SendOptions, 'outbox' | 'onProgress'> & { onProgress?: (p: SendProgress & { deviceId: string }) => void } = {},
   ): Promise<SendResult[]> {
     const { entries, corrupt } = await this.scan();
     const results = await Promise.all(
@@ -497,7 +527,10 @@ export class Outbox {
           t = undefined;
         }
         if (!t) return { deviceId: e.target.deviceId, status: 'failed', sessionId: e.sessionId, error: 'target-unresolved' };
-        return runSession(id, t, e, { ...opts, outbox: this });
+        const { onProgress, ...rest } = opts;
+        const perEntry: SendOptions = { ...rest, outbox: this };
+        if (onProgress) perEntry.onProgress = (p) => onProgress({ deviceId: e.target.deviceId, ...p });
+        return runSession(id, t, e, perEntry);
       }),
     );
     for (const sid of corrupt) results.push({ deviceId: '', status: 'failed', sessionId: sid, error: 'corrupt-entry' });

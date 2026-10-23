@@ -27,6 +27,8 @@ export interface DirEntry { path: string } // empty folders
 export interface Manifest {
   v: 1; sessionId: string; from: string; to: string; createdAt: number;
   files: FileEntry[]; dirs: DirEntry[]; text?: string;
+  /** The text is clipboard content (put it on the receiver's clipboard). Only with text, no files/dirs. */
+  clipboard?: true;
 }
 export interface Offer { v: 1; sessionId: string; from: string; to: string; enc: string /*b64*/; sealedManifest: string /*b64*/ }
 export interface HaveMap { [fileId: number]: number[] } // chunk indices already verified by receiver
@@ -89,7 +91,7 @@ const isObj = (x: unknown): x is Record<string, unknown> => typeof x === 'object
 function normalizeManifest(x: unknown): Manifest {
   if (!isObj(x)) bad('not an object');
   if (x.v !== 1) bad('v must be 1');
-  const { sessionId, from, to, createdAt, files, dirs, text } = x;
+  const { sessionId, from, to, createdAt, files, dirs, text, clipboard } = x;
   if (typeof sessionId !== 'string' || !SESSION_ID_RE.test(sessionId)) bad('sessionId');
   if (typeof from !== 'string' || !DEVICE_ID_HEX.test(from)) bad('from');
   if (typeof to !== 'string' || !DEVICE_ID_HEX.test(to)) bad('to');
@@ -100,6 +102,7 @@ function normalizeManifest(x: unknown): Manifest {
   if (files.length > MAX_MANIFEST_FILES) bad('too many files');
   if (dirs.length > MAX_MANIFEST_DIRS) bad('too many dirs');
   if (text !== undefined && Buffer.byteLength(text, 'utf8') > MAX_MANIFEST_TEXT_BYTES) bad('text too large');
+  if (clipboard !== undefined && (clipboard !== true || text === undefined || files.length > 0 || dirs.length > 0)) bad('clipboard');
   const seenIds = new Set<number>();
   const outFiles: FileEntry[] = files.map((f: unknown) => {
     if (!isObj(f)) bad('file entry');
@@ -119,6 +122,7 @@ function normalizeManifest(x: unknown): Manifest {
   });
   const m: Manifest = { v: 1, sessionId, from, to, createdAt, files: outFiles, dirs: outDirs };
   if (text !== undefined) m.text = text;
+  if (clipboard === true) m.clipboard = true;
   return m;
 }
 
