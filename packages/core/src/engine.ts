@@ -59,8 +59,9 @@ export type { TrustedDevice } from './trust.ts';
 
 export type EngineEvent =
   | ({ source: 'receiver' } & ReceiverEvent)
-  | { source: 'sender'; type: 'progress'; deviceId: string; fileId: number; sent: number; total: number }
-  | ({ source: 'sender'; type: 'result' } & SendResult)
+  /** `tag`: the one given to send() (absent for resumes); `sessionId` names the outbox session. */
+  | { source: 'sender'; type: 'progress'; deviceId: string; sessionId: string; fileId: number; sent: number; total: number; tag?: string }
+  | ({ source: 'sender'; type: 'result'; tag?: string } & SendResult)
   | { source: 'discovery'; type: 'peer' | 'lost'; peer: PeerInfo }
   | {
       source: 'mesh';
@@ -152,6 +153,11 @@ export interface EngineOptions {
   autoResume?: boolean;
   /** Accept ws:// loopback hub URLs (tests, local tunnels). Default false. */
   allowLoopbackHubUrls?: boolean;
+  /**
+   * serve: false only: still listen for discovery announcements (never announce), so a client next
+   * to a running listener sees the LAN. Default false (one-shot CLI commands).
+   */
+  clientDiscovery?: boolean;
 }
 
 /** A device as the app shows it: who it is, whether we trust it, and how we can reach it now. */
@@ -304,6 +310,30 @@ function writeManual(file: string, peers: ManualAddr[]): void {
   }
 }
 
+/**
+ * The listener (`meshdrop listen` or the desktop app) serving `home`, from its listen.pid: only if
+ * the pid is alive AND the port answers with this home's own certificate (`deviceId`). A stale file
+ * whose pid was reused by another process does not count.
+ */
+export async function liveListener(home: string, deviceId: string, timeoutMs = 1500): Promise<{ pid: number; port: number } | null> {
+  let pid: number;
+  let port: number;
+  try {
+    const j = JSON.parse(readFileSync(join(home, 'listen.pid'), 'utf8')) as { pid?: unknown; port?: unknown };
+    if (!Number.isInteger(j.pid) || (j.pid as number) <= 0 || !Number.isInteger(j.port) || (j.port as number) < 1 || (j.port as number) > 65535) return null;
+    pid = j.pid as number;
+    port = j.port as number;
+    process.kill(pid, 0);
+  } catch {
+    return null;
+  }
+  try {
+    return deviceIdOf(await fetchPeerCert('127.0.0.1', port, timeoutMs)) === deviceId ? { pid, port } : null;
+  } catch {
+    return null;
+  }
+}
+
 /** Unpinned TLS 1.3 handshake without a client certificate; returns the peer's certificate DER. */
 function fetchPeerCert(host: string, port: number, timeoutMs: number): Promise<Buffer> {
   return new Promise<Buffer>((resolve, reject) => {
@@ -445,6 +475,9 @@ export class Engine extends EventEmitter {
   private joinHandler: ((peer: string, body: unknown) => Promise<{ status: number; body: object }>) | null = null;
   private readonly lastPull = new Map<string, number>();
   private readonly lastAutoResume = new Map<string, number>();
+  /** Devices whose auto-resume check is running → whether another sighting came in meanwhile. */
+  private readonly autoResuming = new Map<string, boolean>();
+  private accepting = true;
   /** Trust for the receiver: mesh members first, then manually paired devices (never a revoked one). */
   private readonly trustSource: TrustSource = {
     isTrusted: (id) => new CompositeTrust(this.mesh, this.trust).isTrusted(id),
@@ -532,12 +565,12 @@ export class Engine extends EventEmitter {
     const dopts = this.opts.discovery;
     let discovery: Discovery;
     try {
-      discovery = this.makeDiscovery(port, dopts);
+      discovery = this.makeDiscovery(port, dopts, server !== null);
     } catch (e) {
       server?.close();
       throw e;
     }
-    if (dopts !== false && server) discovery.start();
+    if (dopts !== false && (server || this.opts.clientDiscovery)) discovery.start();
 
     let hub: HubServer | null = null;
     let ingressPort = 0;
@@ -591,10 +624,11 @@ export class Engine extends EventEmitter {
     );
   }
 
-  private makeDiscovery(port: number, dopts: EngineOptions['discovery']): Discovery {
+  private makeDiscovery(port: number, dopts: EngineOptions['discovery'], announce: boolean): Discovery {
     const discovery = new Discovery({
       self: { v: 1, deviceId: this.identity.deviceId, alias: this.alias, deviceType: this.deviceType, port: port || DEFAULT_MESH_PORT },
       ...(dopts || {}),
+      announce,
       isTrusted: (id) => this.trustSource.isTrusted(id),
     });
     discovery.on('error', () => {}); // per-interface socket failures are not fatal
@@ -738,7 +772,8 @@ export class Engine extends EventEmitter {
    * before anything is sent. A trusted device that is not present gets {status:'failed',
    * error:'offline'}. Results are in request order; duplicates are sent once.
    */
-  async send(deviceIds: string[] | 'all', items: SendItem[]): Promise<SendResult[]> {
+  async send(deviceIds: string[] | 'all', items: SendItem[], opts: { tag?: string } = {}): Promise<SendResult[]> {
+    const tag = opts.tag !== undefined ? { tag: opts.tag } : {};
     const r = this.requireRunning();
     let ids: string[];
     if (deviceIds === 'all') {
@@ -759,7 +794,7 @@ export class Engine extends EventEmitter {
         const t = this.trustSource.get(id);
         if (t && routes.get(id)!.kind !== 'unreachable') targets.push({ deviceId: id, publicKey: createPublicKey(t.publicKeyPem) });
       }
-      const progress = (p: { deviceId: string; fileId: number; sent: number; total: number }) => this.emitEvent({ source: 'sender', type: 'progress', ...p });
+      const progress = (p: { deviceId: string; sessionId: string; fileId: number; sent: number; total: number }) => this.emitEvent({ source: 'sender', type: 'progress', ...p, ...tag });
       const sent =
         targets.length === 0
           ? []
@@ -793,7 +828,7 @@ export class Engine extends EventEmitter {
       for (const res of out) {
         if (seen.has(res.deviceId)) continue;
         seen.add(res.deviceId);
-        this.emitEvent({ source: 'sender', type: 'result', ...res });
+        this.emitEvent({ source: 'sender', type: 'result', ...res, ...tag });
       }
       return out;
     };
@@ -801,8 +836,8 @@ export class Engine extends EventEmitter {
   }
 
   /** Sends `text` as clipboard content (the receiving app puts it on its clipboard). */
-  async sendClipboard(deviceIds: string[] | 'all', text: string): Promise<SendResult[]> {
-    return this.send(deviceIds, [{ kind: 'text', text, clipboard: true }]);
+  async sendClipboard(deviceIds: string[] | 'all', text: string, opts: { tag?: string } = {}): Promise<SendResult[]> {
+    return this.send(deviceIds, [{ kind: 'text', text, clipboard: true }], opts);
   }
 
   /**
@@ -981,16 +1016,34 @@ export class Engine extends EventEmitter {
     if (!r || !r.server || this.opts.autoResume === false) return;
     const last = this.lastAutoResume.get(deviceId) ?? 0;
     if (Date.now() - last < AUTO_RESUME_INTERVAL_MS) return;
+    if (this.autoResuming.has(deviceId)) {
+      this.autoResuming.set(deviceId, true); // check again when the running one found nothing to do
+      return;
+    }
+    this.autoResuming.set(deviceId, false);
+    try {
+      let resumed = false;
+      do {
+        this.autoResuming.set(deviceId, false);
+        resumed = await this.autoResume(r, deviceId);
+      } while (!resumed && this.autoResuming.get(deviceId) === true && this.running === r);
+    } finally {
+      this.autoResuming.delete(deviceId);
+    }
+  }
+
+  /** One auto-resume pass; true if it resumed something. */
+  private async autoResume(r: Running, deviceId: string): Promise<boolean> {
     const entries = (await this.outbox.list()).filter(
       (e) => e.target.deviceId === deviceId && !isSessionActive(e.sessionId) && e.lastError !== undefined &&
         (e.lastError === 'cancelled' || isTransientError(e.lastError)),
     );
-    if (entries.length === 0) return;
-    this.lastAutoResume.set(deviceId, Date.now());
+    if (entries.length === 0) return false;
     const t = this.trustSource.get(deviceId);
-    if (!t) return;
+    if (!t) return false;
     const route = await this.route(deviceId);
-    if (route.kind === 'unreachable') return;
+    if (route.kind === 'unreachable') return false;
+    this.lastAutoResume.set(deviceId, Date.now());
     const target: Target = { deviceId, publicKey: createPublicKey(t.publicKeyPem) };
     const run = async () => {
       for (const e of entries) {
@@ -1003,6 +1056,7 @@ export class Engine extends EventEmitter {
       }
     };
     await this.track(run());
+    return true;
   }
 
   private readHubAddr(): { deviceId: string; host: string; port: number } | null {
@@ -1037,7 +1091,18 @@ export class Engine extends EventEmitter {
         return r;
       },
       membership: () => this.mesh?.current() ?? null,
+      accepting: () => this.accepting,
     };
+  }
+
+  /** Whether new offers are accepted (false: paused, offers get 503 and stay with their senders). */
+  get receiving(): boolean {
+    return this.accepting;
+  }
+
+  /** Pauses or resumes receiving. The server, discovery and the hub link keep running. */
+  setReceiving(on: boolean): void {
+    this.accepting = on;
   }
 
   /** Starts the link to the hub (the hub device links to itself over loopback, to send and receive relayed). */
@@ -1103,6 +1168,7 @@ export class Engine extends EventEmitter {
 
   /** While the hub is unreachable, a peer with a newer list version shares it over the LAN. */
   private async maybePull(p: PeerInfo): Promise<void> {
+    if (!this.running?.server) return; // a client next to a listener leaves the list to it
     const mesh = this.mesh;
     // Any LAN peer may hand us a newer list (e.g. a hub recovered under a new id): it only counts
     // if it verifies against our anchor.

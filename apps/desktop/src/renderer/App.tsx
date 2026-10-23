@@ -64,11 +64,22 @@ export function App() {
           <div className="self muted">
             {state.self.alias}
             <br />
-            {state.mode === 'client-only' ? 'Receiving is handled by the MeshDrop background service' : `Port ${state.self.port}`}
+            {state.mode === 'client-only'
+              ? 'Receiving is handled by the MeshDrop background service'
+              : state.error
+                ? 'Not receiving'
+                : state.receiving
+                  ? `Port ${state.self.port}`
+                  : 'Receiving paused'}
           </div>
         )}
       </nav>
       <main className="content">
+        {state?.error && (
+          <div className="banner error" role="alert">
+            {state.error}
+          </div>
+        )}
         <h1>{page}</h1>
         {!state ? (
           <p className="muted">Starting…</p>

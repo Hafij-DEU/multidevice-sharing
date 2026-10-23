@@ -94,6 +94,12 @@ function quit(): void {
 
 function rebuildTray(): void {
   if (!tray) return;
+  let st: AppState | null = null;
+  try {
+    st = controller?.state() ?? null;
+  } catch {
+    /* still starting */
+  }
   const receiving = controller?.receiving ?? true;
   tray.setContextMenu(
     Menu.buildFromTemplate([
@@ -102,6 +108,7 @@ function rebuildTray(): void {
       { type: 'separator' },
       {
         label: receiving ? 'Pause receiving' : 'Resume receiving',
+        enabled: st?.mode === 'serving' && st.error === undefined,
         click: () => void controller?.setReceiving(!receiving).finally(rebuildTray),
       },
       { type: 'separator' },

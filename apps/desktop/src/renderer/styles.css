@@ -93,3 +93,5 @@ button.danger { background: var(--bad); color: #fff; border-color: var(--bad); }
 .picker { padding: 14px 16px; }
 .picker h1 { font-size: 17px; }
 .picker .list > li { padding: 6px 10px; }
+.banner { padding: 10px 12px; border-radius: var(--radius); margin-bottom: 14px; border: 1px solid var(--border); }
+.banner.error { border-color: var(--bad); background: color-mix(in srgb, var(--bad) 10%, transparent); }

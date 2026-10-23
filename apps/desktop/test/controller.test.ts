@@ -4,6 +4,7 @@ import { createServer, type Server } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
+import { Engine } from '@meshdrop/core/src/engine.ts';
 import { AppController, type Platform } from '../src/main/controller.ts';
 import { HistoryStore } from '../src/main/history.ts';
 import { SettingsStore, defaultSettings } from '../src/main/settings.ts';
@@ -101,7 +102,7 @@ describe('AppController', () => {
     expect(C.c.state().received[0]).toMatchObject({ text: 'secret clip $(rm -rf ~)', clipboard: true });
   });
 
-  it('ignores a stale listen.pid and runs client-only next to a live listener', async () => {
+  it('ignores a stale listen.pid (even with a live pid) and runs client-only next to a verified listener', async () => {
     const dead = spawnSync(process.execPath, ['-e', '0']).pid!;
     const h1 = tmpDir();
     writeFileSync(join(h1, 'listen.pid'), JSON.stringify({ pid: dead, port: 1 }));
@@ -109,15 +110,27 @@ describe('AppController', () => {
     expect(S.c.state().mode).toBe('serving');
     expect(JSON.parse(readFileSync(join(h1, 'listen.pid'), 'utf8'))).toEqual({ pid: process.pid, port: S.c.state().self.port });
 
+    const h0 = tmpDir(); // a reused pid: alive, but not a MeshDrop listener
+    writeFileSync(join(h0, 'listen.pid'), JSON.stringify({ pid: process.ppid, port: 9 }));
+    expect((await make('r', {}, h0)).c.state().mode).toBe('serving');
+
     const h2 = tmpDir();
-    const port = await freePort();
-    writeFileSync(join(h2, 'listen.pid'), JSON.stringify({ pid: process.ppid, port: 9 }));
-    const L = await make('l', { port }, h2);
-    expect(L.c.state().mode).toBe('client-only');
-    const probe = createServer();
-    await new Promise<void>((resolve, reject) => probe.once('error', reject).listen(port, () => resolve()));
-    await new Promise<void>((r) => probe.close(() => r())); // nothing bound the port
-    expect(JSON.parse(readFileSync(join(h2, 'listen.pid'), 'utf8')).pid).toBe(process.ppid); // left alone
+    const svc = await Engine.create({ home: h2, inbox: join(h2, 'inbox'), port: 0, discovery: false, alias: 'svc' });
+    await svc.start();
+    try {
+      writeFileSync(join(h2, 'listen.pid'), JSON.stringify({ pid: process.ppid, port: svc.port }));
+      const port = await freePort();
+      const L = await make('l', { port }, h2);
+      expect(L.c.state().mode).toBe('client-only');
+      const probe = createServer();
+      await new Promise<void>((resolve, reject) => probe.once('error', reject).listen(port, () => resolve()));
+      await new Promise<void>((r) => probe.close(() => r())); // nothing bound the port
+      expect(JSON.parse(readFileSync(join(h2, 'listen.pid'), 'utf8')).pid).toBe(process.ppid); // left alone
+      await expect(L.c.hubInit([])).rejects.toThrow(/background service/);
+      await expect(L.c.setReceiving(false)).rejects.toThrow(/background service/);
+    } finally {
+      await svc.stop();
+    }
   });
 
   it('throttles state updates while a large folder transfers', async () => {
@@ -140,6 +153,76 @@ describe('AppController', () => {
     expect(updates).toBeGreaterThan(0);
     expect(updates).toBeLessThanOrEqual(Math.ceil(secs * 10) + 2);
   }, 90_000);
+
+  it('keeps two concurrent sends to one device apart', async () => {
+    const A = await make('a');
+    const B = await make('b');
+    await pair(A.c, B.c);
+    const bId = B.c.state().self.deviceId;
+    const f = join(tmpDir(), 'big.bin');
+    writeFileSync(f, Buffer.alloc(48 * 1024 * 1024, 7));
+    await A.c.send([bId], [{ kind: 'file', path: f }]);
+    await until(() => A.c.state().transfers.some((t) => t.sent > 0));
+    A.p.clipboardText = 'meanwhile';
+    await A.c.sendClipboard([bId]);
+    const outs = () => A.c.state().transfers.filter((t) => t.direction === 'out');
+    await until(() => outs().length === 2 && outs().every((t) => t.status === 'done'), 60_000);
+    await sleep(300);
+    expect(outs()).toHaveLength(2);
+    expect(outs().find((t) => t.files === 1)).toMatchObject({ bytes: 48 * 1024 * 1024, sent: 48 * 1024 * 1024, status: 'done' });
+  }, 90_000);
+
+  it('Resume all does not add rows for sends whose device is away', async () => {
+    const A = await make('a');
+    const B = await make('b');
+    await pair(A.c, B.c);
+    const bId = B.c.state().self.deviceId;
+    const f = join(tmpDir(), 'away.bin');
+    writeFileSync(f, Buffer.alloc(64 * 1024 * 1024, 1));
+    await A.c.send([bId], [{ kind: 'file', path: f }]);
+    await until(() => A.c.state().transfers.some((t) => t.sent > 0));
+    await B.c.stop();
+    await until(() => A.c.state().outbox.length === 1 && !A.c.state().transfers.some((t) => t.status === 'sending' || t.status === 'preparing'), 30_000);
+    const before = A.c.state().transfers.length;
+    await A.c.resumeOutbox();
+    await sleep(1500);
+    expect(A.c.state().transfers).toHaveLength(before);
+  }, 60_000);
+
+  it('pausing receiving refuses files but keeps the device and its hub up', async () => {
+    const H = await make('hub');
+    await H.c.hubInit([]);
+    const A = await make('a');
+    expect(await A.c.join((await H.c.createInvite()).uri)).toBe('member');
+    await until(() => A.c.state().hub.online);
+    await H.c.setReceiving(false);
+    expect(H.c.state().hub.online).toBe(true);
+    expect(H.c.receiving).toBe(false);
+    const f = join(tmpDir(), 'p.txt');
+    writeFileSync(f, 'paused?');
+    const hId = H.c.state().self.deviceId;
+    await A.c.send([hId], [{ kind: 'file', path: f }]);
+    await until(() => A.c.state().transfers.some((t) => t.deviceId === hId && t.status === 'failed'), 30_000);
+    expect(H.c.state().received).toEqual([]);
+    await H.c.setReceiving(true);
+    await A.c.send([hId], [{ kind: 'file', path: f }]);
+    await until(() => H.c.state().received.length === 1, 30_000);
+  }, 60_000);
+
+  it('starts without receiving when its port is taken, says why, and recovers from Settings', async () => {
+    const blocker: Server = createServer();
+    const busy = await new Promise<number>((r) => blocker.listen(0, () => r((blocker.address() as { port: number }).port)));
+    try {
+      const A = await make('a', { port: busy });
+      expect(A.c.state().error).toMatch(/in use/);
+      expect(A.c.state().settings.port).toBe(busy);
+      await A.c.setSettings({ port: 0 });
+      expect(A.c.state().error).toBeUndefined();
+      expect(A.c.state().self.port).not.toBe(busy);
+    } finally {
+      blocker.close();
+    }
+  });
 
   it('passes a hostile peer alias through state() as plain data', async () => {
     const A = await make('a');

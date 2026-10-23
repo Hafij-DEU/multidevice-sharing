@@ -517,8 +517,11 @@ wss://<tunnel>/mesh/v1/hub]`, then run `meshdrop listen` permanently as a system
 The unit runs `/usr/bin/meshdrop` from the .deb. From a source checkout, put a `meshdrop` launcher in
 `~/.local/bin` (e.g. `exec node /path/to/meshdrop/packages/core/src/cli.ts "$@"`) and change `ExecStart` to
 `%h/.local/bin/meshdrop listen --device-type headless`. When the service and the desktop app share a config
-home, the app sees the service's `listen.pid` and runs client-only: it sends, while the service receives and
-serves the hub.
+home, the app sees the service's `listen.pid` (and checks that the service answers on that port with this
+device's certificate) and runs client-only: the service receives and serves the hub; the app sends to devices
+it can reach on the LAN (announced or paired), not through the hub, and mesh admin actions (create, revoke,
+hub URLs, recovery import) go through the CLI. If the app is already receiving, `meshdrop listen` exits
+quietly instead of fighting it.
 
 Add devices with `meshdrop invite` (QR) and `meshdrop join <uri>` on the new device (or the Mesh page); list
 them with `meshdrop members`. Export the recovery file once and keep it offline.

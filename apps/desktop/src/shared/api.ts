@@ -64,6 +64,10 @@ export interface AppState {
   outbox: { sessionId: string; deviceId: string; alias?: string; files: number; bytes: number }[];
   received: ReceivedRecord[];
   settings: Settings;
+  /** Offers are accepted right now (false: paused, client-only, or the port could not be bound). */
+  receiving: boolean;
+  /** Why this device is not receiving although it should (shown as a banner). */
+  error?: string;
   /** Mesh members (for the Mesh page). */
   members: { deviceId: string; alias: string; role: 'hub' | 'member'; self: boolean }[];
 }

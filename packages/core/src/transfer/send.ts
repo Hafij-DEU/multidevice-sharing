@@ -53,7 +53,7 @@ export interface SendItem { kind: 'file' | 'dir' | 'text'; srcPath?: string; tex
 export interface Target { deviceId: string; host?: string; port?: number; publicKey: KeyObject }
 /** 'held': the hub stores the session for an offline target and owns its delivery from now on. */
 export type SendResult = { deviceId: string; status: 'done' | 'held' | 'failed' | 'cancelled'; sessionId: string; error?: string };
-export interface SendProgress { fileId: number; sent: number; total: number } // plaintext bytes of that file
+export interface SendProgress { sessionId: string; fileId: number; sent: number; total: number } // plaintext bytes of that file
 
 export interface SendOptions {
   onProgress?: (p: SendProgress) => void;
@@ -786,9 +786,9 @@ async function transfer(
     }
   };
 
-  const progress = (p: SendProgress) => {
+  const progress = (p: Omit<SendProgress, 'sessionId'>) => {
     try {
-      opts.onProgress?.(p);
+      opts.onProgress?.({ sessionId: entry.sessionId, ...p });
     } catch {
       /* a failing listener must not break the send */
     }

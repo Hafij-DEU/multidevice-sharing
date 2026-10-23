@@ -58,6 +58,8 @@ export interface MeshServerOptions {
   onJoin?: (peer: string, body: unknown) => Promise<{ status: number; body: object }>;
   /** The signed membership list served to trusted peers by `GET /mesh/v1/membership` (null: none). */
   membership?: () => unknown | null;
+  /** False while receiving is paused: new offers get 503 'paused' (the sender keeps them to resume). */
+  accepting?: () => boolean;
 }
 
 /** Max body of a join request (device id, alias, certificate, proof). */
@@ -429,7 +431,10 @@ export function createMeshHandler(opts: MeshServerOptions): MeshHandler {
       if (s === null) throw new HttpError(404, 'not-found');
       return reply(200, s);
     }
-    if (method === 'POST' && seg.length === 1 && seg[0] === 'offer') return handleOffer(req, peer, who);
+    if (method === 'POST' && seg.length === 1 && seg[0] === 'offer') {
+      if (opts.accepting?.() === false) throw new HttpError(503, 'paused');
+      return handleOffer(req, peer, who);
+    }
     if (method === 'PUT' && seg.length === 4 && seg[0] === 'chunk') return handleChunk(req, peer, seg);
     if (method === 'POST' && seg.length === 3 && seg[0] === 'complete') return handleComplete(peer, seg);
     if (method === 'POST' && seg.length === 2 && seg[0] === 'finish') return handleFinish(peer, seg);

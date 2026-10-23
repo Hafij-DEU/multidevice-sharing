@@ -408,6 +408,14 @@ describe('CLI', () => {
     }
   }, 20_000);
 
+  it('listen steps aside when the desktop app already receives on this home', async () => {
+    const a = await mk();
+    writeFileSync(join(a.home, 'listen.pid'), JSON.stringify({ pid: process.pid, port: a.e.port }));
+    const r = await runCli(['listen', '--home', a.home, '--port', '0', '--no-discovery']);
+    expect(r.code).toBe(0);
+    expect(r.stdout + r.stderr).toMatch(/already receiving/);
+  }, 30_000);
+
   it('outbox lists unfinished sends; outbox rm <prefix> removes one and notifies the receiver', async () => {
     const { a, b } = await pairedPair();
     const src = join(tmp(), 'cli-paused.bin');

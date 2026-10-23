@@ -3,7 +3,8 @@ import { mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'no
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
-import { Engine, type EngineEvent, type EngineOptions } from '../src/engine.ts';
+import { Engine, liveListener, type EngineEvent, type EngineOptions } from '../src/engine.ts';
+import { probeLoopbackMulticast } from './multicast.ts';
 import { RelayTransport } from '../src/transfer/transport.ts';
 
 const sha = (b: Buffer) => createHash('sha256').update(b).digest('hex');
@@ -148,4 +149,98 @@ describe('routing', () => {
       RelayTransport.prototype.request = orig;
     }
   });
+});
+
+describe('M3 review fixes (core)', () => {
+  it('tags a send: its progress and result carry the tag and the session id', async () => {
+    const A = await make({ alias: 'a' });
+    const B = await make({ alias: 'b' });
+    await A.e.start();
+    await B.e.start();
+    await A.e.pairManual('127.0.0.1', B.e.port, 'bee');
+    await B.e.pairManual('127.0.0.1', A.e.port, 'ay');
+    const f = join(tmpDir(), 'tag.bin');
+    writeFileSync(f, randomBytes(5 * 1024 * 1024));
+    const [r] = await A.e.send([B.e.identity.deviceId], [{ kind: 'file', srcPath: f }], { tag: 't1' });
+    const prog = A.events.filter((x) => x.source === 'sender' && x.type === 'progress');
+    expect(prog.length).toBeGreaterThan(0);
+    for (const p of prog) expect(p).toMatchObject({ tag: 't1', sessionId: r!.sessionId });
+    expect(A.events.find((x) => x.source === 'sender' && x.type === 'result')).toMatchObject({ tag: 't1', sessionId: r!.sessionId, status: 'done' });
+  });
+
+  it('a burst of sightings auto-resumes a paused send once', async () => {
+    const A = await make({ alias: 'a', autoResume: true });
+    const bHome = tmpDir();
+    let B = await make({ alias: 'b' }, bHome);
+    await A.e.start();
+    await B.e.start();
+    const bPort = B.e.port;
+    await A.e.pairManual('127.0.0.1', bPort, 'bee');
+    await B.e.pairManual('127.0.0.1', A.e.port, 'ay');
+    const f = join(tmpDir(), 'burst.bin');
+    writeFileSync(f, randomBytes(64 * 1024 * 1024));
+    const p = A.e.send([B.e.identity.deviceId], [{ kind: 'file', srcPath: f }]);
+    await until(() => A.events.some((x) => x.source === 'sender' && x.type === 'progress'));
+    await B.e.stop();
+    expect((await p)[0]!.status).toBe('failed');
+    B = await make({ alias: 'b', port: bPort, inbox: B.inbox }, bHome);
+    await B.e.start();
+    A.events.length = 0;
+    await Promise.all([A.e.addNearby('127.0.0.1', bPort), A.e.addNearby('127.0.0.1', bPort), A.e.addNearby('127.0.0.1', bPort)]);
+    await until(() => A.events.some((x) => x.source === 'sender' && x.type === 'result' && x.status === 'done'), 20_000);
+    await sleep(300);
+    expect(A.events.filter((x) => x.source === 'sender' && x.type === 'result')).toHaveLength(1);
+  }, 40_000);
+
+  it('paused receiving refuses offers with 503 but keeps serving', async () => {
+    const A = await make({ alias: 'a' });
+    const B = await make({ alias: 'b' });
+    await A.e.start();
+    await B.e.start();
+    await A.e.pairManual('127.0.0.1', B.e.port, 'bee');
+    await B.e.pairManual('127.0.0.1', A.e.port, 'ay');
+    const f = join(tmpDir(), 'p.txt');
+    writeFileSync(f, 'x');
+    B.e.setReceiving(false);
+    expect(B.e.receiving).toBe(false);
+    const [r1] = await A.e.send([B.e.identity.deviceId], [{ kind: 'file', srcPath: f }]);
+    expect(r1).toMatchObject({ status: 'failed' });
+    expect(r1!.error).toMatch(/503/);
+    expect(B.events.some((x) => x.source === 'receiver' && x.type === 'received')).toBe(false);
+    B.e.setReceiving(true);
+    const [r2] = await A.e.send([B.e.identity.deviceId], [{ kind: 'file', srcPath: f }]);
+    expect(r2).toMatchObject({ status: 'done' });
+  });
+
+  it('liveListener confirms the pid file by the certificate behind its port', async () => {
+    const home = tmpDir();
+    const S = await make({ alias: 's' }, home);
+    await S.e.start();
+    writeFileSync(join(home, 'listen.pid'), JSON.stringify({ pid: process.pid, port: S.e.port }));
+    expect(await liveListener(home, S.e.identity.deviceId)).toEqual({ pid: process.pid, port: S.e.port });
+    const other = await make({ alias: 'o' });
+    await other.e.start();
+    writeFileSync(join(home, 'listen.pid'), JSON.stringify({ pid: process.pid, port: other.e.port })); // someone else's port
+    expect(await liveListener(home, S.e.identity.deviceId)).toBeNull();
+    writeFileSync(join(home, 'listen.pid'), JSON.stringify({ pid: process.ppid, port: 1 })); // live pid, nothing listening
+    expect(await liveListener(home, S.e.identity.deviceId)).toBeNull();
+  });
+});
+
+describe('M3 review fixes: client-only discovery', () => {
+  let ok = false;
+  const port = 47000 + Math.floor(Math.random() * 900);
+  it('probes multicast', async () => {
+    ok = await probeLoopbackMulticast(port);
+  });
+  it('a serve:false engine hears announcements without announcing itself', async (ctx) => {
+    if (!ok) ctx.skip();
+    const S = await make({ alias: 'srv', discovery: { port, intervalMs: 100, ttlMs: 2000 } });
+    const C = await make({ alias: 'cli', serve: false, clientDiscovery: true, discovery: { port, intervalMs: 100, ttlMs: 2000 } });
+    await S.e.start();
+    await C.e.start();
+    await until(() => C.e.peers().some((p) => p.deviceId === S.e.identity.deviceId), 5_000);
+    await sleep(400);
+    expect(S.e.peers().some((p) => p.deviceId === C.e.identity.deviceId)).toBe(false);
+  }, 20_000);
 });

@@ -45,6 +45,8 @@ export interface DiscoveryOptions {
   iface?: string;
   /** Devices we trust are always admitted to a full peer table (an untrusted entry makes room). */
   isTrusted?: (deviceId: string) => boolean;
+  /** False: only listen (a client next to a listener that announces for this device). Default true. */
+  announce?: boolean;
 }
 
 export interface ProbeOptions {
@@ -105,6 +107,7 @@ export class Discovery extends EventEmitter {
   private readonly port: number;
   private readonly intervalMs: number;
   private readonly ttlMs: number;
+  private readonly announce: boolean;
   private readonly iface: string | undefined;
   private readonly table = new Map<string, PeerInfo>();
   private running: Running | null = null;
@@ -122,6 +125,7 @@ export class Discovery extends EventEmitter {
     this.port = opts.port ?? DEFAULT_DISCOVERY_PORT;
     this.intervalMs = opts.intervalMs ?? 5000;
     this.ttlMs = opts.ttlMs ?? 15_000;
+    this.announce = opts.announce ?? true;
     this.iface = opts.iface;
     this.isTrusted = opts.isTrusted;
   }
@@ -168,7 +172,7 @@ export class Discovery extends EventEmitter {
 
     // One send socket per interface, bound to that interface's address, so every interface gets
     // its own copy of the announce regardless of the host's multicast routing.
-    const senders: Sender[] = addrs.map((addr) => {
+    const senders: Sender[] = (this.announce ? addrs : []).map((addr) => {
       const sock = createSocket({ type: 'udp4', reuseAddr: true });
       const sender: Sender = { addr, sock, ready: false };
       sock.on('error', (e) => {

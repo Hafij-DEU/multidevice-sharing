@@ -14,6 +14,7 @@ import QRCode from 'qrcode';
 import { parseArgs } from 'node:util';
 import {
   Engine,
+  liveListener,
   UnknownDeviceError,
   UnknownOutboxEntryError,
   type EngineEvent,
@@ -216,6 +217,13 @@ function onSignal(engine: Engine): { promise: Promise<string>; dispose: () => vo
 async function cmdListen(base: EngineOptions, args: string[]): Promise<number> {
   noArgs('listen', args);
   const e = await Engine.create({ ...base, serve: true });
+  // The desktop app (or another listen) already receives for this device: two would fight over
+  // the hub link. Exit 0 so a systemd unit does not restart-loop.
+  const other = await liveListener(e.home, e.identity.deviceId);
+  if (other && other.pid !== process.pid) {
+    out(`MeshDrop is already receiving on this home (pid ${other.pid}, port ${other.port}); not starting another listener`);
+    return 0;
+  }
   const sizes = new Map<string, number>(); // sessionId -> total bytes
   const lastPct = new Map<string, number>(); // sessionId/fileId -> last printed decile
   // A multi-homed host announces from every interface, so its host alternates; print a peer once

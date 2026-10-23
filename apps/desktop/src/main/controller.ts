@@ -1,6 +1,7 @@
 // The desktop app's brain: owns the engine, turns its events into an AppState for the UI, and
 // carries out every DesktopApi action. Electron-free (the Platform is injected), so it is tested
 // directly in Node.
+import { randomUUID } from 'node:crypto';
 import { EventEmitter } from 'node:events';
 import { mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { lstat, readdir } from 'node:fs/promises';
@@ -8,7 +9,8 @@ import { createServer } from 'node:net';
 import { isAbsolute, join, relative, resolve } from 'node:path';
 import QRCode from 'qrcode';
 import { CHUNK_SIZE } from '@meshdrop/core/src/chunk.ts';
-import { Engine, type EngineEvent, type EngineOptions, type SendItem, type SendResult } from '@meshdrop/core/src/engine.ts';
+import { Engine, liveListener, type EngineEvent, type EngineOptions, type SendItem } from '@meshdrop/core/src/engine.ts';
+import { loadOrCreateIdentity } from '@meshdrop/core/src/identity.ts';
 import { writeFileAtomic } from '@meshdrop/core/src/trust.ts';
 import type { AppState, DeviceView, SendItemInput, Settings, TransferView } from '../shared/api.ts';
 import type { HistoryStore } from './history.ts';
@@ -41,19 +43,14 @@ interface Transfer extends TransferView {
   /** Per-file bytes done (out: plaintext bytes; in: estimated from chunks). */
   done: Map<number, number>;
   sizes: Map<number, number>;
+  /** Out: the send()'s tag (`deviceId\0tag`) and the engine session, once known. */
+  tagKey?: string;
+  sessionId?: string;
 }
 
-/** The `meshdrop listen` (or another app instance) serving this home: a live pid other than ours. */
-function foreignListener(home: string): boolean {
-  try {
-    const j = JSON.parse(readFileSync(join(home, 'listen.pid'), 'utf8')) as { pid?: unknown };
-    if (!Number.isInteger(j.pid) || (j.pid as number) <= 0 || j.pid === process.pid) return false;
-    process.kill(j.pid as number, 0);
-    return true;
-  } catch {
-    return false;
-  }
-}
+const CLIENT_ONLY = 'Receiving is handled by the MeshDrop background service on this PC. Stop it first (systemctl --user stop meshdrop).';
+/** How often client-only mode checks that the background service is still there. */
+const LISTENER_RECHECK_MS = 30_000;
 
 function portFree(port: number): Promise<boolean> {
   return new Promise((done) => {
@@ -97,8 +94,13 @@ export class AppController extends EventEmitter {
   #mode: AppState['mode'] = 'serving';
   #ownsPid = false;
   readonly #transfers = new Map<string, Transfer>();
-  /** deviceId → key of the outgoing transfer currently running to it. */
-  readonly #activeOut = new Map<string, string>();
+  /** `deviceId\0tag` of a send() → its row; engine sessionId → its row. */
+  readonly #byTag = new Map<string, string>();
+  readonly #bySession = new Map<string, string>();
+  /** Why this device is not receiving although it should (e.g. its port is taken). */
+  #error: string | undefined;
+  #deviceId = '';
+  #recheck: NodeJS.Timeout | null = null;
   #outbox: AppState['outbox'] = [];
   #timer: NodeJS.Timeout | null = null;
   #lastEmit = 0;
@@ -126,19 +128,22 @@ export class AppController extends EventEmitter {
     await this.#halt();
   }
 
-  async #boot(): Promise<void> {
+  #engineOpts(serve: boolean, port: number): EngineOptions {
     const s = this.#settings.get();
-    this.#mode = foreignListener(this.#home) ? 'client-only' : 'serving';
-    const opts: EngineOptions = {
+    return {
       home: this.#home,
       inbox: s.inbox,
-      port: s.port,
+      port,
       alias: s.alias,
-      serve: this.#mode === 'serving' && !this.#paused,
+      serve,
       autoResume: true,
+      clientDiscovery: true,
       ...(s.discovery ? {} : { discovery: false as const }),
       ...this.#engineOptions,
     };
+  }
+
+  async #run(opts: EngineOptions): Promise<Engine> {
     const e = await Engine.create(opts);
     e.on('event', (ev: EngineEvent) => this.#onEvent(ev));
     try {
@@ -148,18 +153,68 @@ export class AppController extends EventEmitter {
       await e.stop();
       throw x;
     }
-    this.#engine = e;
-    if (this.#mode === 'serving' && !this.#paused) {
-      writeFileSync(join(this.#home, 'listen.pid'), JSON.stringify({ pid: process.pid, port: e.port }), { mode: 0o600 });
-      this.#ownsPid = true;
+    return e;
+  }
+
+  /** A verified `meshdrop listen` (the background service) on this home, if any. */
+  async #listener(): Promise<{ pid: number; port: number } | null> {
+    if (!this.#deviceId) this.#deviceId = (await loadOrCreateIdentity(this.#home)).deviceId;
+    const l = await liveListener(this.#home, this.#deviceId);
+    return l && l.pid !== process.pid ? l : null;
+  }
+
+  /**
+   * Starts the engine. Next to a running background service it is client-only (sends; the service
+   * receives). If the port cannot be bound it still starts, without receiving, and says why in
+   * state().error so Settings stays usable.
+   */
+  async #boot(): Promise<void> {
+    this.#error = undefined;
+    let l = await this.#listener();
+    if (!l) {
+      try {
+        this.#engine = await this.#run(this.#engineOpts(true, this.#settings.get().port));
+        this.#mode = 'serving';
+        this.#engine.setReceiving(!this.#paused);
+        writeFileSync(join(this.#home, 'listen.pid'), JSON.stringify({ pid: process.pid, port: this.#engine.port }), { mode: 0o600 });
+        this.#ownsPid = true;
+      } catch (x) {
+        const busy = (x as NodeJS.ErrnoException).code === 'EADDRINUSE';
+        // The service may have bound the port a moment before writing listen.pid (login race).
+        for (let i = 0; busy && !l && i < 10; i++) {
+          await new Promise((r) => setTimeout(r, 300));
+          l = await this.#listener();
+        }
+        if (!l) {
+          this.#error = busy
+            ? `Port ${this.#settings.get().port} is in use by another program, so this PC is not receiving. Choose another port in Settings.`
+            : `This PC is not receiving: ${x instanceof Error ? x.message : String(x)}`;
+          this.#mode = 'serving';
+          this.#engine = await this.#run(this.#engineOpts(false, this.#settings.get().port));
+        }
+      }
+    }
+    if (l) {
+      this.#mode = 'client-only';
+      this.#engine = await this.#run(this.#engineOpts(false, l.port)); // invites carry the service's port
+      this.#recheck = setInterval(() => void this.#checkListener(), LISTENER_RECHECK_MS);
+      this.#recheck.unref();
     }
     void this.#refreshOutbox();
     this.#changed();
   }
 
+  /** Client-only: when the background service is gone, take over receiving. */
+  async #checkListener(): Promise<void> {
+    if (this.#mode !== 'client-only' || this.#stopped || (await this.#listener())) return;
+    await this.#restart().catch(() => {});
+  }
+
   async #halt(): Promise<void> {
     const e = this.#engine;
     this.#engine = null;
+    if (this.#recheck) clearInterval(this.#recheck);
+    this.#recheck = null;
     if (this.#ownsPid) {
       try {
         const j = JSON.parse(readFileSync(join(this.#home, 'listen.pid'), 'utf8')) as { pid?: unknown };
@@ -200,6 +255,8 @@ export class AppController extends EventEmitter {
       outbox: this.#outbox.map((o) => ({ ...o })),
       received: this.#history.received(),
       settings: this.#settings.get(),
+      receiving: this.#mode === 'serving' && !this.#paused && this.#error === undefined,
+      ...(this.#error !== undefined ? { error: this.#error } : {}),
       members: e.members().map((m) => ({ deviceId: m.deviceId, alias: m.alias, role: m.role, self: m.deviceId === me })),
     };
   }
@@ -208,11 +265,16 @@ export class AppController extends EventEmitter {
     return !this.#paused;
   }
 
-  /** Pause receiving: the engine keeps sending but stops serving (and frees the port). */
+  /** Pause receiving: offers are refused (senders keep them to resume); everything else keeps running. */
   async setReceiving(on: boolean): Promise<void> {
-    if (this.#paused === !on) return;
+    if (this.#mode === 'client-only') throw new Error(CLIENT_ONLY);
     this.#paused = !on;
-    await this.#restart();
+    this.#e.setReceiving(on);
+    this.#changed();
+  }
+
+  #notClientOnly(): void {
+    if (this.#mode === 'client-only') throw new Error(CLIENT_ONLY);
   }
 
   /** Pushes a fresh state to the UI (after something outside the controller changed it). */
@@ -251,7 +313,12 @@ export class AppController extends EventEmitter {
     const x: Transfer = { ...t, done: new Map(), sizes };
     this.#transfers.delete(x.key);
     this.#transfers.set(x.key, x);
-    while (this.#transfers.size > MAX_TRANSFERS) this.#transfers.delete(this.#transfers.keys().next().value!);
+    while (this.#transfers.size > MAX_TRANSFERS) {
+      const old = this.#transfers.get(this.#transfers.keys().next().value!)!;
+      this.#transfers.delete(old.key);
+      if (old.tagKey !== undefined) this.#byTag.delete(old.tagKey);
+      if (old.sessionId !== undefined) this.#bySession.delete(old.sessionId);
+    }
     return x;
   }
 
@@ -279,39 +346,66 @@ export class AppController extends EventEmitter {
     else if (ev.type === 'revoked') this.#platform.notify('Removed from the mesh', 'The hub removed this device from the mesh.');
   }
 
-  /** The outgoing transfer an event for `deviceId` belongs to (created for resumes the UI did not start). */
-  #outFor(deviceId: string): Transfer {
-    const key = this.#activeOut.get(deviceId);
-    const cur = key ? this.#transfers.get(key) : undefined;
-    if (cur && (cur.status === 'preparing' || cur.status === 'sending')) return cur;
-    const startedAt = Date.now();
-    const ob = this.#outbox.find((o) => o.deviceId === deviceId);
-    const t = this.#addTransfer({
-      key: `${deviceId}:${startedAt}`, direction: 'out', deviceId, alias: this.#aliasOf(deviceId),
-      files: ob?.files ?? 0, bytes: ob?.bytes ?? 0, sent: 0, status: 'sending', startedAt,
-    });
-    this.#activeOut.set(deviceId, t.key);
+  /**
+   * The outgoing row an engine event belongs to: by the send()'s tag, else by session (a resume).
+   * A resume gets a row on its first progress; a result for a session that never started (e.g.
+   * "Resume all" for a device that is away) gets none.
+   */
+  #outRow(ev: { deviceId: string; sessionId: string; tag?: string }, create: boolean): Transfer | undefined {
+    let key = ev.tag !== undefined ? this.#byTag.get(`${ev.deviceId}\0${ev.tag}`) : undefined;
+    key ??= ev.sessionId ? this.#bySession.get(ev.sessionId) : undefined;
+    let t = key !== undefined ? this.#transfers.get(key) : undefined;
+    if (!t && create && ev.sessionId) {
+      const ob = this.#outbox.find((o) => o.sessionId === ev.sessionId);
+      t = this.#addTransfer({
+        key: `${ev.deviceId}:${ev.sessionId}`, direction: 'out', deviceId: ev.deviceId, alias: this.#aliasOf(ev.deviceId),
+        files: ob?.files ?? 0, bytes: ob?.bytes ?? 0, sent: 0, status: 'sending', startedAt: Date.now(),
+      });
+    }
+    if (t && ev.sessionId && t.sessionId !== ev.sessionId) {
+      t.sessionId = ev.sessionId;
+      this.#bySession.set(ev.sessionId, t.key);
+    }
     return t;
   }
 
   #onSender(ev: Extract<EngineEvent, { source: 'sender' }>): void {
     if (ev.type === 'progress') {
-      const t = this.#outFor(ev.deviceId);
+      const t = this.#outRow(ev, true)!;
       t.status = 'sending';
       t.done.set(ev.fileId, ev.sent);
       this.#sum(t);
       return;
     }
-    const t = this.#outFor(ev.deviceId);
-    this.#finishOut(t, ev);
+    const t = this.#outRow(ev, false);
+    if (t) {
+      t.status = ev.status;
+      if (ev.status === 'done') t.sent = t.bytes;
+      if (ev.error !== undefined) t.error = ev.error;
+    }
     void this.#refreshOutbox();
   }
 
-  #finishOut(t: Transfer, r: SendResult): void {
-    this.#activeOut.delete(t.deviceId);
-    t.status = r.status;
-    if (r.status === 'done') t.sent = t.bytes;
-    if (r.error !== undefined) t.error = r.error;
+  #failRows(rows: Transfer[], x: unknown): void {
+    for (const t of rows) {
+      if (t.status !== 'preparing' && t.status !== 'sending') continue;
+      t.status = 'failed';
+      t.error = x instanceof Error ? x.message : String(x);
+    }
+    this.#changed();
+  }
+
+  /** One 'preparing' row per target, tied to this send by `tag`. */
+  #startRows(ids: string[], tag: string, files: number, bytes: number): Transfer[] {
+    const startedAt = Date.now();
+    const rows = ids.map((id) => {
+      const tagKey = `${id}\0${tag}`;
+      const t = this.#addTransfer({ key: `${id}:${tag}`, direction: 'out', deviceId: id, alias: this.#aliasOf(id), files, bytes, sent: 0, status: 'preparing', startedAt, tagKey });
+      this.#byTag.set(tagKey, t.key);
+      return t;
+    });
+    this.#changed();
+    return rows;
   }
 
   #onReceiver(ev: Extract<EngineEvent, { source: 'receiver' }>): void {
@@ -390,31 +484,19 @@ export class AppController extends EventEmitter {
       if (it.kind === 'text' ? typeof it.text !== 'string' : typeof it.path !== 'string' || !isAbsolute(it.path)) throw new Error('Invalid item to send.');
     }
     const { files, bytes } = await measure(items);
-    const startedAt = Date.now();
-    const mine = ids.map((id) => {
-      const t = this.#addTransfer({ key: `${id}:${startedAt}`, direction: 'out', deviceId: id, alias: this.#aliasOf(id), files, bytes, sent: 0, status: 'preparing', startedAt });
-      this.#activeOut.set(id, t.key);
-      return t;
-    });
-    this.#changed();
+    const tag = randomUUID();
+    const rows = this.#startRows(ids, tag, files, bytes);
     const coreItems: SendItem[] = items.map((it) => (it.kind === 'text' ? { kind: 'text', text: it.text! } : { kind: it.kind, srcPath: it.path! }));
-    this.#e.send(ids, coreItems).catch((x: unknown) => {
-      for (const t of mine) if (t.status === 'preparing' || t.status === 'sending') this.#finishOut(t, { deviceId: t.deviceId, status: 'failed', sessionId: '', error: x instanceof Error ? x.message : String(x) });
-      this.#changed();
-    });
+    this.#e.send(ids, coreItems, { tag }).catch((x: unknown) => this.#failRows(rows, x));
   }
 
   async sendClipboard(targets: string[] | 'all'): Promise<void> {
     const text = this.#platform.readClipboard();
     if (text === '') throw new Error('The clipboard is empty.');
     const ids = this.#targets(targets);
-    const startedAt = Date.now();
-    for (const id of ids) {
-      const t = this.#addTransfer({ key: `${id}:${startedAt}`, direction: 'out', deviceId: id, alias: this.#aliasOf(id), files: 0, bytes: Buffer.byteLength(text), sent: 0, status: 'preparing', startedAt });
-      this.#activeOut.set(id, t.key);
-    }
-    this.#changed();
-    this.#e.sendClipboard(ids, text).catch(() => {});
+    const tag = randomUUID();
+    const rows = this.#startRows(ids, tag, 0, Buffer.byteLength(text));
+    this.#e.sendClipboard(ids, text, { tag }).catch((x: unknown) => this.#failRows(rows, x));
   }
 
   async resumeOutbox(): Promise<void> {
@@ -439,6 +521,7 @@ export class AppController extends EventEmitter {
   }
 
   async hubInit(urls: string[]): Promise<void> {
+    this.#notClientOnly();
     await this.#halt();
     try {
       const e = await Engine.create({ home: this.#home, ...this.#engineOptions, alias: this.#settings.get().alias });
@@ -449,6 +532,7 @@ export class AppController extends EventEmitter {
   }
 
   async setHubUrls(urls: string[]): Promise<void> {
+    this.#notClientOnly();
     await this.#e.setHubUrls(urls);
     this.#changed();
   }
@@ -466,6 +550,7 @@ export class AppController extends EventEmitter {
   }
 
   async revoke(deviceId: string): Promise<void> {
+    this.#notClientOnly();
     await this.#e.revoke(deviceId);
     this.#changed();
   }
@@ -476,6 +561,7 @@ export class AppController extends EventEmitter {
   }
 
   async importRecovery(path: string, passphrase: string): Promise<void> {
+    this.#notClientOnly();
     if (!isAbsolute(path)) throw new Error('Choose a recovery file.');
     if (statSync(path).size > MAX_RECOVERY_BYTES) throw new Error('That is not a MeshDrop recovery file.');
     const text = readFileSync(path, 'utf8');
@@ -496,15 +582,21 @@ export class AppController extends EventEmitter {
     if (restart && this.#mode === 'serving' && next.port !== prev.port && next.port !== 0 && next.port !== this.#engine?.port && !(await portFree(next.port))) {
       throw new SettingsError(`Port ${next.port} is in use by another program.`);
     }
+    const hadError = this.#error !== undefined;
     this.#settings.set(patch);
     if (restart) {
+      let failure: unknown;
       try {
         await this.#restart();
+        // A port that was free a moment ago may be taken by now: the engine then started without receiving.
+        if (!hadError && this.#error !== undefined) failure = new SettingsError(`Port ${next.port} is in use by another program.`);
       } catch (x) {
+        failure = x;
+      }
+      if (failure !== undefined) {
         this.#settings.set(prev);
         await this.#restart();
-        const busy = (x as NodeJS.ErrnoException).code === 'EADDRINUSE';
-        throw busy ? new SettingsError(`Port ${next.port} is in use by another program.`) : x;
+        throw failure;
       }
     }
     this.#changed();
