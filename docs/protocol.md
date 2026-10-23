@@ -455,6 +455,47 @@ a higher version.
   the invite is shared through `invite.json`, a join's `mesh/` files are picked up, and a revoke is handed to the
   running hub through `hub/requests/`.
 
+### Wire details for other engines (M2)
+
+- **Envelope `id`**: 16 random bytes as unpadded base64url (22 characters, `^[A-Za-z0-9_-]{22}$`). Header JSON at
+  most 16384 bytes; `contentType` printable ASCII up to 128 chars; `holdBytes` a non-negative safe integer and
+  only on a `req`.
+- **`verifyDomain` rules**: returns false (never throws) unless the domain is non-empty printable ASCII, the
+  signature is standard padded base64 that decodes to a DER ECDSA signature, and the key is an EC P-256 public
+  key; an empty signature is false.
+- **Hub link handshake limits**: `lan` at most 8 entries `{host (1–255 printable ASCII), port 1–65535}`; `cert`
+  base64 of at most 8192 characters; `proof` at most 128 characters; `alias` 1–64 characters, no C0/DEL/C1
+  controls. `hello` also carries `hv`, the hub's list version; a device whose list is at least that new adds
+  `membership` (its signed list) to `auth`/`join`, and the hub adopts a root-verified list newer than its own:
+  members of both lists, revocations of both (a revocation wins), itself as hub, any other hub id revoked,
+  version = max(both) + 1. `{t:'ping'}` is answered `{t:'pong'}`.
+- **Revocation proof**: `{t:'revoked', s}` carries the hub's current signed list. A device drops its mesh state
+  only if `s` verifies against its anchor, is at least as new as its own list and does not list it; a bare or
+  unverifiable notice (or a 4403 close without one) only stops the link (client state `refused`).
+- **Held accounting**: `holdBytes` is compared with the hub's stored bytes, which are the encoded frames
+  (`u32 + header + body`) of the offer and of every stored request, a re-stored request replacing its old size.
+  Hub-signed replies for held sessions: offer `200 {have, held:true}` (re-offer: the same; another offer body
+  under the same id: `409 session-conflict`; another sender: `403 forbidden`); chunk `204`; complete/finish
+  `200 {held:true}`, also when repeated after finish; anything else after finish (a chunk, a cancel)
+  `409 held-finished`; cancel before finish `204` (session deleted); a quota or disk failure `507 hub-quota` /
+  `507 hub-no-space` (session deleted; senders treat these as final for this attempt but keep their outbox
+  entry); an unexpected failure `500 internal`. A sender that resumes an interrupted held upload without
+  `holdBytes` gets the same held replies and continues it as held.
+- **Held notices**: `{t:'held-delivered', to, sessionId, files}` with `files` the receiver's inbox-relative
+  paths from its finish reply; `{t:'held-failed', to, sessionId, status, error}` (`error` `expired` with status
+  410 when the 7-day TTL pruned it). Held sessions to or from a revoked device are deleted at revocation.
+- **Replay**: a device answers a repeated request id from its cache of signed answers; if the answer was evicted
+  it runs the request again (all receiver routes are idempotent); a request from a sender not in its list gets a
+  signed `403 {"error":"untrusted"}`.
+- **Member join messages**: `{t:'invite', secret, ttlMs}` registers the member's live invite (16-byte secret,
+  base64url; the hub keeps it at most `min(ttlMs, 5 min)` on its own clock; re-registering a known secret
+  changes nothing). `{t:'join', reqId, newMember: {deviceId, alias, publicKeyPem}}` (`reqId`
+  `^[A-Za-z0-9_-]{1,32}$`) → `{t:'join-result', reqId, ok:true, membership}` or `{..., ok:false, error}`; it
+  also burns the member's registered invite. When the hub admits a device with a member's invite it sends that
+  member `{t:'invite-used'}`, so the invite cannot be redeemed twice.
+- **Recovery versions**: an imported list gets version `old + 1`; devices whose list is newer than the export
+  hand it over on their next link and the hub adopts it (above).
+
 ### Running the hub
 
 On the hub PC: `meshdrop hub init [--url wss://<tunnel>/mesh/v1/hub]`, then run `meshdrop listen` permanently,
