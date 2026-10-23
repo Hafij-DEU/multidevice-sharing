@@ -240,6 +240,48 @@ describe('Discovery (multicast)', () => {
     expect(p.lastSeen).toBeGreaterThan(before);
   });
 
+  mcast('an announce never moves a manual peer: its probed (certificate-verified) address stays', async () => {
+    const [eng] = await makeEngines(1);
+    const port = freshPort();
+    const d = mk(announce('me'), port, { ttlMs: 10_000 });
+    d.on('error', () => {});
+    d.start();
+    await sleep(100);
+    await d.probe(LO, eng!.port);
+    const send = await rawSender(port);
+    await send(JSON.stringify({ v: 1, deviceId: eng!.id.deviceId, alias: 'forged', deviceType: 'desktop', port: 9 }));
+    await sleep(300);
+    const p = d.peers()[0]!;
+    expect(p.host).toBe(LO);
+    expect(p.port).toBe(eng!.port);
+  });
+
+  mcast('a full table still admits a trusted device by evicting an untrusted one', async () => {
+    const trustedA = announce('trusted');
+    const port = freshPort();
+    const d = mk(announce('me'), port, { ttlMs: 10_000, isTrusted: (id) => id === trustedA.deviceId });
+    d.start();
+    await sleep(100);
+    const send = await rawSender(port);
+    const first = Array.from({ length: 256 }, (_, i) => announce(`p${i}`));
+    const deadline = Date.now() + 5000;
+    while (d.peers().length < 256 && Date.now() < deadline) {
+      const have = new Set(d.peers().map((p) => p.deviceId));
+      for (const a of first) if (!have.has(a.deviceId)) await send(JSON.stringify(a));
+      await sleep(50);
+    }
+    expect(d.peers()).toHaveLength(256);
+    const lost: PeerInfo[] = [];
+    d.on('lost', (p: PeerInfo) => lost.push(p));
+    await send(JSON.stringify(trustedA));
+    await send(JSON.stringify(announce('stranger')));
+    await sleep(200);
+    const ids = new Set(d.peers().map((p) => p.deviceId));
+    expect(ids.size).toBe(256);
+    expect(ids.has(trustedA.deviceId)).toBe(true);
+    expect(lost).toHaveLength(1);
+  });
+
   mcast('stop() is idempotent and start() after stop() works', async () => {
     const port = freshPort();
     const a = announce('alice');

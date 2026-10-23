@@ -545,6 +545,7 @@ export class Engine extends EventEmitter {
     const discovery = new Discovery({
       self: { v: 1, deviceId: this.identity.deviceId, alias: this.alias, deviceType: this.deviceType, port: port || DEFAULT_MESH_PORT },
       ...(dopts || {}),
+      isTrusted: (id) => this.trustSource.isTrusted(id),
     });
     discovery.on('error', () => {}); // per-interface socket failures are not fatal
     discovery.on('peer', (p: PeerInfo) => {

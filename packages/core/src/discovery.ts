@@ -43,6 +43,8 @@ export interface DiscoveryOptions {
   ttlMs?: number;
   /** Local IPv4 address of the one interface to use. Default: every non-internal IPv4 interface. */
   iface?: string;
+  /** Devices we trust are always admitted to a full peer table (an untrusted entry makes room). */
+  isTrusted?: (deviceId: string) => boolean;
 }
 
 export interface ProbeOptions {
@@ -107,6 +109,8 @@ export class Discovery extends EventEmitter {
   private readonly table = new Map<string, PeerInfo>();
   private running: Running | null = null;
 
+  private readonly isTrusted: ((deviceId: string) => boolean) | undefined;
+
   constructor(opts: DiscoveryOptions) {
     super();
     const s = opts.self;
@@ -119,6 +123,7 @@ export class Discovery extends EventEmitter {
     this.intervalMs = opts.intervalMs ?? 5000;
     this.ttlMs = opts.ttlMs ?? 15_000;
     this.iface = opts.iface;
+    this.isTrusted = opts.isTrusted;
   }
 
   /** Socket-level failures never throw: they surface as 'error' only if someone is listening. */
@@ -245,21 +250,36 @@ export class Discovery extends EventEmitter {
     if (a.deviceId === this.self.deviceId) return true;
     const now = Date.now();
     const cur = this.table.get(a.deviceId);
-    if (!cur && this.table.size >= MAX_PEERS) return false; // never evict live peers for newcomers
+    if (!cur && this.table.size >= MAX_PEERS) {
+      // A full table never takes an untrusted newcomer; a trusted one replaces the oldest untrusted,
+      // non-manual entry (so a flood of forged announces cannot hide our own devices).
+      if (!this.isTrusted?.(a.deviceId)) return false;
+      let victim: PeerInfo | undefined;
+      for (const p of this.table.values()) {
+        if (p.manual || this.isTrusted?.(p.deviceId)) continue;
+        if (!victim || p.lastSeen < victim.lastSeen) victim = p;
+      }
+      if (!victim) return false;
+      this.table.delete(victim.deviceId);
+      this.emitSafe('lost', { ...victim });
+    }
+    // A manual peer's address was verified by its certificate when probed: an (unauthenticated)
+    // announce refreshes it but never moves it.
+    const keepAddr = cur?.manual === true && !manual;
     const next: PeerInfo = {
       v: 1,
       deviceId: a.deviceId,
       alias: a.alias,
       deviceType: a.deviceType,
-      port: a.port,
-      host,
+      port: keepAddr ? cur.port : a.port,
+      host: keepAddr ? cur.host : host,
       lastSeen: now,
     };
     // An announce for a manually added peer refreshes it but never demotes it back to expiring.
     if (manual || cur?.manual) next.manual = true;
     this.table.set(a.deviceId, next);
     const changed =
-      !cur || cur.host !== host || cur.port !== a.port || cur.alias !== a.alias || cur.deviceType !== a.deviceType;
+      !cur || cur.host !== next.host || cur.port !== next.port || cur.alias !== a.alias || cur.deviceType !== a.deviceType;
     if (changed) this.emitSafe('peer', { ...next });
     return true;
   }
