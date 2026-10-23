@@ -3,7 +3,7 @@
     "Frozen MeshDrop canonical JSON + domain-separated signature vector (v1). A second engine (Java) must reproduce every canonical string byte-for-byte and must accept the stored signature.",
     "canonicalJson: object keys sorted ascending by UTF-16 code unit (Java String.compareTo); no whitespace; strings escaped exactly like ECMAScript JSON.stringify (well-formed, lone surrogates as \\udXXX lowercase hex); integers only, safe range, plain decimal, -0 prints 0; arrays keep order; output is UTF-8.",
     "cases[].canonical is the expected canonical string; canonicalHex is its UTF-8 bytes.",
-    "signature: ECDSA P-256 / SHA-256, DER, base64 (standard, padded) over UTF-8(domain) || 0x00 || payload. ECDSA is randomised, so the stored signature is verified, not regenerated. payload here is UTF-8 of canonicalJson(payloadValue). domain already includes its trailing NUL as the caller passes it; the 0x00 separator is added in addition.",
+    "signature: ECDSA P-256 / SHA-256, DER, base64 (standard, padded) over UTF-8(domain) || 0x00 || payload. ECDSA is randomised, so the stored signature is verified, not regenerated. payload here is UTF-8 of canonicalJson(payloadValue). domain is non-empty printable ASCII (0x21-0x7E) with no trailing NUL; the single 0x00 separator is inserted between domain and payload.",
     "spkiSha256Hex = hex SHA-256 of the public key SPKI DER (spkiDerHex)."
   ],
   "cases": [
@@ -128,7 +128,7 @@
   ],
   "signing": {
     "privateKeyScalarHex": "4b1e54cdaf25624ade1bc2bae65dfa0596aeac64bccb4370fd91c0c4daa80524",
-    "domain": "meshdrop/v1/test\u0000",
+    "domain": "meshdrop/v1/test",
     "payloadValue": {
       "b": 1,
       "a": [
@@ -139,9 +139,9 @@
       ]
     },
     "payload": "{\"a\":[{\"c\":\"é\\n\",\"d\":2}],\"b\":1}",
-    "signedMessageHex": "6d65736864726f702f76312f7465737400007b2261223a5b7b2263223a22c3a95c6e222c2264223a327d5d2c2262223a317d",
+    "signedMessageHex": "6d65736864726f702f76312f74657374007b2261223a5b7b2263223a22c3a95c6e222c2264223a327d5d2c2262223a317d",
     "spkiDerHex": "3059301306072a8648ce3d020106082a8648ce3d0301070342000434573818bf0aad3eb19282f49b58a5e427d20e9633763b440ac3ae280b7ddf14862cd4fe0f565e512103a1080d761a76e1767b1e600eab91d737204596300256",
     "spkiSha256Hex": "09bf8c369c8271b528cbec758ebfa97948b8c3044148e0c5359c984969ee2e5c",
-    "signatureB64": "MEUCIQC3+USK8teaSTNNG37lqSOoNki7ga5dfvGphBZV02FCOAIgFxlsk5O+WEEdWXdlZzAMeqDnO4fDR+JpDhYCLyWdXkI="
+    "signatureB64": "MEQCIEMCOrTwvFrn8I6ew6H5T/nu+BbE+4N7HdLTXJ0EyVsPAiB8mERGoDOvdGuVmwTaCp/Y1KIuumNE/LbMbS4Fwoir7Q=="
   }
 }

@@ -30,11 +30,15 @@
  *
  * SIGNATURES
  *  ECDSA P-256 with SHA-256, DER encoded, transported as standard padded base64. The signed message is
- *  `utf8(domain) || 0x00 || payload`, where `domain` is an ASCII label (by convention it also ends in
- *  `\0` in the callers' constants; the explicit 0x00 separator is added regardless) and `payload` is
- *  raw bytes (a string payload is taken as UTF-8). Java: `Signature.getInstance("SHA256withECDSA")`.
+ *  `utf8(domain) || 0x00 || payload`. `domain` is a non-empty label of printable ASCII (0x21-0x7E; no
+ *  NUL, no space, no non-ASCII) WITHOUT a trailing NUL: the single 0x00 separator is inserted by
+ *  signDomain/verifyDomain. Because a domain can never contain 0x00, the first 0x00 of the signed
+ *  message always ends the domain, so (domain, payload) pairs cannot collide. `payload` is raw bytes
+ *  (a string payload is taken as UTF-8). signDomain throws on a bad domain or a key that is not a
+ *  private P-256 KeyObject; verifyDomain returns false for a bad domain or any public key that is not a
+ *  P-256 (prime256v1) EC public KeyObject. Java: `Signature.getInstance("SHA256withECDSA")`.
  */
-import { createHash, sign, verify, type KeyObject } from 'node:crypto';
+import { createHash, sign, verify, KeyObject } from 'node:crypto';
 
 export class CanonicalError extends Error {
   constructor(message: string) {
@@ -95,22 +99,43 @@ export function canonicalJson(v: unknown): string {
   return ser(v, 0, '$', new Set());
 }
 
+const DOMAIN_RE = /^[\x21-\x7e]+$/;
+
+function validDomain(domain: unknown): domain is string {
+  return typeof domain === 'string' && DOMAIN_RE.test(domain);
+}
+
+function isP256(key: unknown, type: 'public' | 'private'): key is KeyObject {
+  return (
+    key instanceof KeyObject &&
+    key.type === type &&
+    key.asymmetricKeyType === 'ec' &&
+    key.asymmetricKeyDetails?.namedCurve === 'prime256v1'
+  );
+}
+
 function signedMessage(domain: string, payload: Buffer | string): Buffer {
   return Buffer.concat([Buffer.from(domain, 'utf8'), Buffer.from([0]), typeof payload === 'string' ? Buffer.from(payload, 'utf8') : payload]);
 }
 
-/** Base64 (standard, padded) DER ECDSA-P256/SHA-256 signature over `utf8(domain) || 0x00 || payload`. */
+/**
+ * Base64 (standard, padded) DER ECDSA-P256/SHA-256 signature over `utf8(domain) || 0x00 || payload`.
+ * Throws if `domain` is not non-empty printable ASCII (0x21-0x7E) or `key` is not a private P-256 KeyObject.
+ */
 export function signDomain(domain: string, payload: Buffer | string, key: KeyObject): string {
+  if (!validDomain(domain)) throw new TypeError('signDomain: domain must be non-empty printable ASCII (0x21-0x7E)');
+  if (!isP256(key, 'private')) throw new TypeError('signDomain: key must be a P-256 private KeyObject');
   return sign('sha256', signedMessage(domain, payload), key).toString('base64');
 }
 
 const B64 = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/;
 
-/** Verify a signDomain signature. Returns false on any malformed input; never throws. */
+/** Verify a signDomain signature. Returns false on any malformed input (bad domain, non-P-256 key...); never throws. */
 export function verifyDomain(domain: string, payload: Buffer | string, sigB64: string, pub: KeyObject): boolean {
   try {
-    if (typeof domain !== 'string' || typeof sigB64 !== 'string' || !B64.test(sigB64)) return false;
+    if (!validDomain(domain) || typeof sigB64 !== 'string' || !B64.test(sigB64)) return false;
     if (typeof payload !== 'string' && !Buffer.isBuffer(payload)) return false;
+    if (!isP256(pub, 'public')) return false;
     const sig = Buffer.from(sigB64, 'base64');
     if (sig.length === 0) return false;
     return verify('sha256', signedMessage(domain, payload), pub, sig);

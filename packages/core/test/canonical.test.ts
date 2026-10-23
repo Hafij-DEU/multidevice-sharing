@@ -1,4 +1,4 @@
-import { createPrivateKey, createPublicKey, generateKeyPairSync, type KeyObject } from 'node:crypto';
+import { createPrivateKey, createPublicKey, generateKeyPairSync, KeyObject } from 'node:crypto';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { CanonicalError, canonicalJson, signDomain, spkiSha256, verifyDomain } from '../src/mesh/canonical.ts';
@@ -62,11 +62,11 @@ function keyPair(): { priv: KeyObject; pub: KeyObject } {
 describe('signDomain / verifyDomain', () => {
   it('round trips for string and Buffer payloads', () => {
     const { priv, pub } = keyPair();
-    const sig = signDomain('meshdrop/test\0', 'payload', priv);
+    const sig = signDomain('meshdrop/test', 'payload', priv);
     expect(typeof sig).toBe('string');
-    expect(verifyDomain('meshdrop/test\0', 'payload', sig, pub)).toBe(true);
-    expect(verifyDomain('meshdrop/test\0', Buffer.from('payload'), sig, pub)).toBe(true);
-    expect(verifyDomain('meshdrop/test\0', Buffer.from('payload'), signDomain('meshdrop/test\0', Buffer.from('payload'), priv), pub)).toBe(true);
+    expect(verifyDomain('meshdrop/test', 'payload', sig, pub)).toBe(true);
+    expect(verifyDomain('meshdrop/test', Buffer.from('payload'), sig, pub)).toBe(true);
+    expect(verifyDomain('meshdrop/test', Buffer.from('payload'), signDomain('meshdrop/test', Buffer.from('payload'), priv), pub)).toBe(true);
   });
 
   it('fails on flipped payload byte, other domain, other key', () => {
@@ -80,11 +80,40 @@ describe('signDomain / verifyDomain', () => {
     expect(verifyDomain('d1', payload, sig, keyPair().pub)).toBe(false);
   });
 
-  it('domain/payload boundary is unambiguous (0x00 separator)', () => {
+  it('domain must be non-empty printable ASCII: no collision via NUL in domain', () => {
     const { priv, pub } = keyPair();
-    const sig = signDomain('ab', 'c', priv);
-    expect(verifyDomain('a', 'b\0c', sig, pub)).toBe(false);
-    expect(verifyDomain('ab', 'c', sig, pub)).toBe(true);
+    // signed message of ('a\0','b') would equal that of ('a','\0b'); both must be impossible.
+    expect(() => signDomain('a\0', 'b', priv)).toThrow(TypeError);
+    for (const d of ['', 'a\0b', 'has space', 'tab\t', 'caf\u00e9', 'x\u007f', '\u{1f600}']) {
+      expect(() => signDomain(d, 'p', priv), JSON.stringify(d)).toThrow(TypeError);
+    }
+    const sig = signDomain('a', '\0b', priv);
+    expect(verifyDomain('a\0', 'b', sig, pub)).toBe(false);
+    expect(verifyDomain('a', '\0b', sig, pub)).toBe(true);
+    expect(verifyDomain('', 'p', sig, pub)).toBe(false);
+    expect(verifyDomain('a b', 'p', sig, pub)).toBe(false);
+    expect(() => signDomain('meshdrop/v1.x-y_z', 'p', priv)).not.toThrow();
+  });
+
+  it('enforces the P-256 contract on keys', () => {
+    const { priv, pub } = keyPair();
+    const p384 = generateKeyPairSync('ec', { namedCurve: 'secp384r1' });
+    const rsa = generateKeyPairSync('rsa', { modulusLength: 2048 });
+    const ed = generateKeyPairSync('ed25519');
+    const sig = signDomain('d', 'p', priv);
+    // verify side: wrong curve / type / kind -> false, never throws
+    expect(verifyDomain('d', 'p', signDomain('d', 'p', priv), p384.publicKey)).toBe(false);
+    expect(verifyDomain('d', 'p', sig, rsa.publicKey)).toBe(false);
+    expect(verifyDomain('d', 'p', sig, ed.publicKey)).toBe(false);
+    expect(verifyDomain('d', 'p', sig, priv)).toBe(false); // private KeyObject passed as pub
+    expect(verifyDomain('d', 'p', sig, pub.export({ format: 'pem', type: 'spki' }) as unknown as KeyObject)).toBe(false); // PEM string
+    expect(verifyDomain('d', 'p', sig, pub)).toBe(true);
+    // sign side
+    expect(() => signDomain('d', 'p', p384.privateKey)).toThrow(TypeError);
+    expect(() => signDomain('d', 'p', rsa.privateKey)).toThrow(TypeError);
+    expect(() => signDomain('d', 'p', ed.privateKey)).toThrow(TypeError);
+    expect(() => signDomain('d', 'p', pub)).toThrow(TypeError); // public key
+    expect(() => signDomain('d', 'p', priv.export({ format: 'pem', type: 'pkcs8' }) as unknown as KeyObject)).toThrow(TypeError);
   });
 
   it('returns false (never throws) on malformed input', () => {
@@ -148,7 +177,7 @@ const CASES: { name: string; input: unknown }[] = [
 
 const SIGN_INPUT = {
   privateKeyScalarHex: '4b1e54cdaf25624ade1bc2bae65dfa0596aeac64bccb4370fd91c0c4daa80524',
-  domain: 'meshdrop/v1/test\0',
+  domain: 'meshdrop/v1/test',
   payloadValue: { b: 1, a: [{ d: 2, c: 'é\n' }] },
 };
 
@@ -156,7 +185,7 @@ const NOTES = [
   'Frozen MeshDrop canonical JSON + domain-separated signature vector (v1). A second engine (Java) must reproduce every canonical string byte-for-byte and must accept the stored signature.',
   'canonicalJson: object keys sorted ascending by UTF-16 code unit (Java String.compareTo); no whitespace; strings escaped exactly like ECMAScript JSON.stringify (well-formed, lone surrogates as \\udXXX lowercase hex); integers only, safe range, plain decimal, -0 prints 0; arrays keep order; output is UTF-8.',
   'cases[].canonical is the expected canonical string; canonicalHex is its UTF-8 bytes.',
-  'signature: ECDSA P-256 / SHA-256, DER, base64 (standard, padded) over UTF-8(domain) || 0x00 || payload. ECDSA is randomised, so the stored signature is verified, not regenerated. payload here is UTF-8 of canonicalJson(payloadValue). domain already includes its trailing NUL as the caller passes it; the 0x00 separator is added in addition.',
+  'signature: ECDSA P-256 / SHA-256, DER, base64 (standard, padded) over UTF-8(domain) || 0x00 || payload. ECDSA is randomised, so the stored signature is verified, not regenerated. payload here is UTF-8 of canonicalJson(payloadValue). domain is non-empty printable ASCII (0x21-0x7E) with no trailing NUL; the single 0x00 separator is inserted between domain and payload.',
   'spkiSha256Hex = hex SHA-256 of the public key SPKI DER (spkiDerHex).',
 ];
 
