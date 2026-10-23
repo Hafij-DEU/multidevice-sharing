@@ -451,6 +451,10 @@ describe('receiver API', () => {
 
     // structurally invalid offer
     expect((await call(h, B, 'POST', 'offer', { v: 1, from: B.deviceId })).status).toBe(422);
+    // `from` is checked first: an offer object without it is 403 forbidden (documented)
+    const noFrom = await call(h, B, 'POST', 'offer', { v: 1, sessionId: newSessionId() });
+    expect(noFrom.status).toBe(403);
+    expect(noFrom.json).toEqual({ error: 'forbidden' });
     expect((await call(h, B, 'POST', 'offer', [1, 2])).status).toBe(422);
 
     // a different trusted peer cannot touch B's session

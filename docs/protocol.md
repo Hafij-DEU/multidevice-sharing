@@ -1,19 +1,27 @@
 # MeshDrop wire protocol (v1)
 
 This is the normative description of protocol v1, as implemented by the Node engine in `packages/core/src`.
-A second engine (the M4 Android/Java engine) must follow it and reproduce the frozen vectors in
-`protocol/vectors/` byte for byte. Contents: identity and device id, TLS rules, HPKE suite and chunk
-sealing, manifest schema, endpoints, sender/resume algorithm, announce packet, M1 pairing, test vectors.
+A second engine (the M4 Android/Java engine) must follow it. What is normative on the wire is the behaviour
+described here plus the HPKE and chunk vectors in `protocol/vectors/`, which it must reproduce byte for byte.
+The device certificate is the exception: its exact encoding is *not* normative (see Identity); the `x509-v1`
+vector only pins the profile the Node engine emits. Contents: identity and device id, TLS rules, HPKE suite and
+chunk sealing, manifest schema, endpoints, sender/resume algorithm, announce packet, M1 pairing, notes for
+other engines, test vectors.
 
 ## Identity and device id
 
 Implemented in `identity.ts` and `x509.ts`.
 
-- Every device has one long-term **ECDSA P-256** key pair and a **self-signed X.509 v3 certificate** for it:
-  signature ECDSA-with-SHA256, subject = issuer = `CN=meshdrop-<first 8 hex of SHA-256(SPKI DER)>`, a 16-byte
-  random positive serial, validity notBefore `200101000000Z` (UTCTime, as RFC 5280 requires before 2050) to
-  notAfter `99991231235959Z` (GeneralizedTime), and one critical
-  `basicConstraints` extension with `cA` FALSE. The same key is used for TLS, ECDSA and HPKE (static DH key).
+Normative:
+
+- Every device has one long-term **EC P-256** key pair and a **self-signed X.509 certificate** carrying its
+  public key as a P-256 `SubjectPublicKeyInfo`. The same key is used for TLS, ECDSA and HPKE (static DH key).
+- **Peers MUST accept any well-formed self-signed certificate with a P-256 SPKI** and derive everything from
+  it: the device id (below) and the public key (stored as SPKI). They MUST NOT require a particular subject,
+  serial, validity, extension set or signature encoding, and MUST NOT reject a certificate for its validity
+  dates (pinning replaces CA and expiry checks). This lets another engine use a certificate its platform
+  generates (e.g. the self-signed certificate AndroidKeyStore creates for a generated key) as long as the key
+  is P-256.
 - **Device id** = lowercase hex SHA-256 of the certificate **DER** (64 characters). The short display form is
   its first 8 characters. Ids are never taken from a JSON field when the certificate is available: on the
   wire the id is always recomputed from the certificate the peer presented.
@@ -24,6 +32,12 @@ Implemented in `identity.ts` and `x509.ts`.
   A new identity is written to a temporary directory and renamed into place, so a crash cannot leave half of one.
 - A device id stays valid as long as the certificate DER is unchanged; re-issuing the certificate (even for
   the same key) is a new device id and needs re-pairing.
+
+Certificate profile of the Node engine (informative; pinned by `x509-v1.json`): X.509 v3, signature
+ECDSA-with-SHA256, subject = issuer = `CN=meshdrop-<first 8 hex of SHA-256(SPKI DER)>` (UTF8String), a 16-byte
+random positive serial, validity notBefore `200101000000Z` (UTCTime, as RFC 5280 requires for dates before 2050)
+to notAfter `99991231235959Z` (GeneralizedTime, "no expiry"), and one critical `basicConstraints` extension with
+`cA` FALSE.
 
 ## TLS rules
 
@@ -37,6 +51,12 @@ Implemented in `tls.ts`.
   validation, and on `secureConnect` checks that SHA-256(server certificate DER) equals the expected device
   id. On a mismatch (or no certificate) the socket is destroyed before any application byte is written
   (`pin-mismatch`, never retried). Each request uses a fresh connection.
+  In TLS 1.3 the client sends its Certificate and CertificateVerify in its second flight, and Node's
+  `secureConnect` fires only after that, so **an impostor server at the peer's address receives our client
+  certificate (and with it our device id) before the pin check rejects it**. It learns who is connecting, but
+  cannot complete any request or impersonate us (it lacks our key). An engine that can verify the server
+  certificate inside the handshake (e.g. a custom `X509TrustManager.checkServerTrusted` on Android, which runs
+  before the client flight) should pin there and avoid the disclosure.
 - **Probe / pairing** (`GET info`, pairing): TLS 1.3 without pinning and **without a client certificate**,
   so a scan does not reveal who is scanning. The result is only trusted as far as the certificate goes: the
   device id is the hash of the presented certificate, and an `info.deviceId` that disagrees fails the probe.
@@ -114,14 +134,34 @@ response is `403 {"error":"untrusted"}`. Error bodies are JSON `{"error": "<code
 exception text. A session belongs to the device named in its manifest (`from`); any other peer gets
 `403 {"error":"forbidden"}` on `chunk`, `complete`, `finish` and `cancel`.
 
+Error codes (the complete set; senders match on status first, the code is informative):
+
+| Status | `error` | Meaning |
+|---|---|---|
+| 400 | `bad-json` | `offer` body is not valid JSON |
+| 400 | `bad-request` | unparsable request URL, or a non-numeric / out-of-format `fileId` or `index` |
+| 403 | `untrusted` | the peer's certificate is not in the trust store (every route but `info`) |
+| 403 | `forbidden` | `offer.from` is missing or is not the TLS peer, or the session/tombstone belongs to another device |
+| 404 | `not-found` | unknown route or method |
+| 404 | `unknown-session` | malformed session id, or no such (live) session |
+| 409 | `session-conflict` | re-`offer` of a live session with a different HPKE context |
+| 409 | `range` | unknown `fileId`, chunk index out of range, or wrong plaintext length |
+| 409 | `incomplete` | `complete` with chunks missing (also when the partial data vanished: the file restarts), or `finish` before every file was completed |
+| 413 | `too-large` | body over the route's cap (connection closed after the reply) |
+| 422 | `bad-offer` | malformed offer or manifest, unsafe path, not addressed to us, wrong sender key |
+| 422 | `decrypt` | chunk failed AEAD authentication (nothing recorded) |
+| 422 | `integrity` | whole-file SHA-256 mismatch on `complete` (the data is discarded) |
+| 507 | `no-space` | ENOSPC while storing a chunk, finalizing a file (`complete`, `finish`), or writing session state (`offer`) |
+| 500 | `internal` | anything else |
+
 | Method | Path | Request body | Success | Error statuses |
 |---|---|---|---|---|
 | GET | `info` | none | `200 {v:1, deviceId, alias, deviceType}` | none (open to any peer) |
-| POST | `offer` | `Offer` JSON (`{v, sessionId, from, to, enc, sealedManifest}`), at most 64 MiB | `200 {have: HaveMap}`, or `200 {done: true, files: [path]}` if the session was already finished (see Tombstones) | 400 malformed JSON; 403 `untrusted`, or `offer.from` is not the peer, or the session belongs to someone else; 409 `session-conflict`; 413 body too large; 422 `bad-offer` (malformed offer or manifest, unsafe path, not addressed to this device, wrong sender key); 507 `no-space`; 500 |
+| POST | `offer` | `Offer` JSON (`{v, sessionId, from, to, enc, sealedManifest}`), at most 64 MiB | `200 {have: HaveMap}`, or `200 {done: true, files: [path]}` if the session was already finished (see Tombstones) | 400 `bad-json`; 403 `untrusted`, or `forbidden` when `offer.from` is not the peer (checked right after parsing: a JSON object **without** `from` is `403 forbidden`, not 422) or the session belongs to someone else; 409 `session-conflict`; 413 `too-large`; 422 `bad-offer` (non-object JSON, bad `sessionId`, malformed offer or manifest, unsafe path, not addressed to this device, wrong sender key); 507 `no-space`; 500 |
 | PUT | `chunk/:sessionId/:fileId/:index` | raw sealed chunk (ciphertext + 16-byte tag), at most `CHUNK_SIZE + 16` bytes | `204` | 400 non-numeric `fileId`/`index`; 403; 404 `unknown-session`; 409 `range` (unknown file, index out of range, wrong plaintext length); 413 body too large (checked on `Content-Length` and while streaming; the connection is closed); 422 `decrypt` (authentication failed, nothing recorded); 507 `no-space` (disk full; partial data kept, `error` event emitted); 500 |
-| POST | `complete/:sessionId/:fileId` | none | `200 {path}` (idempotent; `path` is where the file landed, relative to the receiver's inbox root, `/`-separated, e.g. `photos/a (1).jpg`) | 403; 404; 409 `incomplete` (chunks missing) or `range` (unknown file); 422 `integrity` (SHA-256 mismatch; the received data is discarded so the file restarts from scratch); 500 |
-| POST | `finish/:sessionId` | none | `200 {files: [path]}` (inbox-relative, as for `complete`); creates the manifest's empty directories, writes the tombstone, emits `received` (with `text` if any), drops the partial session state. Retryable: on a finished session it returns the same `files` with no second `received` | 403; 404; 409 `incomplete` (some manifest file was not completed; session kept); 500 |
-| POST | `cancel/:sessionId` | none | `204` (idempotent; unknown session is also 204) | 403 |
+| POST | `complete/:sessionId/:fileId` | none | `200 {path}` (idempotent; `path` is where the file landed, relative to the receiver's inbox root, `/`-separated, e.g. `photos/a (1).jpg`) | 403; 404; 409 `incomplete` (chunks missing, or the partial data was lost and the file restarts) or `range` (unknown file); 422 `integrity` (SHA-256 mismatch; the received data is discarded so the file restarts from scratch); 507 `no-space`; 500 |
+| POST | `finish/:sessionId` | none | `200 {files: [path]}` (inbox-relative, as for `complete`); creates the manifest's empty directories, writes the tombstone, emits `received` (with `text` if any), drops the partial session state. Retryable: on a finished session it returns the same `files` with no second `received` | 403; 404; 409 `incomplete` (some manifest file was not completed; session kept); 507 `no-space` (creating directories / the tombstone); 500 |
+| POST | `cancel/:sessionId` | none | `204` (idempotent; unknown session is also 204) | 403; 500 |
 
 Notes:
 
@@ -266,12 +306,38 @@ other engines behave the same.
 - **Defaults.** Port 53318, inbox `~/Downloads/MeshDrop`, alias = host name (at most 64 characters),
   device type `desktop`.
 
+## Notes for other engines (M4 Android)
+
+Not part of the protocol; platform constraints found while specifying it.
+
+- **Static ECDH in AndroidKeyStore.** HPKE mode_auth needs ECDH with the device's long-term P-256 key on both
+  sides. AndroidKeyStore supports key agreement (`KeyProperties.PURPOSE_AGREE_KEY`, `KeyAgreement "ECDH"`) only
+  from **API 31**. On API 26-30 the identity key cannot both live in the keystore and do HPKE: use a software
+  P-256 key there (stored encrypted, e.g. wrapped by a keystore AES key), or raise minSdk to 31.
+- **TLS 1.3** is in the platform TLS stack only from **API 29**. Since every connection is TLS 1.3 only, API
+  26-28 need a bundled Conscrypt provider (or minSdk 29).
+- **Client-certificate disclosure** before the pin check: see TLS rules (pin inside the handshake if you can).
+- **Certificates:** any self-signed P-256 certificate works (see Identity); the device id is SHA-256 of
+  whatever DER the platform produced, so it must be stored and re-presented byte-identically forever.
+
 ## Test vectors
 
-Frozen files in `protocol/vectors/`; a conforming engine must reproduce them byte for byte.
+Frozen files in `protocol/vectors/`. A conforming engine must reproduce `hpke-auth-p256.json` and
+`chunk-v1.json` byte for byte. `x509-v1.json` pins only the certificate profile the Node engine emits (a
+regression test for this implementation); other engines need not emit it, only accept it (see Identity).
 
 | File | Pins | Checked by |
 |---|---|---|
 | `hpke-auth-p256.json` | RFC 9180 test vectors for mode_auth with DHKEM(P-256, HKDF-SHA256), HKDF-SHA256, AES-128-GCM and AES-256-GCM: shared secret, key schedule (key, base_nonce, exporter secret) and sealed messages at successive seqs | `packages/core/test/hpke.test.ts` |
 | `chunk-v1.json` | MeshDrop sealing: fixed sender/receiver/ephemeral scalars, `info`, the exact manifest JSON bytes, `enc`, the sealed manifest (seq 0), one sealed chunk (seq/AAD layout above) | `packages/core/test/chunk.test.ts` |
-| `x509-v1.json` | Device certificate: the TBSCertificate bytes for a fixed key, serial and CN (the ECDSA signature is randomized, so only the TBS is pinned) and the device-id rule | `packages/core/test/identity.test.ts` |
+| `x509-v1.json` | The Node engine's certificate profile: the TBSCertificate bytes for a fixed key, serial and CN (the ECDSA signature is randomized, so only the TBS is pinned). Informative for other engines | `packages/core/test/identity.test.ts` |
+
+Provenance of `hpke-auth-p256.json`: the two entries with `mode == 2 && kem_id == 16 && kdf_id == 1 &&
+aead_id in (1, 2)` of the CFRG HPKE test vectors,
+`https://github.com/cfrg/draft-irtf-cfrg-hpke/blob/5f503c564da00b0687b3de75f1dfbdfc4079ad31/test-vectors.json`
+(commit `5f503c564da00b0687b3de75f1dfbdfc4079ad31`, the latest commit touching that file; the upstream file's
+SHA-256 is `61fc662f01996cd06d713dacf5e133167bd309a1f329442d53f1e21a47b3ede6`), copied field for field (only the
+entries' key subset: `mode, kem_id, kdf_id, aead_id, info, skEm, pkEm, skRm, pkRm, skSm, pkSm, enc, shared_secret,
+key, base_nonce, exporter_secret, encryptions`). SHA-256 of the committed file:
+`66bfe56f3d6b0885ef3f46a45ce8bab258a7be9885f046a49af27f8c38357a62`. The aead_id 1 entry is the RFC 9180 A.3.3
+vector (DHKEM(P-256), AES-128-GCM, Auth); the aead_id 2 entry (AES-256-GCM, our suite) is only in the CFRG file.

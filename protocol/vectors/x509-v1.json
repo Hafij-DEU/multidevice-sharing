@@ -1,5 +1,5 @@
 {
-  "description": "Frozen MeshDrop device-cert vector (v1). TBSCertificate must be byte-identical for this key/serial/CN; the ECDSA signature is randomized so only the TBS is pinned. Android engine must produce the same deviceId = sha256(certDER) from any such cert.",
+  "description": "Certificate profile emitted by the Node engine (v1): the TBSCertificate must be byte-identical for this key/serial/CN; the ECDSA signature is randomized so only the TBS is pinned. Informative for other engines: they need not emit this profile, but MUST accept any well-formed self-signed P-256 certificate and use deviceId = sha256(certDER).",
   "privateKeyPem": "-----BEGIN PRIVATE KEY-----\nMIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgQmkMy7ye0PYpqmdG\n6Lh8AQ2CApONRDr5IJtLuBRyh9mhRANCAATVbuOFbYCoxrNAJfUqu9sph/7/U1XI\na9/Wir75e27dZf+1YHjU5bsfWjJG6ZYatg3IStK6cJll3D7F8h5+m44O\n-----END PRIVATE KEY-----\n",
   "publicKeySpkiHex": "3059301306072a8648ce3d020106082a8648ce3d03010703420004d56ee3856d80a8c6b34025f52abbdb2987feff5355c86bdfd68abef97b6edd65ffb56078d4e5bb1f5a3246e9961ab60dc84ad2ba709965dc3ec5f21e7e9b8e0e",
   "serialHex": "0102030405060708090a0b0c0d0e0f10",
