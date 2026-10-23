@@ -10,5 +10,11 @@
   "scripts": {
     "test": "vitest run",
     "typecheck": "tsc -p . --noEmit"
+  },
+  "dependencies": {
+    "ws": "8.21.0"
+  },
+  "devDependencies": {
+    "@types/ws": "8.18.1"
   }
 }
