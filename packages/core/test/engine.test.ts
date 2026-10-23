@@ -1,6 +1,6 @@
 // Engine facade: two in-process engines on 127.0.0.1 with separate homes and inboxes, multicast
 // discovery disabled (pairing via manual probe only), plus a smoke test of the CLI.
-import { execFile } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 import { createHash, generateKeyPairSync, randomBytes } from 'node:crypto';
 import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -156,7 +156,8 @@ describe('Engine', () => {
   });
 
   it('only a serving engine runs multicast discovery; a client-only engine never announces', async () => {
-    const port = 40000 + Math.floor(Math.random() * 20000);
+    // Disjoint from discovery.test.ts's UDP ports (53900 + pid-derived offsets) and from 53317/53318.
+    const port = 45000 + Math.floor(Math.random() * 1000);
     const d = { port, iface: '127.0.0.1', intervalMs: 50, ttlMs: 2000 };
     const watcherHome = tmp('md-home-');
     const watcher = await Engine.create({ home: watcherHome, inbox: join(watcherHome, 'inbox'), port: 0, discovery: d });
@@ -204,7 +205,89 @@ function runCli(args: string[], env: Record<string, string> = {}): Promise<{ cod
   });
 }
 
+/** Starts `meshdrop listen` as a child; resolves once it printed its port. */
+async function startListen(home: string): Promise<{ port: number; id: string; output: () => string; stop: () => Promise<number | null> }> {
+  const child = spawn(process.execPath, [CLI, 'listen', '--home', home, '--inbox', join(home, 'inbox'), '--port', '0', '--no-discovery', '--alias', 'lis'], {
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  let buf = '';
+  child.stdout.setEncoding('utf8').on('data', (d: string) => (buf += d));
+  child.stderr.setEncoding('utf8').on('data', (d: string) => (buf += d));
+  const exited = new Promise<number | null>((r) => child.on('exit', (code) => r(code)));
+  for (let i = 0; i < 200 && !/device id [0-9a-f]{64}/.test(buf); i++) await new Promise((r) => setTimeout(r, 25));
+  const m = /listening on port (\d+)[\s\S]*device id ([0-9a-f]{64})/.exec(buf);
+  if (!m) {
+    child.kill('SIGKILL');
+    throw new Error(`listen did not start: ${buf}`);
+  }
+  return {
+    port: Number(m[1]),
+    id: m[2]!,
+    output: () => buf,
+    stop: async () => {
+      child.kill('SIGINT');
+      return exited;
+    },
+  };
+}
+
+const RAW_UNSAFE = /[\u0000-\u0009\u000b-\u001f\u007f-\u009f\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/;
+
 describe('CLI', () => {
+  it('pair prints both full device ids and how to verify them out of band', async () => {
+    const b = await mk();
+    const home = tmp('md-cli-');
+    const r = await runCli(['pair', `127.0.0.1:${b.e.port}`, 'bee', '--home', home]);
+    expect(r.code).toBe(0);
+    const me = await Engine.create({ home, inbox: join(home, 'inbox'), discovery: false });
+    expect(r.stdout).toContain(b.e.identity.deviceId);
+    expect(r.stdout).toContain(me.identity.deviceId);
+    expect(r.stdout).toMatch(new RegExp(`Verify: run \`meshdrop id\` on the other device and check it shows ${b.e.identity.deviceId}`));
+  });
+
+  it('a peer alias with ANSI/bidi controls is printed escaped (peers and pair)', async () => {
+    const home = tmp('md-home-');
+    const evil = await Engine.create({ home, inbox: join(home, 'inbox'), port: 0, discovery: false, alias: 'ev\x1b[2Jil\u202Edone\u0007' });
+    engines.push(evil);
+    await evil.start();
+    const aHome = tmp('md-cli-');
+    const p = await runCli(['pair', `127.0.0.1:${evil.port}`, 'x\x1b]0;t\x07', '--home', aHome]);
+    expect(p.code).toBe(0);
+    expect(p.stdout).not.toMatch(RAW_UNSAFE);
+    expect(p.stdout).toContain('x\\u{001B}]0;t\\u{0007}');
+    const r = await runCli(['peers', '--home', aHome]);
+    expect(r.code).toBe(0);
+    expect(r.stdout).not.toMatch(RAW_UNSAFE);
+    expect(r.stdout).toContain('ev\\u{001B}[2Jil\\u{202E}done\\u{0007}');
+  });
+
+  it('listen escapes received text (newlines stay on one line) and received file paths', async () => {
+    const lHome = tmp('md-cli-');
+    const l = await startListen(lHome);
+    try {
+      const a = await mk();
+      await a.e.pairManual('127.0.0.1', l.port, 'lis');
+      const back = await runCli(['pair', `127.0.0.1:${a.e.port}`, 'ay', '--home', lHome]);
+      expect(back.code).toBe(0);
+      const src = join(tmp(), 'a\u202Egnp.exe');
+      writeFileSync(src, 'x');
+      const res = await a.e.send([l.id.slice(0, 8)], [
+        { kind: 'file', srcPath: src },
+        { kind: 'text', text: 'hi\ndone   from pc-a (12345678): 1 file(s)\x1b[2J' },
+      ]);
+      expect(res[0]).toMatchObject({ status: 'done' });
+      for (let i = 0; i < 100 && !l.output().includes('text   '); i++) await new Promise((r) => setTimeout(r, 20));
+    } finally {
+      expect(await l.stop()).toBe(0);
+    }
+    const out = l.output();
+    expect(out).toContain('text   hi\\ndone   from pc-a (12345678): 1 file(s)\\u{001B}[2J');
+    expect(out.split('\n').filter((line) => line.startsWith('done   from pc-a (12345678)'))).toEqual([]);
+    expect(out).toContain('a\\u{202E}gnp.exe');
+    expect(out).not.toMatch(RAW_UNSAFE);
+  });
+
+
   it('id prints the device id of --home (and MESHDROP_HOME is overridden by --home)', async () => {
     const home = tmp('md-cli-');
     const other = tmp('md-cli-');

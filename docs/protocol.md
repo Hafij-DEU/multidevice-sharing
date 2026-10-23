@@ -222,6 +222,12 @@ other engines behave the same.
   Pairing is one-directional: the other device must pair back before it accepts our offers. The address is
   remembered in `<config>/manual-peers.json` and re-probed (2 s timeout) on every engine start, so manually
   paired devices are present without multicast.
+- **First contact is unauthenticated (trust on first use).** Pairing trusts whatever certificate answers at
+  `host:port`: an active man-in-the-middle during `pair` would be trusted in place of the real device, and every
+  later pinned connection would faithfully pin the attacker. `meshdrop pair` therefore prints both devices' full
+  ids; users should compare them out of band (run `meshdrop id` on the other device and check it shows the id
+  `pair` printed, and vice versa) before relying on the pairing. M2's QR pairing carries the id in the QR code
+  and removes this step.
 - **Targets.** A target is given as a unique prefix (at least 4 hex characters, case-insensitive) of a trusted
   device id; an unknown, ambiguous or malformed prefix is an error before anything is sent. `all` means every
   trusted device currently present in the peer table (empty: nothing is sent, the CLI exits non-zero). A trusted

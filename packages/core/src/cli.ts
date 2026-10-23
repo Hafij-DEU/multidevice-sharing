@@ -36,6 +36,24 @@ class UsageError extends Error {}
 const out = (s: string) => process.stdout.write(s + '\n');
 const err = (s: string) => process.stderr.write(s + '\n');
 
+/**
+ * Characters that must never reach the terminal raw from network-sourced strings (aliases from
+ * announces/info, received text and paths, peer error text): C0 controls (incl. ESC, so no escape
+ * sequence survives), DEL, C1 controls (incl. 8-bit CSI), line/paragraph separators and the bidi
+ * controls (ALM, LRM, RLM, LRE..RLO, LRI..PDI) that can visually reorder a line.
+ */
+const UNPRINTABLE = /[\u0000-\u001f\u007f-\u009f\u061c\u200e\u200f\u2028\u2029\u202a-\u202e\u2066-\u2069]/g;
+
+/** Escapes UNPRINTABLE characters: \n, \r, \t as such, everything else as \u{XXXX}. One line out. */
+function printable(s: unknown): string {
+  return String(s).replace(UNPRINTABLE, (c) => {
+    if (c === '\n') return '\\n';
+    if (c === '\r') return '\\r';
+    if (c === '\t') return '\\t';
+    return `\\u{${c.codePointAt(0)!.toString(16).toUpperCase().padStart(4, '0')}}`;
+  });
+}
+
 function fmtBytes(n: number): string {
   const units = ['B', 'KiB', 'MiB', 'GiB', 'TiB'];
   let v = n;
@@ -66,7 +84,7 @@ function parseHostPort(s: string): { host: string; port: number } {
 
 function nameOf(engine: Engine, deviceId: string): string {
   const t = engine.trust.get(deviceId);
-  return t ? `${t.alias} (${short(deviceId)})` : short(deviceId);
+  return t ? `${printable(t.alias)} (${short(deviceId)})` : short(deviceId);
 }
 
 async function main(argv: string[]): Promise<number> {
@@ -132,8 +150,8 @@ async function cmdId(base: EngineOptions, args: string[]): Promise<number> {
   const e = await Engine.create(base);
   out(`device id: ${e.identity.deviceId}`);
   out(`short id:  ${short(e.identity.deviceId)}`);
-  out(`alias:     ${e.alias}`);
-  out(`home:      ${e.home}`);
+  out(`alias:     ${printable(e.alias)}`);
+  out(`home:      ${printable(e.home)}`);
   out(`trusted:   ${e.trust.list().length} device(s)`);
   return 0;
 }
@@ -170,11 +188,11 @@ async function cmdListen(base: EngineOptions, args: string[]): Promise<number> {
       const p = ev.peer;
       if (ev.type === 'lost') {
         shown.delete(p.deviceId);
-        out(`lost   ${p.alias} (${short(p.deviceId)})`);
+        out(`lost   ${printable(p.alias)} (${short(p.deviceId)})`);
       } else if (shown.get(p.deviceId) !== `${p.alias}:${p.port}`) {
         shown.set(p.deviceId, `${p.alias}:${p.port}`);
         const tag = e.trust.isTrusted(p.deviceId) ? 'trusted' : 'untrusted';
-        out(`peer   ${p.alias} (${short(p.deviceId)}) at ${p.host}:${p.port} [${tag}]`);
+        out(`peer   ${printable(p.alias)} (${short(p.deviceId)}) at ${printable(p.host)}:${p.port} [${tag}]`);
       }
       return;
     }
@@ -197,14 +215,14 @@ async function cmdListen(base: EngineOptions, args: string[]): Promise<number> {
         break;
       }
       case 'file':
-        out(`saved  ${ev.path}`);
+        out(`saved  ${printable(ev.path)}`);
         break;
       case 'received':
         out(`done   from ${who}: ${ev.files.length} file(s)${sizes.has(ev.sessionId) ? `, ${fmtBytes(sizes.get(ev.sessionId)!)}` : ''}`);
-        if (ev.text !== undefined) out(`text   ${ev.text}`);
+        if (ev.text !== undefined) out(`text   ${printable(ev.text)}`);
         break;
       case 'error':
-        err(`error  ${ev.code} (session ${ev.sessionId || '?'}, from ${ev.from ? who : '?'})`);
+        err(`error  ${printable(ev.code)} (session ${ev.sessionId || '?'}, from ${ev.from ? who : '?'})`);
         break;
       case 'cancelled':
         out(`cancel ${who} cancelled session ${ev.sessionId}`);
@@ -218,7 +236,7 @@ async function cmdListen(base: EngineOptions, args: string[]): Promise<number> {
     sig.dispose();
     throw x;
   }
-  out(`listening on port ${e.port} as ${e.alias} (${short(e.identity.deviceId)}), inbox ${e.inboxDir}`);
+  out(`listening on port ${e.port} as ${printable(e.alias)} (${short(e.identity.deviceId)}), inbox ${printable(e.inboxDir)}`);
   out(`device id ${e.identity.deviceId}`);
   const s = await sig.promise;
   await e.stop();
@@ -241,10 +259,10 @@ async function cmdPeers(base: EngineOptions, args: string[]): Promise<number> {
     const peers = e.peers();
     if (trusted.length === 0) out('no trusted devices (pair one with `meshdrop pair <host[:port]> <alias>`)');
     for (const p of peers) {
-      out(`${p.trusted ? 'trusted  ' : 'untrusted'} ${p.alias.padEnd(20)} ${short(p.deviceId)} ${p.host}:${p.port} ${p.deviceType}${p.manual ? ' manual' : ''}`);
+      out(`${p.trusted ? 'trusted  ' : 'untrusted'} ${printable(p.alias).padEnd(20)} ${short(p.deviceId)} ${printable(p.host)}:${p.port} ${printable(p.deviceType)}${p.manual ? ' manual' : ''}`);
     }
     const seen = new Set(peers.map((p) => p.deviceId));
-    for (const t of trusted.filter((t) => !seen.has(t.deviceId))) out(`offline   ${t.alias.padEnd(20)} ${short(t.deviceId)}`);
+    for (const t of trusted.filter((t) => !seen.has(t.deviceId))) out(`offline   ${printable(t.alias).padEnd(20)} ${short(t.deviceId)}`);
     return 0;
   } finally {
     await e.stop();
@@ -257,9 +275,13 @@ async function cmdPair(base: EngineOptions, args: string[]): Promise<number> {
   const e = await startClient(base);
   try {
     const d = await e.pairManual(host, port, args[1]!);
-    out(`paired ${d.alias} (${short(d.deviceId)}) at ${host}:${port}`);
-    out(`device id ${d.deviceId}`);
-    out(`the other device must pair back: meshdrop pair <this-host>:${base.port ?? DEFAULT_MESH_PORT} <alias>  (this device is ${short(e.identity.deviceId)})`);
+    out(`paired ${printable(d.alias)} (${short(d.deviceId)}) at ${printable(host)}:${port}`);
+    out(`their device id: ${d.deviceId}`);
+    out(`this device id:  ${e.identity.deviceId}`);
+    // First contact is unauthenticated (trust on first use): only an out-of-band comparison of the
+    // ids detects an active man-in-the-middle during pairing.
+    out(`Verify: run \`meshdrop id\` on the other device and check it shows ${d.deviceId}`);
+    out(`The other device must pair back (meshdrop pair <this-host>:${base.port ?? DEFAULT_MESH_PORT} <alias>) and should see ${e.identity.deviceId}`);
     return 0;
   } finally {
     await e.stop();
@@ -272,7 +294,7 @@ function printResults(e: Engine, results: SendResult[], stats: Map<string, { byt
     const bytes = s ? [...s.bytes.values()].reduce((a, b) => a + b, 0) : 0;
     const secs = s?.ended !== undefined ? (s.ended - s.started) / 1000 : 0;
     const rate = secs > 0 && bytes > 0 ? ` in ${secs.toFixed(1)} s (${fmtBytes(bytes / secs)}/s)` : '';
-    const detail = r.status === 'done' ? `${fmtBytes(bytes)}${rate}` : (r.error ?? '');
+    const detail = r.status === 'done' ? `${fmtBytes(bytes)}${rate}` : printable(r.error ?? '');
     out(`${r.status.padEnd(9)} ${nameOf(e, r.deviceId)}  ${detail}${r.sessionId ? `  [${r.sessionId}]` : ''}`.trimEnd());
   }
 }
@@ -359,14 +381,14 @@ main(process.argv.slice(2)).then(
   },
   (e: unknown) => {
     if (e instanceof UsageError || (e as { code?: string })?.code?.startsWith('ERR_PARSE_ARGS')) {
-      err(`meshdrop: ${(e as Error).message}`);
+      err(`meshdrop: ${printable((e as Error).message)}`);
       err(USAGE);
       process.exitCode = 2;
     } else if (e instanceof UnknownDeviceError) {
-      err(`meshdrop: ${e.message}`);
+      err(`meshdrop: ${printable(e.message)}`);
       process.exitCode = 2;
     } else {
-      err(`meshdrop: ${(e as Error)?.message ?? String(e)}`);
+      err(`meshdrop: ${printable((e as Error)?.message ?? String(e))}`);
       process.exitCode = 1;
     }
   },
