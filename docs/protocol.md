@@ -35,3 +35,39 @@ Notes:
 - **Session ids** are 22 base64url characters; anything else in a path is `404 unknown-session`.
 - **Receiver events** (not on the wire): `offer`, `progress {fileId, chunks, total}`, `file {fileId, path}`,
   `received {files, text?}`, `error {code}`, `cancelled`, each carrying `sessionId` and `from`.
+
+## Sender algorithm / resume
+
+Implemented in `packages/core/src/transfer/send.ts` (`sendTo`, `Outbox`) and `multisend.ts` (`multiSend`).
+
+1. **Manifest.** Items are walked and every file is hashed (SHA-256 of the plaintext) with positional reads;
+   each source's `size` and `mtimeMs` are recorded. A `file` item is sent under its base name (an explicitly
+   chosen symlink is followed). A `dir` item is walked under its base name with `/`-separated paths; inside the
+   walk symlinks and special files are skipped silently (never followed), and every directory that ends up
+   with no entries is listed in `dirs`. At most one `text` item per send. `fileId`s are 0..n-1.
+2. **Session.** A fresh `sessionId` and HPKE context per target (`createOffer`). With an outbox, the entry
+   `{sessionId, target, itemsKey, offer, manifest, sources (path,size,mtimeMs), ctxExport}` is written to
+   `<config>/outbox/<sessionId>.json` atomically with mode 0600 (it holds key material) before any request.
+3. **Offer.** `POST offer` with the stored Offer, byte-identical on every resume (a different `enc` would be
+   `409 session-conflict`). `200 {have}` gives the chunks to skip; `200 {done: true}` means the receiver already
+   finished the session (lost `finish` reply), which is treated as done.
+4. **Chunks.** Each missing chunk is read at offset `index * CHUNK_SIZE` (never the whole file), sealed at its
+   fixed `(fileId, index)` seq and PUT; 3 in flight by default. A file is `complete`d as soon as its last missing
+   chunk is acknowledged (files with nothing missing, including 0-byte files, are completed directly). Then
+   `finish`. A file of exactly N × 4 MiB has exactly N chunks; a 0-byte file has none.
+5. **Source changes.** Before the session starts and before every chunk read, each source's size and mtime
+   are compared with the recorded values; any difference fails the session with `source-changed`. Different
+   plaintext must never be sealed under an already-used seq (AES-GCM nonce reuse). Calling `sendTo` again with
+   the same items after a source changed supersedes the stale outbox entry with a brand-new session.
+6. **Retries.** Network errors, timeouts and any 5xx (including 507) are retried 3 times after 0.5 s, 1 s and
+   2 s. 4xx (403/404/409/413/422), TLS pin mismatch and malformed replies fail at once; `error` carries
+   `http-<status> <code>` (e.g. `http-409 session-conflict`), `pin-mismatch`, `bad-response`, `source-changed`
+   or the network error message. Each request uses a fresh pinned connection; offer/chunk requests have a 30 s
+   idle timeout, `complete`/`finish` 10 min (the receiver hashes whole files before answering).
+7. **Outcome.** `done` deletes the outbox entry. `failed` keeps it. Aborting the caller's `AbortSignal` means
+   *pause*: the result is `cancelled`, nothing is posted to the receiver (no `cancel`), and the entry is kept
+   so `sendTo` with the same items, or `Outbox.resumeAll`, continues from the receiver's have map.
+   `resumeAll(id, resolveTarget)` resumes all entries concurrently; entries whose device cannot be resolved are
+   kept and reported as `failed` / `target-unresolved`.
+8. **Multi-send.** Items are hashed once; each target gets its own session, keys and outbox entry, all run
+   concurrently. One target failing never affects the others; results come back in target order.

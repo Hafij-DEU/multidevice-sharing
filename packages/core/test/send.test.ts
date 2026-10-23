@@ -1,0 +1,249 @@
+import { createHash, randomBytes } from 'node:crypto';
+import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
+import * as fsp from 'node:fs/promises';
+import { createServer } from 'node:https';
+import { join } from 'node:path';
+import { afterEach, describe, expect, it } from 'vitest';
+import { CHUNK_SIZE, chunkCount } from '../src/chunk.ts';
+import { loadOrCreateIdentity } from '../src/identity.ts';
+import { serverTlsOptions } from '../src/tls.ts';
+import { DEFAULT_RETRY_DELAYS_MS, Outbox, buildManifest, sendTo } from '../src/transfer/send.ts';
+import { cleanupEngines, makeEngines, progressOf, tmpDir } from './engines.ts';
+
+const sha = (b: Buffer) => createHash('sha256').update(b).digest('hex');
+const FAST = [5, 5, 5];
+const closers: (() => void)[] = [];
+afterEach(() => {
+  for (const c of closers.splice(0)) c();
+  cleanupEngines();
+});
+
+describe('buildManifest', () => {
+  it('walks dirs with / paths, records empty dirs, skips symlinks, hashes plaintext, keeps text', async () => {
+    const src = tmpDir();
+    const root = join(src, 'album');
+    mkdirSync(join(root, 'sub', 'deep'), { recursive: true });
+    mkdirSync(join(root, 'empty'));
+    writeFileSync(join(root, 'a.txt'), 'alpha');
+    writeFileSync(join(root, 'sub', 'deep', 'b.bin'), Buffer.alloc(3, 7));
+    writeFileSync(join(root, 'zero'), '');
+    symlinkSync(join(root, 'a.txt'), join(root, 'link-to-file'));
+    symlinkSync(join(root, 'sub'), join(root, 'link-to-dir'));
+    const single = join(src, 'single.json');
+    writeFileSync(single, '{}');
+
+    const from = 'a'.repeat(64);
+    const to = 'b'.repeat(64);
+    const { manifest, sources } = await buildManifest(
+      [{ kind: 'dir', srcPath: root }, { kind: 'file', srcPath: single }, { kind: 'text', text: 'hi there' }],
+      from,
+      to,
+    );
+    expect(manifest.from).toBe(from);
+    expect(manifest.to).toBe(to);
+    expect(manifest.text).toBe('hi there');
+    const byPath = Object.fromEntries(manifest.files.map((f) => [f.path, f]));
+    expect(Object.keys(byPath).sort()).toEqual(['album/a.txt', 'album/sub/deep/b.bin', 'album/zero', 'single.json']);
+    expect(byPath['album/a.txt']!.sha256).toBe(sha(Buffer.from('alpha')));
+    expect(byPath['album/zero']!.size).toBe(0);
+    expect(chunkCount(byPath['album/zero']!.size)).toBe(0);
+    expect(byPath['single.json']!.mime).toBe('application/json');
+    expect(manifest.dirs).toEqual([{ path: 'album/empty' }]);
+    expect(new Set(manifest.files.map((f) => f.fileId)).size).toBe(manifest.files.length);
+    for (const f of manifest.files) expect(sources.get(f.fileId)).toBeTypeOf('string');
+    expect(sources.get(byPath['single.json']!.fileId)).toBe(single);
+  });
+
+  it('an empty top-level dir becomes a dirs entry', async () => {
+    const d = join(tmpDir(), 'nothing');
+    mkdirSync(d);
+    const { manifest } = await buildManifest([{ kind: 'dir', srcPath: d }], 'a'.repeat(64), 'b'.repeat(64));
+    expect(manifest.files).toEqual([]);
+    expect(manifest.dirs).toEqual([{ path: 'nothing' }]);
+  });
+});
+
+describe('sendTo', () => {
+  it('exact multiple: an 8 MiB file sends exactly 2 chunk PUTs', async () => {
+    const [a, b] = await makeEngines(2);
+    const data = randomBytes(2 * CHUNK_SIZE);
+    const file = join(tmpDir(), 'eight.bin');
+    writeFileSync(file, data);
+    const r = await sendTo(a!.id, b!.target(), [{ kind: 'file', srcPath: file }]);
+    expect(r).toMatchObject({ deviceId: b!.id.deviceId, status: 'done' });
+    const prog = progressOf(b!, r.sessionId);
+    expect(prog).toHaveLength(2);
+    expect(prog.at(-1)).toMatchObject({ chunks: 2, total: 2 });
+    expect(sha(readFileSync(join(b!.inboxRoot, 'eight.bin')))).toBe(sha(data));
+  });
+
+  it('boundary sizes: 0 B -> 0 PUTs, 4 MiB -> 1, 4 MiB + 1 -> 2; all arrive intact', async () => {
+    const [a, b] = await makeEngines(2);
+    const dir = tmpDir();
+    const sizes = { 'zero.bin': 0, 'one.bin': CHUNK_SIZE, 'two.bin': CHUNK_SIZE + 1 };
+    const datas: Record<string, Buffer> = {};
+    for (const [name, size] of Object.entries(sizes)) writeFileSync(join(dir, name), (datas[name] = randomBytes(size)));
+    const progress: { fileId: number; sent: number; total: number }[] = [];
+    const r = await sendTo(a!.id, b!.target(), Object.keys(sizes).map((n) => ({ kind: 'file' as const, srcPath: join(dir, n) })), {
+      onProgress: (p) => progress.push(p),
+    });
+    expect(r.status).toBe('done');
+    const prog = progressOf(b!, r.sessionId);
+    const perFile = (fid: number) => prog.filter((p) => p.fileId === fid).length;
+    expect([perFile(0), perFile(1), perFile(2)]).toEqual([0, 1, 2]);
+    for (const name of Object.keys(sizes)) expect(sha(readFileSync(join(b!.inboxRoot, name)))).toBe(sha(datas[name]!));
+    // sender progress ends at sent === total for every file, including the empty one
+    for (const fid of [0, 1, 2]) {
+      const last = progress.filter((p) => p.fileId === fid).at(-1);
+      expect(last && last.sent === last.total).toBe(true);
+    }
+  });
+
+  it('retries a transient 507 and succeeds', async () => {
+    let failures = 1;
+    const flaky = {
+      ...fsp,
+      open: (async (...args: Parameters<typeof fsp.open>) => {
+        if (String(args[0]).endsWith('.part') && failures > 0) {
+          failures--;
+          throw Object.assign(new Error('disk full'), { code: 'ENOSPC' });
+        }
+        return fsp.open(...args);
+      }) as typeof fsp.open,
+    } as typeof fsp;
+    const [a, b] = await makeEngines(2, { fs: flaky });
+    const file = join(tmpDir(), 'x.bin');
+    writeFileSync(file, randomBytes(1000));
+    const r = await sendTo(a!.id, b!.target(), [{ kind: 'file', srcPath: file }], { retryDelaysMs: FAST });
+    expect(r.status).toBe('done');
+    expect(b!.events.filter((e) => e.type === 'error')).toHaveLength(1);
+  });
+
+  it('default retry delays are 0.5 s, 1 s, 2 s', () => {
+    expect(DEFAULT_RETRY_DELAYS_MS).toEqual([500, 1000, 2000]);
+  });
+
+  describe('against a fake receiver', () => {
+    async function fake(status: number) {
+      const fid = await loadOrCreateIdentity(tmpDir());
+      let hits = 0;
+      const server = createServer(serverTlsOptions(fid), (req, res) => {
+        hits++;
+        req.resume();
+        req.on('end', () => {
+          res.writeHead(status, { 'content-type': 'application/json' });
+          res.end(JSON.stringify({ error: 'nope' }));
+        });
+      });
+      await new Promise<void>((r) => server.listen(0, '127.0.0.1', () => r()));
+      closers.push(() => {
+        server.closeAllConnections();
+        server.close();
+      });
+      const target = { deviceId: fid.deviceId, host: '127.0.0.1', port: (server.address() as { port: number }).port, publicKey: fid.publicKey };
+      return { target, hits: () => hits };
+    }
+
+    it('5xx is retried 3 times, then the session fails and the outbox entry is kept', async () => {
+      const [a] = await makeEngines(1);
+      const f = await fake(503);
+      const file = join(tmpDir(), 'x.bin');
+      writeFileSync(file, 'x');
+      const outbox = new Outbox(a!.outboxDir);
+      const r = await sendTo(a!.id, f.target, [{ kind: 'file', srcPath: file }], { retryDelaysMs: FAST, outbox });
+      expect(r.status).toBe('failed');
+      expect(r.error).toBe('http-503 nope');
+      expect(f.hits()).toBe(4);
+      expect(existsSync(join(a!.outboxDir, `${r.sessionId}.json`))).toBe(true);
+    });
+
+    it.each([403, 404, 409, 413, 422])('%i is not retried', async (status) => {
+      const [a] = await makeEngines(1);
+      const f = await fake(status);
+      const file = join(tmpDir(), 'x.bin');
+      writeFileSync(file, 'x');
+      const r = await sendTo(a!.id, f.target, [{ kind: 'file', srcPath: file }], { retryDelaysMs: FAST });
+      expect(r.status).toBe('failed');
+      expect(r.error).toBe(`http-${status} nope`);
+      expect(f.hits()).toBe(1);
+    });
+  });
+
+  it('outbox: entry is 0600 with the original offer while sending, removed on done', async () => {
+    const [a, b] = await makeEngines(2);
+    const file = join(tmpDir(), 'f.bin');
+    writeFileSync(file, randomBytes(10));
+    const outbox = new Outbox(a!.outboxDir);
+    let seen: { mode: number; entry: Record<string, unknown> } | undefined;
+    b!.listeners.push((e) => {
+      if (e.type !== 'offer') return;
+      const p = join(a!.outboxDir, `${e.sessionId}.json`);
+      seen = { mode: statSync(p).mode & 0o777, entry: JSON.parse(readFileSync(p, 'utf8')) };
+    });
+    const r = await sendTo(a!.id, b!.target(), [{ kind: 'file', srcPath: file }], { outbox });
+    expect(r.status).toBe('done');
+    expect(seen!.mode).toBe(0o600);
+    expect(seen!.entry).toMatchObject({ sessionId: r.sessionId, offer: { sessionId: r.sessionId, from: a!.id.deviceId } });
+    expect(typeof seen!.entry.ctxExport).toBe('string');
+    expect(readdirSync(a!.outboxDir).filter((n) => n.endsWith('.json'))).toEqual([]);
+  });
+
+  it('abort -> cancelled (entry kept, no cancel posted); changed source -> resume fails source-changed', async () => {
+    const [a, b] = await makeEngines(2);
+    const file = join(tmpDir(), 'big.bin');
+    writeFileSync(file, randomBytes(3 * CHUNK_SIZE));
+    const outbox = new Outbox(a!.outboxDir);
+    const ac = new AbortController();
+    b!.listeners.push((e) => { if (e.type === 'progress') ac.abort(); });
+    const r = await sendTo(a!.id, b!.target(), [{ kind: 'file', srcPath: file }], { outbox, signal: ac.signal });
+    expect(r.status).toBe('cancelled');
+    expect(b!.events.some((e) => e.type === 'cancelled')).toBe(false);
+    expect(existsSync(join(a!.outboxDir, `${r.sessionId}.json`))).toBe(true);
+
+    const t = new Date(Date.now() + 5000);
+    utimesSync(file, t, t);
+    const res = await new Outbox(a!.outboxDir).resumeAll(a!.id, () => b!.target());
+    expect(res).toEqual([{ deviceId: b!.id.deviceId, status: 'failed', sessionId: r.sessionId, error: 'source-changed' }]);
+    expect(existsSync(join(a!.outboxDir, `${r.sessionId}.json`))).toBe(true);
+
+    // a fresh sendTo of the same (changed) items supersedes the stale entry with a new session
+    const r2 = await sendTo(a!.id, b!.target(), [{ kind: 'file', srcPath: file }], { outbox });
+    expect(r2.status).toBe('done');
+    expect(r2.sessionId).not.toBe(r.sessionId);
+    expect(readdirSync(a!.outboxDir).filter((n) => n.endsWith('.json'))).toEqual([]);
+  });
+
+  it('resumeAll: unresolvable targets are reported failed target-unresolved and kept', async () => {
+    const [a, b] = await makeEngines(2);
+    const file = join(tmpDir(), 'f.bin');
+    writeFileSync(file, randomBytes(CHUNK_SIZE + 5));
+    const outbox = new Outbox(a!.outboxDir);
+    const ac = new AbortController();
+    ac.abort();
+    const r = await sendTo(a!.id, b!.target(), [{ kind: 'file', srcPath: file }], { outbox, signal: ac.signal });
+    expect(r.status).toBe('cancelled');
+    const res = await outbox.resumeAll(a!.id, async () => undefined);
+    expect(res).toEqual([{ deviceId: b!.id.deviceId, status: 'failed', sessionId: r.sessionId, error: 'target-unresolved' }]);
+    expect(existsSync(join(a!.outboxDir, `${r.sessionId}.json`))).toBe(true);
+  });
+
+  it('a re-offer of an already finished session (lost finish reply) is done without re-delivery', async () => {
+    const [a, b] = await makeEngines(2);
+    const file = join(tmpDir(), 'f.bin');
+    writeFileSync(file, randomBytes(100));
+    const outbox = new Outbox(a!.outboxDir);
+    let saved: { name: string; body: Buffer } | undefined;
+    b!.listeners.push((e) => {
+      if (e.type !== 'received') return;
+      const name = `${e.sessionId}.json`;
+      saved = { name, body: readFileSync(join(a!.outboxDir, name)) };
+    });
+    const r = await sendTo(a!.id, b!.target(), [{ kind: 'file', srcPath: file }], { outbox });
+    expect(r.status).toBe('done');
+    writeFileSync(join(a!.outboxDir, saved!.name), saved!.body, { mode: 0o600 });
+    const res = await new Outbox(a!.outboxDir).resumeAll(a!.id, () => b!.target());
+    expect(res).toEqual([{ deviceId: b!.id.deviceId, status: 'done', sessionId: r.sessionId }]);
+    expect(b!.events.filter((e) => e.type === 'received')).toHaveLength(1);
+    expect(existsSync(join(a!.outboxDir, saved!.name))).toBe(false);
+  });
+});
