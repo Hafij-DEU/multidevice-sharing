@@ -202,7 +202,8 @@ export interface PreparedItems {
  * per CHUNK_SIZE chunk (kept by the sender only, to prove on resume that a chunk's plaintext is
  * unchanged before it is sealed again). Fails if the file changes while being read.
  */
-async function hashFile(path: string, followSymlink: boolean): Promise<{ sha256: string; chunks: string[]; stat: SourceStat }> {
+async function hashFile(path: string, followSymlink: boolean, signal?: AbortSignal): Promise<{ sha256: string; chunks: string[]; stat: SourceStat }> {
+  if (signal?.aborted) throw abortError();
   const flags = constants.O_RDONLY | (followSymlink ? 0 : (constants.O_NOFOLLOW ?? 0));
   const h = await fsp.open(path, flags);
   try {
@@ -215,6 +216,7 @@ async function hashFile(path: string, followSymlink: boolean): Promise<{ sha256:
     let pos = 0;
     while (pos < st.size) {
       // never let one read straddle a chunk boundary, so chunk hashes stay aligned
+      if (signal?.aborted) throw abortError();
       const want = Math.min(buf.length, st.size - pos, CHUNK_SIZE - (pos % CHUNK_SIZE));
       const { bytesRead } = await h.read(buf, 0, want, pos);
       if (bytesRead === 0) throw new SourceChangedError(path);
@@ -243,9 +245,10 @@ async function hashFile(path: string, followSymlink: boolean): Promise<{ sha256:
  *   so a link cannot pull files from outside the chosen folder. A directory that ends up with no
  *   entries is listed in `dirs` (only leaf dirs; the receiver creates parents).
  * - `text`: at most one per send.
+ * Aborting `signal` stops the walk/hashing promptly (rejects with an AbortError).
  * @internal
  */
-export async function prepareItems(items: SendItem[]): Promise<PreparedItems> {
+export async function prepareItems(items: SendItem[], signal?: AbortSignal): Promise<PreparedItems> {
   if (!Array.isArray(items) || items.length === 0) throw new Error('nothing to send');
   const files: FileEntry[] = [];
   const dirs: DirEntry[] = [];
@@ -255,7 +258,7 @@ export async function prepareItems(items: SendItem[]): Promise<PreparedItems> {
   let text: string | undefined;
 
   const addFile = async (abs: string, rel: string, follow: boolean) => {
-    const { sha256, chunks, stat } = await hashFile(abs, follow);
+    const { sha256, chunks, stat } = await hashFile(abs, follow, signal);
     const fileId = files.length;
     files.push({ fileId, path: rel, size: stat.size, mime: mimeOf(rel), sha256 });
     sources.set(fileId, abs);
@@ -263,6 +266,7 @@ export async function prepareItems(items: SendItem[]): Promise<PreparedItems> {
     chunkHashes.set(fileId, chunks);
   };
   const walk = async (abs: string, rel: string): Promise<void> => {
+    if (signal?.aborted) throw abortError();
     const ents = await fsp.readdir(abs, { withFileTypes: true });
     ents.sort((x, y) => (x.name < y.name ? -1 : x.name > y.name ? 1 : 0));
     let emitted = 0;
@@ -282,6 +286,7 @@ export async function prepareItems(items: SendItem[]): Promise<PreparedItems> {
   };
 
   for (const it of items) {
+    if (signal?.aborted) throw abortError();
     if (it?.kind === 'text') {
       if (typeof it.text !== 'string') throw new Error('text item without text');
       if (text !== undefined) throw new Error('only one text item per send');
@@ -572,8 +577,9 @@ export async function sendPrepared(id: Identity, t: Target, p: PreparedItems, op
 export async function sendTo(id: Identity, t: Target, items: SendItem[], opts: SendOptions = {}): Promise<SendResult> {
   let p: PreparedItems;
   try {
-    p = await prepareItems(items);
+    p = await prepareItems(items, opts.signal);
   } catch (e) {
+    if (opts.signal?.aborted) return { deviceId: t.deviceId, status: 'cancelled', sessionId: '' };
     return { deviceId: t.deviceId, status: 'failed', sessionId: '', error: errorString(e) };
   }
   return sendPrepared(id, t, p, opts);

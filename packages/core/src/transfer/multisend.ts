@@ -24,8 +24,9 @@ export interface MultiSendOptions extends Omit<SendOptions, 'onProgress'> {
 export async function multiSend(id: Identity, targets: Target[], items: SendItem[], opts: MultiSendOptions = {}): Promise<SendResult[]> {
   let prepared: PreparedItems;
   try {
-    prepared = await prepareItems(items);
+    prepared = await prepareItems(items, opts.signal);
   } catch (e) {
+    if (opts.signal?.aborted) return targets.map((t) => ({ deviceId: t.deviceId, status: 'cancelled', sessionId: '' }));
     const error = errorString(e);
     return targets.map((t) => ({ deviceId: t.deviceId, status: 'failed', sessionId: '', error }));
   }

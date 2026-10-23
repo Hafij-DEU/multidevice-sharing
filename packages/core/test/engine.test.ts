@@ -2,7 +2,7 @@
 // discovery disabled (pairing via manual probe only), plus a smoke test of the CLI.
 import { execFile, spawn } from 'node:child_process';
 import { createHash, generateKeyPairSync, randomBytes } from 'node:crypto';
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
+import { closeSync, existsSync, ftruncateSync, mkdtempSync, openSync, readFileSync, readdirSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -309,6 +309,39 @@ describe('CLI', () => {
     expect(out).not.toMatch(RAW_UNSAFE);
   });
 
+
+  it('send: Ctrl-C while the files are still being hashed stops promptly (cancelled, exit 1)', async () => {
+    const b = await mk();
+    const home = tmp('md-cli-');
+    expect((await runCli(['pair', `127.0.0.1:${b.e.port}`, 'bee', '--home', home])).code).toBe(0);
+    const huge = join(tmp(), 'huge.bin');
+    const fd = openSync(huge, 'w');
+    ftruncateSync(fd, 64 * 1024 * 1024 * 1024); // sparse: hashing it would take minutes
+    closeSync(fd);
+    const child = spawn(process.execPath, [CLI, 'send', b.e.identity.deviceId.slice(0, 8), huge, '--home', home], {
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let buf = '';
+    child.stdout.setEncoding('utf8').on('data', (d: string) => (buf += d));
+    child.stderr.setEncoding('utf8').on('data', (d: string) => (buf += d));
+    const exited = new Promise<number | null>((r) => child.on('exit', (code) => r(code)));
+    const killer = setTimeout(() => child.kill('SIGKILL'), 15_000);
+    try {
+      for (let i = 0; i < 200 && !buf.includes('preparing'); i++) await new Promise((r) => setTimeout(r, 25));
+      expect(buf).toContain('preparing');
+      await new Promise((r) => setTimeout(r, 200)); // well into hashing
+      const t0 = Date.now();
+      child.kill('SIGINT');
+      const code = await exited;
+      expect(Date.now() - t0).toBeLessThan(5000);
+      expect(code).toBe(1);
+      expect(buf).toMatch(/cancelled/);
+      expect(b.events.filter((ev) => ev.source === 'receiver')).toEqual([]);
+    } finally {
+      clearTimeout(killer);
+      child.kill('SIGKILL');
+    }
+  }, 20_000);
 
   it('id prints the device id of --home (and MESHDROP_HOME is overridden by --home)', async () => {
     const home = tmp('md-cli-');

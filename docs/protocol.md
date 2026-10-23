@@ -256,6 +256,9 @@ other engines behave the same.
   their recorded manual addresses.
 - **Trust changes across processes.** A running engine re-reads `trust.json` when the file changes on disk, so a
   device paired by a separate `meshdrop pair` process is accepted by a running `meshdrop listen` at once.
+- **Ctrl-C.** The first SIGINT/SIGTERM stops the engine gracefully: hashing of the items is abandoned and
+  in-flight sends end `cancelled` (resumable, no `cancel` posted). A second signal exits at once (130 for
+  SIGINT, 143 for SIGTERM).
 - **Defaults.** Port 53318, inbox `~/Downloads/MeshDrop`, alias = host name (at most 64 characters),
   device type `desktop`.
 

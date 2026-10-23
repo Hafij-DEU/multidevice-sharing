@@ -10,6 +10,7 @@ import { parseArgs } from 'node:util';
 import { Engine, UnknownDeviceError, type EngineEvent, type EngineOptions, type SendItem, type SendResult } from './engine.ts';
 import { DEFAULT_MESH_PORT, type DeviceType } from './discovery.ts';
 import { configDir } from './paths.ts';
+import { installStopSignals } from './signals.ts';
 
 const USAGE = `usage: meshdrop <command> [options]
 
@@ -156,23 +157,19 @@ async function cmdId(base: EngineOptions, args: string[]): Promise<number> {
   return 0;
 }
 
-/** Stops the engine on the first SIGINT/SIGTERM; resolves with the signal name. */
+/**
+ * Stops the engine on the first SIGINT/SIGTERM (in-flight sends end 'cancelled' and stay resumable,
+ * hashing is abandoned); resolves with the signal name. A second signal exits at once (130 / 143).
+ */
 function onSignal(engine: Engine): { promise: Promise<string>; dispose: () => void } {
   let resolveFn!: (s: string) => void;
   const promise = new Promise<string>((r) => (resolveFn = r));
-  const handler = (sig: NodeJS.Signals) => {
+  const dispose = installStopSignals((sig) => {
+    err('stopping... (press Ctrl-C again to quit immediately)');
     void engine.stop();
     resolveFn(sig);
-  };
-  process.on('SIGINT', handler);
-  process.on('SIGTERM', handler);
-  return {
-    promise,
-    dispose: () => {
-      process.removeListener('SIGINT', handler);
-      process.removeListener('SIGTERM', handler);
-    },
-  };
+  });
+  return { promise, dispose };
 }
 
 async function cmdListen(base: EngineOptions, args: string[]): Promise<number> {
@@ -343,6 +340,7 @@ async function cmdSend(base: EngineOptions, args: string[], text: string | undef
     const ids = target === 'all' ? 'all' : target.split(',').map((q) => e.resolveDeviceId(q));
     const started = Date.now();
     const stats = trackSends(e, started);
+    out(`preparing ${items.length} item(s)...`);
     const results = await e.send(ids, items);
     if (results.length === 0) {
       err('meshdrop: no trusted device is present (pair one with `meshdrop pair`, or check that it is running)');

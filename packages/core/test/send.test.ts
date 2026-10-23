@@ -1,5 +1,5 @@
 import { createHash, randomBytes } from 'node:crypto';
-import { closeSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, statSync, symlinkSync, utimesSync, writeFileSync, writeSync } from 'node:fs';
+import { closeSync, existsSync, ftruncateSync, mkdirSync, openSync, readFileSync, readdirSync, statSync, symlinkSync, utimesSync, writeFileSync, writeSync } from 'node:fs';
 import * as fsp from 'node:fs/promises';
 import { createServer } from 'node:https';
 import { join } from 'node:path';
@@ -7,7 +7,8 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { CHUNK_SIZE, chunkCount } from '../src/chunk.ts';
 import { loadOrCreateIdentity } from '../src/identity.ts';
 import { serverTlsOptions } from '../src/tls.ts';
-import { DEFAULT_RETRY_DELAYS_MS, Outbox, buildManifest, sendTo } from '../src/transfer/send.ts';
+import { multiSend } from '../src/transfer/multisend.ts';
+import { DEFAULT_RETRY_DELAYS_MS, Outbox, buildManifest, prepareItems, sendTo } from '../src/transfer/send.ts';
 import { cleanupEngines, makeEngines, progressOf, tmpDir, writesOf } from './engines.ts';
 
 const sha = (b: Buffer) => createHash('sha256').update(b).digest('hex');
@@ -60,6 +61,43 @@ describe('buildManifest', () => {
     const { manifest } = await buildManifest([{ kind: 'dir', srcPath: d }], 'a'.repeat(64), 'b'.repeat(64));
     expect(manifest.files).toEqual([]);
     expect(manifest.dirs).toEqual([{ path: 'nothing' }]);
+  });
+});
+
+describe('aborting while the items are hashed', () => {
+  /** A sparse file big enough that hashing it takes far longer than the test waits. */
+  function hugeSparse(): string {
+    const f = join(tmpDir(), 'huge.bin');
+    const fd = openSync(f, 'w');
+    ftruncateSync(fd, 16 * 1024 * 1024 * 1024);
+    closeSync(fd);
+    return f;
+  }
+
+  it('prepareItems stops at once when the signal aborts mid-hash', async () => {
+    const f = hugeSparse();
+    const ac = new AbortController();
+    const t0 = Date.now();
+    setTimeout(() => ac.abort(), 50);
+    await expect(prepareItems([{ kind: 'file', srcPath: f }], ac.signal)).rejects.toMatchObject({ name: 'AbortError' });
+    expect(Date.now() - t0).toBeLessThan(2000);
+  });
+
+  it('sendTo and multiSend report cancelled (nothing posted, no outbox entry) when aborted while hashing', async () => {
+    const [a, b, c] = await makeEngines(3);
+    const f = hugeSparse();
+    const outbox = new Outbox(a!.outboxDir);
+    const ac = new AbortController();
+    setTimeout(() => ac.abort(), 50);
+    const r = await sendTo(a!.id, b!.target(), [{ kind: 'file', srcPath: f }], { outbox, signal: ac.signal });
+    expect(r).toEqual({ deviceId: b!.id.deviceId, status: 'cancelled', sessionId: '' });
+    const ac2 = new AbortController();
+    setTimeout(() => ac2.abort(), 50);
+    const rs = await multiSend(a!.id, [b!.target(), c!.target()], [{ kind: 'file', srcPath: f }], { outbox, signal: ac2.signal });
+    expect(rs.map((x) => x.status)).toEqual(['cancelled', 'cancelled']);
+    expect(b!.events).toEqual([]);
+    expect(c!.events).toEqual([]);
+    expect(existsSync(a!.outboxDir) ? readdirSync(a!.outboxDir) : []).toEqual([]);
   });
 });
 
@@ -324,7 +362,7 @@ describe('sendTo', () => {
     writeFileSync(file, randomBytes(CHUNK_SIZE + 5));
     const outbox = new Outbox(a!.outboxDir);
     const ac = new AbortController();
-    ac.abort();
+    b!.listeners.push((e) => { if (e.type === 'offer') ac.abort(); }); // pause right after the offer
     const r = await sendTo(a!.id, b!.target(), [{ kind: 'file', srcPath: file }], { outbox, signal: ac.signal });
     expect(r.status).toBe('cancelled');
     const res = await outbox.resumeAll(a!.id, async () => undefined);
