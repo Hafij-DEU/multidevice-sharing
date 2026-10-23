@@ -9,7 +9,7 @@
 //   hub    → {t:'welcome', sig, membership?, directory}
 //            sig = signDomain('meshdrop-hub-auth-v1', 'hub\0' + deviceId + '\0' + deviceNonce, hubDeviceKey)
 // Close codes: 4401 authentication failed, 4403 revoked or not a member, 4409 replaced by a newer link.
-import { X509Certificate, randomBytes, type KeyObject } from 'node:crypto';
+import { X509Certificate, createPublicKey, randomBytes, type KeyObject } from 'node:crypto';
 import { EventEmitter } from 'node:events';
 import { createServer as createHttpServer, type IncomingMessage, type Server as HttpServer } from 'node:http';
 import type { Server as HttpsServer } from 'node:https';
@@ -19,6 +19,7 @@ import { WebSocketServer, type RawData, type WebSocket } from 'ws';
 import { MAX_OFFER_BODY } from '../api/handler.ts';
 import { deviceIdOf, type Identity } from '../identity.ts';
 import { signDomain, verifyDomain } from '../mesh/canonical.ts';
+import { decodeFrame, encodeFrame, openEnvelope, sealEnvelope, type Envelope } from '../mesh/envelope.ts';
 import type { MembershipStore } from '../mesh/members.ts';
 import { signList, type Member, type MembershipList, type SignedMembership } from '../mesh/membership.ts';
 import { peerDeviceId } from '../tls.ts';
@@ -50,8 +51,16 @@ export interface HubServerOptions {
   authTimeoutMs?: number;
   /** The hub's own LAN addresses, shown in the directory. */
   hubLan?: () => LanAddr[];
+  /** A relayed request the target does not answer within this is failed with 504 (default 600 000 ms). */
+  relayTimeoutMs?: number;
+  /** Observes every frame the hub forwards (tests, diagnostics). */
+  onRelay?: (frame: Buffer) => void;
   now?: () => number;
 }
+
+export const DEFAULT_RELAY_TIMEOUT_MS = 600_000;
+
+interface Relay { from: string; to: string; timer: NodeJS.Timeout }
 
 interface Conn {
   ws: WebSocket;
@@ -86,6 +95,9 @@ export class HubServer extends EventEmitter {
   /** Last known state per device (survives disconnects). */
   readonly #seen = new Map<string, { lastSeen: number; lanAddrs: LanAddr[] }>();
   readonly #all = new Set<Conn>();
+  /** Relayed requests awaiting the target's res, by `${from}:${id}`. */
+  readonly #relays = new Map<string, Relay>();
+  readonly #keys = new Map<string, KeyObject>();
   #sweep: NodeJS.Timeout;
   #ingress: HttpServer | null = null;
   #closed = false;
@@ -126,6 +138,8 @@ export class HubServer extends EventEmitter {
     if (this.#closed) return;
     this.#closed = true;
     clearInterval(this.#sweep);
+    for (const r of this.#relays.values()) clearTimeout(r.timer);
+    this.#relays.clear();
     for (const c of this.#all) c.ws.terminate();
     this.#all.clear();
     this.#online.clear();
@@ -158,6 +172,81 @@ export class HubServer extends EventEmitter {
     if (!c) return false;
     c.ws.send(data);
     return true;
+  }
+
+  // ---- relay --------------------------------------------------------------------------------
+
+  #pubOf(deviceId: string): KeyObject | undefined {
+    const cached = this.#keys.get(deviceId);
+    if (cached) return cached;
+    const d = this.#opts.members.get(deviceId);
+    if (!d) return undefined;
+    const k = createPublicKey(d.publicKeyPem);
+    this.#keys.set(deviceId, k);
+    return k;
+  }
+
+  /** A res signed by the hub itself, for failures the target never saw. */
+  #hubReply(to: string, id: string, status: number, error: string): void {
+    const e = sealEnvelope(
+      { v: 1, kind: 'res', id, from: this.#opts.id.deviceId, to, status, contentType: 'application/json' },
+      Buffer.from(JSON.stringify({ error })),
+      this.#opts.id.privateKey,
+    );
+    this.sendTo(to, encodeFrame(e));
+  }
+
+  #route(sender: string, buf: Buffer): void {
+    let e: Envelope;
+    try {
+      e = decodeFrame(buf);
+    } catch {
+      return; // not even a frame: no id to answer to
+    }
+    const h = e.header;
+    if (h.kind === 'res') return this.#routeRes(sender, e, buf);
+    try {
+      openEnvelope(e, (id) => this.#pubOf(id));
+    } catch {
+      return this.#hubReply(sender, h.id, 400, 'bad-envelope');
+    }
+    if (h.from !== sender || h.to === sender || !this.#opts.members.isTrusted(h.to)) {
+      return this.#hubReply(sender, h.id, 400, 'bad-envelope');
+    }
+    if (!this.#online.has(h.to)) return this.#offlineTarget(e);
+    const key = `${sender}:${h.id}`;
+    if (this.#relays.has(key)) return; // duplicate in flight: the first answer serves it
+    const timer = setTimeout(() => {
+      if (this.#relays.get(key)?.timer !== timer) return;
+      this.#relays.delete(key);
+      this.#hubReply(sender, h.id, 504, 'relay-timeout');
+    }, this.#opts.relayTimeoutMs ?? DEFAULT_RELAY_TIMEOUT_MS);
+    timer.unref();
+    this.#relays.set(key, { from: sender, to: h.to, timer });
+    this.#opts.onRelay?.(buf);
+    this.sendTo(h.to, buf);
+  }
+
+  #routeRes(sender: string, e: Envelope, buf: Buffer): void {
+    const h = e.header;
+    const key = `${h.to}:${h.id}`;
+    const r = this.#relays.get(key);
+    // Only the device the request went to may answer it, and only with a res it signed itself.
+    if (!r || r.to !== sender || h.from !== sender) return;
+    try {
+      openEnvelope(e, (id) => this.#pubOf(id));
+    } catch {
+      return;
+    }
+    clearTimeout(r.timer);
+    this.#relays.delete(key);
+    this.#opts.onRelay?.(buf);
+    this.sendTo(r.from, buf);
+  }
+
+  /** The target is not connected (held delivery hooks in here). */
+  #offlineTarget(e: Envelope): void {
+    this.#hubReply(e.header.from, e.header.id, 503, 'offline');
   }
 
   // ---- membership authority ----------------------------------------------------------------
@@ -311,7 +400,7 @@ export class HubServer extends EventEmitter {
   #onAuthed(c: Conn, data: RawData, isBinary: boolean): void {
     const deviceId = c.deviceId!;
     if (isBinary) {
-      this.emit('frame', deviceId, Buffer.isBuffer(data) ? data : Buffer.from(data as ArrayBuffer));
+      this.#route(deviceId, Buffer.isBuffer(data) ? data : Buffer.from(data as ArrayBuffer));
       return;
     }
     let m: Record<string, unknown>;
