@@ -252,6 +252,25 @@ describe('Discovery (multicast)', () => {
     expect(d.peers().find((p) => p.deviceId === first[0]!.deviceId)!.alias).toBe('renamed');
   });
 
+  mcast('an announce for a manually probed peer refreshes it but keeps it manual', async () => {
+    const [eng] = await makeEngines(1);
+    const port = freshPort();
+    const d = mk(announce('me'), port, { ttlMs: 100 });
+    d.on('error', () => {});
+    d.start();
+    await sleep(100);
+    await d.probe(LO, eng!.port);
+    const before = d.peers()[0]!.lastSeen;
+    const send = await rawSender(port);
+    await sleep(20);
+    await send(JSON.stringify({ v: 1, deviceId: eng!.id.deviceId, alias: 'renamed', deviceType: 'desktop', port: eng!.port }));
+    await sleep(300);
+    const p = d.peers()[0]!;
+    expect(p.alias).toBe('renamed');
+    expect(p.manual).toBe(true);
+    expect(p.lastSeen).toBeGreaterThan(before);
+  });
+
   mcast('stop() is idempotent and start() after stop() works', async () => {
     const port = freshPort();
     const a = announce('alice');
@@ -407,6 +426,51 @@ describe('Discovery.probe', () => {
     const t0 = Date.now();
     await expect(d.probe(LO, port, { timeoutMs: 200 })).rejects.toThrow(/timed out/);
     expect(Date.now() - t0).toBeLessThan(2000);
+  });
+
+  it('rejects an invalid port up front and leaves no timer that can crash the process later', async () => {
+    const d = new Discovery({ self: self() });
+    for (const port of [70000, 0, -1, 1.5, Number.NaN]) {
+      await expect(d.probe(LO, port, { timeoutMs: 50 })).rejects.toThrow(/invalid port/);
+    }
+    await sleep(300); // well past every timeoutMs: a stray timer would throw an uncaught error here
+    expect(d.peers()).toEqual([]);
+  });
+
+  it('keeps probed peers past ttlMs (even never started); forget() removes them with a single lost', async () => {
+    const [eng] = await makeEngines(1);
+    const d = new Discovery({ self: self(), ttlMs: 100 }); // never started
+    cleanups.push(() => d.stop());
+    const lost: PeerInfo[] = [];
+    d.on('lost', (p: PeerInfo) => lost.push(p));
+    await d.probe(LO, eng!.port);
+    await sleep(400); // 4x ttl
+    expect(lost).toEqual([]);
+    expect(d.peers()).toHaveLength(1);
+    expect(d.peers()[0]!.manual).toBe(true);
+    d.forget('0'.repeat(64)); // unknown id: ignored
+    expect(lost).toEqual([]);
+    d.forget(eng!.id.deviceId);
+    expect(d.peers()).toEqual([]);
+    expect(lost.map((p) => p.deviceId)).toEqual([eng!.id.deviceId]);
+    d.forget(eng!.id.deviceId); // second forget: nothing more
+    expect(lost).toHaveLength(1);
+  });
+
+  it('a started Discovery does not sweep manual peers, and stop() still clears them', async () => {
+    const [eng] = await makeEngines(1);
+    const d = new Discovery({ self: self(), port: freshPort(), iface: LO, intervalMs: 50, ttlMs: 100 });
+    cleanups.push(() => d.stop());
+    const lost: PeerInfo[] = [];
+    d.on('lost', (p: PeerInfo) => lost.push(p));
+    d.on('error', () => {});
+    d.start();
+    await d.probe(LO, eng!.port);
+    await sleep(400);
+    expect(lost).toEqual([]);
+    expect(d.peers()).toHaveLength(1);
+    d.stop();
+    expect(d.peers()).toEqual([]);
   });
 
   it('rejects when nothing is listening', async () => {

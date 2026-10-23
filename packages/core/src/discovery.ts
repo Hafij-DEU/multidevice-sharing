@@ -8,6 +8,7 @@
 // inside it. `probe` is the one place a deviceId comes from evidence: the certificate itself.
 import { createSocket, type Socket } from 'node:dgram';
 import { EventEmitter } from 'node:events';
+import type { ClientRequest } from 'node:http';
 import { request as httpsRequest } from 'node:https';
 import { networkInterfaces } from 'node:os';
 import type { TLSSocket } from 'node:tls';
@@ -23,7 +24,12 @@ export interface Announce {
   port: number;
 }
 
-export type PeerInfo = Announce & { host: string; lastSeen: number };
+export type PeerInfo = Announce & {
+  host: string;
+  lastSeen: number;
+  /** Added via probe(): exempt from TTL expiry; removed only by forget() or stop(). */
+  manual?: boolean;
+};
 
 export interface DiscoveryOptions {
   self: Announce;
@@ -185,7 +191,9 @@ export class Discovery extends EventEmitter {
     const announceTimer = setInterval(() => {
       for (const s of senders) this.sendOne(s);
     }, this.intervalMs);
+    announceTimer.unref(); // a forgotten stop() must not hold the process open
     const sweepTimer = setInterval(() => this.sweep(), Math.min(1000, Math.max(25, Math.floor(this.ttlMs / 4))));
+    sweepTimer.unref();
     this.running = { recv, senders, announceTimer, sweepTimer };
   }
 
@@ -233,7 +241,7 @@ export class Discovery extends EventEmitter {
    * Records a sighting. Returns false only when the peer was dropped because the table is full.
    * Emits 'peer' for a new peer or when host/port/alias/deviceType changed, not on plain refreshes.
    */
-  private observe(a: Announce, host: string): boolean {
+  private observe(a: Announce, host: string, manual = false): boolean {
     if (a.deviceId === this.self.deviceId) return true;
     const now = Date.now();
     const cur = this.table.get(a.deviceId);
@@ -247,11 +255,21 @@ export class Discovery extends EventEmitter {
       host,
       lastSeen: now,
     };
+    // An announce for a manually added peer refreshes it but never demotes it back to expiring.
+    if (manual || cur?.manual) next.manual = true;
     this.table.set(a.deviceId, next);
     const changed =
       !cur || cur.host !== host || cur.port !== a.port || cur.alias !== a.alias || cur.deviceType !== a.deviceType;
     if (changed) this.emitSafe('peer', { ...next });
     return true;
+  }
+
+  /** Removes a peer (announced or manual) and emits 'lost' for it. Unknown ids are ignored. */
+  forget(deviceId: string): void {
+    const p = this.table.get(deviceId);
+    if (!p) return;
+    this.table.delete(deviceId);
+    this.emitSafe('lost', { ...p });
   }
 
   private emitSafe(event: 'peer' | 'lost', p: PeerInfo): void {
@@ -265,7 +283,7 @@ export class Discovery extends EventEmitter {
   private sweep(): void {
     const cutoff = Date.now() - this.ttlMs;
     for (const [id, p] of this.table) {
-      if (p.lastSeen < cutoff) {
+      if (!p.manual && p.lastSeen < cutoff) {
         this.table.delete(id);
         this.emitSafe('lost', { ...p });
       }
@@ -279,36 +297,44 @@ export class Discovery extends EventEmitter {
    * presented, never what the JSON says; if the JSON disagrees, or anything is malformed, this
    * rejects and nothing is emitted. On success the peer is entered in the table (so a re-probe
    * of an unchanged peer only refreshes it) and 'peer' is emitted if it is new or changed.
-   * Probed peers expire like announced ones, so callers that keep a manual peer re-probe it.
+   * Probed peers are `manual`: exempt from TTL expiry (nothing would refresh them) until `forget()`
+   * or `stop()`; this works on a Discovery that was never started.
    * A probe that lands on our own device resolves without emitting anything.
    */
   probe(host: string, port: number = DEFAULT_MESH_PORT, opts: ProbeOptions = {}): Promise<void> {
     const timeoutMs = opts.timeoutMs ?? 5000;
+    if (!isPort(port)) return Promise.reject(new Error(`probe: invalid port ${String(port)}`));
     return new Promise<void>((resolve, reject) => {
       let settled = false;
-      const timer = setTimeout(() => finish(new Error(`probe of ${host}:${port} timed out after ${timeoutMs} ms`)), timeoutMs);
+      let timer: NodeJS.Timeout | undefined;
+      let req: ClientRequest | undefined;
       const finish = (err: Error | null): void => {
         if (settled) return;
         settled = true;
-        clearTimeout(timer);
-        req.destroy();
+        if (timer) clearTimeout(timer);
+        req?.destroy();
         if (err) reject(err);
         else resolve();
       };
 
-      const req = httpsRequest({
-        host,
-        port,
-        method: 'GET',
-        path: '/mesh/v1/info',
-        agent: false, // fresh connection, Connection: close
-        minVersion: 'TLSv1.3',
-        // Self-signed peers: CA/hostname validation cannot succeed. We take the certificate as the
-        // evidence of identity instead (deviceIdOf below) and pin it at real connect time.
-        rejectUnauthorized: false,
-        checkServerIdentity: () => undefined,
-        headers: { accept: 'application/json' },
-      });
+      try {
+        req = httpsRequest({
+          host,
+          port,
+          method: 'GET',
+          path: '/mesh/v1/info',
+          agent: false, // fresh connection, Connection: close
+          minVersion: 'TLSv1.3',
+          // Self-signed peers: CA/hostname validation cannot succeed. We take the certificate as the
+          // evidence of identity instead (deviceIdOf below) and pin it at real connect time.
+          rejectUnauthorized: false,
+          checkServerIdentity: () => undefined,
+          headers: { accept: 'application/json' },
+        });
+      } catch (e) {
+        return finish(e as Error); // e.g. a bad host string: nothing was created, no timer armed
+      }
+      timer = setTimeout(() => finish(new Error(`probe of ${host}:${port} timed out after ${timeoutMs} ms`)), timeoutMs);
       req.on('error', (e) => finish(e));
       req.on('response', (res) => {
         res.on('error', (e) => finish(e));
@@ -351,7 +377,7 @@ export class Discovery extends EventEmitter {
     if (!isAlias(o['alias'])) throw new Error('probe: invalid alias');
     if (!isDeviceType(o['deviceType'])) throw new Error('probe: invalid deviceType');
 
-    const ok = this.observe({ v: 1, deviceId, alias: o['alias'], deviceType: o['deviceType'], port }, host);
+    const ok = this.observe({ v: 1, deviceId, alias: o['alias'], deviceType: o['deviceType'], port }, host, true);
     if (!ok) throw new Error('probe: peer table is full');
   }
 }

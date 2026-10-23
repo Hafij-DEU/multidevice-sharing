@@ -100,7 +100,9 @@ oversized). Unknown extra fields are ignored. Packets carrying the receiver's ow
 - **Host.** A peer's address is the UDP source address of the packet, never a field of the payload.
 - **Peer table.** Keyed by `deviceId`, at most 256 entries; when full, announces from unknown device ids are
   ignored (live peers are never evicted). `peer` is emitted for a new peer or when host/port/alias/deviceType
-  changes, not on a plain refresh. A peer not heard from for `ttlMs` (15 s) is dropped with `lost`.
+  changes, not on a plain refresh. An announced peer not heard from for `ttlMs` (15 s) is dropped with `lost`. Peers added by `probe` are
+  `manual`: exempt from expiry (an announce for the same id refreshes them but keeps them manual) until
+  `forget(deviceId)` (emits `lost`) or `stop()`.
 - **Probe** (manual add, later subnet scan): `GET /mesh/v1/info` over TLS 1.3 without pinning and without a
   client certificate. The peer's device id is the hash of the certificate it presented; if `info.deviceId`
   differs, or `v`/`alias`/`deviceType` are invalid, the probe fails and nothing is emitted. Default timeout 5 s,
