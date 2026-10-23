@@ -3,7 +3,7 @@
 import { app, BrowserWindow, clipboard, dialog, ipcMain, Notification, shell, type IpcMainInvokeEvent } from 'electron';
 import { join } from 'node:path';
 import { configDir } from '@meshdrop/core/src/paths.ts';
-import type { AppState, SendItemInput, Settings } from '../shared/api.ts';
+import type { AppState, ReceivedRecord, SendItemInput, Settings } from '../shared/api.ts';
 import { AppController, type Platform } from './controller.ts';
 import { HistoryStore } from './history.ts';
 import { SettingsStore, defaultSettings } from './settings.ts';
@@ -11,6 +11,8 @@ import { SettingsStore, defaultSettings } from './settings.ts';
 const TEST = process.env.MESHDROP_TEST === '1';
 let win: BrowserWindow | null = null;
 let controller: AppController | null = null;
+/** MESHDROP_TEST only: what the next file picker returns (set by e2e through app.evaluate). */
+let picked: string[] | null = null;
 
 function createWindow(): BrowserWindow {
   const w = new BrowserWindow({
@@ -108,6 +110,11 @@ function wireIpc(): void {
   };
   handle('getState', () => ctl().state());
   handle('pickFiles', async () => {
+    if (TEST && picked) {
+      const p = picked;
+      picked = null;
+      return p;
+    }
     const r = await dialog.showOpenDialog(win!, { properties: ['openFile', 'multiSelections'] });
     return r.canceled ? [] : r.filePaths;
   });
@@ -151,7 +158,20 @@ async function startController(): Promise<void> {
   if (process.env.MESHDROP_INBOX) over.inbox = process.env.MESHDROP_INBOX;
   const settings = new SettingsStore(join(home, 'desktop-settings.json'), defaultSettings(over));
   if (process.env.MESHDROP_PORT !== undefined) settings.set({ port: Number(process.env.MESHDROP_PORT) });
-  controller = new AppController({ home, settings, history: new HistoryStore(join(home, 'desktop-history.json')), platform });
+  const history = new HistoryStore(join(home, 'desktop-history.json'));
+  controller = new AppController({ home, settings, history, platform });
+  if (TEST) {
+    // Test-only hooks, reachable from Playwright's app.evaluate (main process), never from the page.
+    (globalThis as { __meshdropTest?: unknown }).__meshdropTest = {
+      setPicked: (p: string[]) => {
+        picked = p;
+      },
+      seedHistory: (r: ReceivedRecord) => {
+        history.addReceived(r);
+        controller?.refresh();
+      },
+    };
+  }
   controller.on('state', (s: AppState) => win?.webContents.send('meshdrop:state', s));
   await controller.start();
 }

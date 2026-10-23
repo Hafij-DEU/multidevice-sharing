@@ -1,10 +1,54 @@
-import { useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import type { AppState } from '../shared/api.ts';
+import { Toasts, type ToastItem } from './components/Toast.tsx';
+import { errorText } from './format.ts';
+import { Devices } from './pages/Devices.tsx';
+import { Inbox } from './pages/Inbox.tsx';
+import { Transfers } from './pages/Transfers.tsx';
 
 const PAGES = ['Devices', 'Transfers', 'Inbox', 'Mesh', 'Settings'] as const;
 type Page = (typeof PAGES)[number];
 
+/** Runs an action; shows its error (or `ok`, or a string it returns) as a toast. Resolves undefined on error. */
+export type Run = <T>(fn: () => Promise<T>, ok?: string) => Promise<T | undefined>;
+
 export function App() {
   const [page, setPage] = useState<Page>('Devices');
+  const [state, setState] = useState<AppState | null>(null);
+  const [toasts, setToasts] = useState<ToastItem[]>([]);
+  const nextId = useRef(1);
+
+  const toast = useCallback((text: string, kind: ToastItem['kind']) => {
+    const id = nextId.current++;
+    setToasts((t) => [...t.slice(-3), { id, text, kind }]);
+    setTimeout(() => setToasts((t) => t.filter((x) => x.id !== id)), kind === 'error' ? 8000 : 3000);
+  }, []);
+
+  const run: Run = useCallback(
+    async (fn, ok) => {
+      try {
+        const r = await fn();
+        if (typeof r === 'string') toast(r, 'info');
+        else if (ok) toast(ok, 'info');
+        return r;
+      } catch (x) {
+        toast(errorText(x), 'error');
+        return undefined;
+      }
+    },
+    [toast],
+  );
+
+  useEffect(() => {
+    const off = window.meshdrop.onState(setState);
+    const poll = () =>
+      void window.meshdrop.getState().then(setState, () => {
+        setTimeout(poll, 300); // the controller is still starting
+      });
+    poll();
+    return off;
+  }, []);
+
   return (
     <div className="app">
       <nav className="sidebar" aria-label="Pages">
@@ -14,10 +58,27 @@ export function App() {
             {p}
           </button>
         ))}
+        {state && (
+          <div className="self muted">
+            {state.self.alias}
+            <br />
+            {state.mode === 'client-only' ? 'Sharing the port with meshdrop listen' : `Port ${state.self.port}`}
+          </div>
+        )}
       </nav>
       <main className="content">
         <h1>{page}</h1>
+        {!state ? (
+          <p className="muted">Starting…</p>
+        ) : page === 'Devices' ? (
+          <Devices state={state} run={run} />
+        ) : page === 'Transfers' ? (
+          <Transfers state={state} run={run} />
+        ) : page === 'Inbox' ? (
+          <Inbox state={state} run={run} />
+        ) : null}
       </main>
+      <Toasts items={toasts} onClose={(id) => setToasts((t) => t.filter((x) => x.id !== id))} />
     </div>
   );
 }

@@ -203,6 +203,11 @@ export class AppController extends EventEmitter {
     };
   }
 
+  /** Pushes a fresh state to the UI (after something outside the controller changed it). */
+  refresh(): void {
+    this.#changed();
+  }
+
   /** Schedules a 'state' event: at most one per STATE_INTERVAL_MS, always carrying the latest state. */
   #changed(): void {
     if (this.#timer || this.#stopped) return;
