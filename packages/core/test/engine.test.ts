@@ -425,7 +425,7 @@ describe('CLI', () => {
     expect(list.stdout).toContain('bee');
     expect(list.stdout).toMatch(/1 file\(s\), 12\.00 MiB/);
     expect((await runCli(['outbox', 'rm', 'nope', '--home', a.home])).code).toBe(2);
-    const rm = await runCli(['outbox', 'rm', sid.slice(0, 5), '--home', a.home]);
+    const rm = await runCli(['outbox', 'rm', '--home', a.home, '--', sid.slice(0, 5)]); // a base64url id may start with '-'
     expect(rm.code).toBe(0);
     expect(rm.stdout).toMatch(new RegExp(`removed ${sid}.*receiver notified`));
     expect((await runCli(['outbox', '--home', a.home])).stdout).toMatch(/outbox is empty/);
