@@ -79,12 +79,12 @@ async function startMesh(heldOpts: ConstructorParameters<typeof HeldStore>[1] = 
 }
 
 interface Dev { client: HubClient; root: string; notices: Record<string, unknown>[] }
-async function device(m: Mesh, who: Identity, wrap?: (h: (r: MeshRequest) => Promise<MeshResponse>) => (r: MeshRequest) => Promise<MeshResponse>): Promise<Dev> {
+async function device(m: Mesh, who: Identity, wrap?: (h: (r: MeshRequest) => Promise<MeshResponse>) => (r: MeshRequest) => Promise<MeshResponse>, backoffMs: number[] = [50, 50]): Promise<Dev> {
   const members = await MembershipStore.init(tmpDir(), m.anchor, m.v1);
   const root = tmpDir();
   const h = createMeshHandler({ id: who, trust: members, inbox: new Inbox(root), onEvent: () => {} });
   const base = (r: MeshRequest) => h.handle(r);
-  const client = new HubClient({ id: who, members, handler: wrap ? wrap(base) : base, lanAddrs: () => [], hubLan: () => ({ host: '127.0.0.1', port: m.port }), backoffMs: [50, 50] });
+  const client = new HubClient({ id: who, members, handler: wrap ? wrap(base) : base, lanAddrs: () => [], hubLan: () => ({ host: '127.0.0.1', port: m.port }), backoffMs });
   const notices: Record<string, unknown>[] = [];
   client.on('held-delivered', (n) => notices.push(n));
   client.on('held-failed', (n) => notices.push(n));
@@ -253,10 +253,12 @@ describe('held store edge cases (I4, I6)', () => {
     const s = session(1);
     await upload(a, s);
     await finishUpload(a, s);
+    // The old link stalls (half-open). Its client stands for a dead process: it must not reconnect
+    // and fight the new link, so its backoff is long.
     await device(m, B, (h) => async (r) => {
-      if (r.path.startsWith('/mesh/v1/chunk/')) await new Promise(() => {}); // the old link stalls (half-open)
+      if (r.path.startsWith('/mesh/v1/chunk/')) await new Promise(() => {});
       return h(r);
-    });
+    }, [60_000]);
     await sleep(300);
     const b2 = await device(m, B); // replaces the old link (4409)
     await until(() => a.notices.length === 1, 8000);
