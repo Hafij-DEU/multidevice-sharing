@@ -278,8 +278,11 @@ export class Discovery extends EventEmitter {
     // An announce for a manually added peer refreshes it but never demotes it back to expiring.
     if (manual || cur?.manual) next.manual = true;
     this.table.set(a.deviceId, next);
+    // Also report a peer seen again after a silence longer than the TTL (a manual peer never
+    // expires, so this is the only sign that it came back).
     const changed =
-      !cur || cur.host !== next.host || cur.port !== next.port || cur.alias !== a.alias || cur.deviceType !== a.deviceType;
+      !cur || cur.host !== next.host || cur.port !== next.port || cur.alias !== a.alias || cur.deviceType !== a.deviceType ||
+      now - cur.lastSeen > this.ttlMs;
     if (changed) this.emitSafe('peer', { ...next });
     return true;
   }

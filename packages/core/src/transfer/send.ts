@@ -401,6 +401,8 @@ export interface OutboxEntry {
   sources: OutboxSource[];
   /** HPKE sender context (key material): the file is 0600. */
   ctxExport: string;
+  /** How the last attempt ended ('cancelled' or SendResult.error); absent before the first ending. */
+  lastError?: string;
 }
 
 const isObj = (x: unknown): x is Record<string, unknown> => typeof x === 'object' && x !== null && !Array.isArray(x);
@@ -502,6 +504,21 @@ export class Outbox {
   }
 
   /** Newest entry for this target + item list, if any. */
+  /** Resumes one entry (no-op 'failed: unknown-entry' if it is gone). */
+  async resumeEntry(
+    id: Identity,
+    sessionId: string,
+    t: Target,
+    opts: Omit<SendOptions, 'outbox' | 'onProgress'> & { onProgress?: (p: SendProgress & { deviceId: string }) => void } = {},
+  ): Promise<SendResult> {
+    const e = await this.load(sessionId);
+    if (!e) return { deviceId: t.deviceId, status: 'failed', sessionId, error: 'unknown-entry' };
+    const { onProgress, ...rest } = opts;
+    const o: SendOptions = { ...rest, outbox: this };
+    if (onProgress) o.onProgress = (p) => onProgress({ deviceId: t.deviceId, ...p });
+    return runSession(id, t, e, o);
+  }
+
   async findMatch(deviceId: string, itemsKey: string): Promise<OutboxEntry | null> {
     const hits = (await this.list()).filter((e) => e.target.deviceId === deviceId && e.itemsKey === itemsKey);
     return hits.at(-1) ?? null;
@@ -668,9 +685,13 @@ async function runSession(id: Identity, t: Target, entry: OutboxEntry, opts: Sen
     if (opts.outbox) await opts.outbox.remove(sessionId).catch(() => {});
     return { ...base, status: outcome };
   } catch (e) {
-    if (opts.signal?.aborted) return { ...base, status: 'cancelled' }; // pause: resumable, no cancel
+    const paused = opts.signal?.aborted === true;
+    const error = paused ? 'cancelled' : errorString(e);
+    // Remember how it ended, so automatic resume can tell a network hiccup from a dead end.
+    if (opts.outbox) await opts.outbox.save({ ...entry, lastError: error }).catch(() => {});
+    if (paused) return { ...base, status: 'cancelled' }; // pause: resumable, no cancel
     if (isTerminal(e) && transport) await postCancel(id, t, sessionId, CANCEL_TIMEOUT_MS, transport);
-    return { ...base, status: 'failed', error: errorString(e) };
+    return { ...base, status: 'failed', error };
   } finally {
     internal.abort(); // releases AbortSignal.any's listener on the caller's signal
     active.delete(sessionId);

@@ -145,6 +145,24 @@ export interface EngineOptions {
   hubBackoffMs?: number[];
   /** This device's LAN addresses as reported to the hub and put in invites (default: all non-internal IPv4). */
   lanAddrs?: () => LanAddr[];
+  /**
+   * Resume unfinished sends to a device by themselves when it shows up (LAN peer or online at the
+   * hub), unless they failed for good (source changed, refused). Default: true when serving.
+   */
+  autoResume?: boolean;
+  /** Accept ws:// loopback hub URLs (tests, local tunnels). Default false. */
+  allowLoopbackHubUrls?: boolean;
+}
+
+/** A device as the app shows it: who it is, whether we trust it, and how we can reach it now. */
+export interface EngineDevice {
+  deviceId: string;
+  alias: string;
+  role: 'hub' | 'member' | 'paired' | 'nearby';
+  trusted: boolean;
+  reach: 'lan' | 'hub' | 'offline';
+  deviceType?: string;
+  lastSeen?: number;
 }
 
 /** A device id prefix that is not a unique prefix (>= 4 hex chars) of exactly one trusted device. */
@@ -171,6 +189,8 @@ export class UnknownDeviceError extends Error {
 
 const PREFIX_RE = /^[0-9a-f]{4,64}$/;
 const PULL_INTERVAL_MS = 60_000;
+const AUTO_RESUME_INTERVAL_MS = 30_000;
+const SCAN_MAX_ADDRESSES = 512;
 const INVITE_POLL_MS = 1000;
 const PENDING_RETRY_MS = 10_000;
 /** Generous per-frame bound for held sessions: envelope header + framing. */
@@ -366,6 +386,35 @@ async function estimateHoldBytes(items: SendItem[]): Promise<number> {
   return bytes + frames * HELD_FRAME_OVERHEAD + CHUNK_SIZE;
 }
 
+/** The /24 of each non-internal IPv4 interface. */
+function defaultSubnets(): string[] {
+  const out = new Set<string>();
+  for (const list of Object.values(networkInterfaces())) {
+    for (const i of list ?? []) {
+      if (i.family !== 'IPv4' || i.internal) continue;
+      const [a, b, c] = i.address.split('.');
+      out.add(`${a}.${b}.${c}.0/24`);
+    }
+  }
+  return [...out];
+}
+
+/** Host addresses of an IPv4 CIDR from /24 to /30 (network and broadcast excluded where they exist). */
+function expandCidr(cidr: string): string[] {
+  const m = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})\/(2[4-9]|30)$/.exec(cidr);
+  if (!m) return [];
+  const base = ((Number(m[1]) << 24) | (Number(m[2]) << 16) | (Number(m[3]) << 8) | Number(m[4])) >>> 0;
+  const bits = Number(m[5]);
+  const size = 2 ** (32 - bits);
+  const net = (base & ~(size - 1)) >>> 0;
+  const out: string[] = [];
+  for (let i = 1; i < size - 1; i++) {
+    const v = net + i;
+    out.push(`${v >>> 24}.${(v >>> 16) & 255}.${(v >>> 8) & 255}.${v & 255}`);
+  }
+  return out;
+}
+
 function defaultLanAddrs(port: number): LanAddr[] {
   const out: LanAddr[] = [];
   for (const list of Object.values(networkInterfaces())) {
@@ -395,6 +444,7 @@ export class Engine extends EventEmitter {
   private lastInviteSecret = '';
   private joinHandler: ((peer: string, body: unknown) => Promise<{ status: number; body: object }>) | null = null;
   private readonly lastPull = new Map<string, number>();
+  private readonly lastAutoResume = new Map<string, number>();
   /** Trust for the receiver: mesh members first, then manually paired devices (never a revoked one). */
   private readonly trustSource: TrustSource = {
     isTrusted: (id) => new CompositeTrust(this.mesh, this.trust).isTrusted(id),
@@ -551,6 +601,7 @@ export class Engine extends EventEmitter {
     discovery.on('peer', (p: PeerInfo) => {
       this.emitEvent({ source: 'discovery', type: 'peer', peer: p });
       void this.maybePull(p);
+      void this.maybeAutoResume(p.deviceId);
     });
     discovery.on('lost', (p: PeerInfo) => this.emitEvent({ source: 'discovery', type: 'lost', peer: p }));
     return discovery;
@@ -642,6 +693,7 @@ export class Engine extends EventEmitter {
    */
   private async route(deviceId: string): Promise<Route> {
     const r = this.requireRunning();
+    const viaHubOk = this.mesh?.isTrusted(deviceId) === true; // only mesh members are reachable through the hub
     const known = (): PeerInfo | undefined => r.discovery.peers().find((p) => p.deviceId === deviceId);
     let peer = known();
     const dir = this.directory().find((d) => d.deviceId === deviceId);
@@ -653,7 +705,7 @@ export class Engine extends EventEmitter {
       }
     }
     if (peer) return { kind: 'lan', host: peer.host, port: peer.port };
-    if (this.hubOnline()) return dir?.online ? { kind: 'relay' } : { kind: 'held' };
+    if (viaHubOk && this.hubOnline()) return dir?.online ? { kind: 'relay' } : { kind: 'held' };
     return { kind: 'unreachable' };
   }
 
@@ -846,6 +898,122 @@ export class Engine extends EventEmitter {
     return this.trust.get(deviceId)!;
   }
 
+  // ---- device view, nearby, auto-resume (M3) ------------------------------------------------------
+
+  /** Every device worth showing: mesh members, paired devices and LAN peers (never this one). */
+  devices(): EngineDevice[] {
+    const me = this.identity.deviceId;
+    const peers = new Map((this.running?.discovery.peers() ?? []).map((p) => [p.deviceId, p]));
+    const dir = new Map(this.directory().map((d) => [d.deviceId, d]));
+    const out = new Map<string, EngineDevice>();
+    const reach = (id: string, viaHub: boolean): EngineDevice['reach'] =>
+      peers.has(id) ? 'lan' : viaHub && this.hubOnline() && dir.get(id)?.online ? 'hub' : 'offline';
+    const list = this.mesh?.list();
+    for (const m of list?.members ?? []) {
+      if (m.deviceId === me) continue;
+      out.set(m.deviceId, { deviceId: m.deviceId, alias: m.alias, role: m.role === 'hub' ? 'hub' : 'member', trusted: true, reach: reach(m.deviceId, true) });
+    }
+    for (const t of this.trust.list()) {
+      if (t.deviceId === me || out.has(t.deviceId) || !this.trustSource.isTrusted(t.deviceId)) continue;
+      out.set(t.deviceId, { deviceId: t.deviceId, alias: t.alias, role: 'paired', trusted: true, reach: reach(t.deviceId, false) });
+    }
+    for (const p of peers.values()) {
+      if (p.deviceId === me) continue;
+      const cur = out.get(p.deviceId);
+      if (cur) {
+        cur.deviceType = p.deviceType;
+        cur.lastSeen = p.lastSeen;
+      } else if (!this.mesh?.isRevoked(p.deviceId)) {
+        out.set(p.deviceId, { deviceId: p.deviceId, alias: p.alias, role: 'nearby', trusted: false, reach: 'lan', deviceType: p.deviceType, lastSeen: p.lastSeen });
+      }
+    }
+    for (const [id, d] of out) if (d.lastSeen === undefined && dir.get(id)?.lastSeen) d.lastSeen = dir.get(id)!.lastSeen;
+    return [...out.values()];
+  }
+
+  /** Looks for a MeshDrop device at host:port (it shows up as nearby until paired or in the mesh). */
+  async addNearby(host: string, port: number = DEFAULT_MESH_PORT): Promise<void> {
+    const r = this.requireRunning();
+    await r.discovery.probe(host, port, { timeoutMs: PAIR_TIMEOUT_MS });
+    const p = r.discovery.peers().find((x) => x.host === host && x.port === port);
+    if (p) void this.maybeAutoResume(p.deviceId);
+  }
+
+  /** Drops a device from the LAN peer table (it is still trusted; it reappears when seen). */
+  forgetPeer(deviceId: string): void {
+    this.running?.discovery.forget(deviceId);
+  }
+
+  /**
+   * Probes every address of this device's /24 networks (or `subnets`) on the mesh port(s) and
+   * returns how many devices it found that were not known before. At most 512 addresses.
+   */
+  async scanSubnet(opts: { subnets?: string[]; ports?: number[]; timeoutMs?: number; concurrency?: number } = {}): Promise<number> {
+    const r = this.requireRunning();
+    const ports = opts.ports ?? [...new Set([DEFAULT_MESH_PORT, r.port])];
+    const subnets = opts.subnets ?? defaultSubnets();
+    const hosts: string[] = [];
+    for (const cidr of subnets) for (const h of expandCidr(cidr)) if (hosts.length < SCAN_MAX_ADDRESSES) hosts.push(h);
+    const before = new Set(r.discovery.peers().map((p) => p.deviceId));
+    const jobs = hosts.flatMap((h) => ports.map((p) => [h, p] as const));
+    let next = 0;
+    const worker = async () => {
+      while (next < jobs.length && this.running === r) {
+        const [h, p] = jobs[next++]!;
+        await r.discovery.probe(h, p, { timeoutMs: opts.timeoutMs ?? 400 }).catch(() => {});
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(opts.concurrency ?? 32, jobs.length) }, worker));
+    return r.discovery.peers().filter((p) => !before.has(p.deviceId) && p.deviceId !== this.identity.deviceId).length;
+  }
+
+  /**
+   * A device just showed up: resume its unfinished sends that ended by a pause or a transient
+   * failure (never a source change or a refusal). At most once per device every 30 s.
+   */
+  private async maybeAutoResume(deviceId: string): Promise<void> {
+    const r = this.running;
+    if (!r || !r.server || this.opts.autoResume === false) return;
+    const last = this.lastAutoResume.get(deviceId) ?? 0;
+    if (Date.now() - last < AUTO_RESUME_INTERVAL_MS) return;
+    const entries = (await this.outbox.list()).filter(
+      (e) => e.target.deviceId === deviceId && !isSessionActive(e.sessionId) && e.lastError !== undefined &&
+        (e.lastError === 'cancelled' || isTransientError(e.lastError)),
+    );
+    if (entries.length === 0) return;
+    this.lastAutoResume.set(deviceId, Date.now());
+    const t = this.trustSource.get(deviceId);
+    if (!t) return;
+    const route = await this.route(deviceId);
+    if (route.kind === 'unreachable') return;
+    const target: Target = { deviceId, publicKey: createPublicKey(t.publicKeyPem) };
+    const run = async () => {
+      for (const e of entries) {
+        const res = await this.outbox.resumeEntry(this.identity, e.sessionId, target, {
+          signal: r.abort.signal,
+          onProgress: (p) => this.emitEvent({ source: 'sender', type: 'progress', ...p }),
+          transport: (tt) => this.transportFor(route.kind === 'held' ? { kind: 'relay' } : route, tt, 0),
+        });
+        this.emitEvent({ source: 'sender', type: 'result', ...res });
+      }
+    };
+    await this.track(run());
+  }
+
+  private readHubAddr(): { deviceId: string; host: string; port: number } | null {
+    try {
+      const j = JSON.parse(readFileSync(join(this.home, 'hub-addr.json'), 'utf8')) as Record<string, unknown>;
+      if (typeof j.deviceId === 'string' && typeof j.host === 'string' && Number.isInteger(j.port)) return { deviceId: j.deviceId, host: j.host, port: j.port as number };
+    } catch {
+      /* none */
+    }
+    return null;
+  }
+
+  private writeHubAddr(a: { deviceId: string; host: string; port: number }): void {
+    writeFileAtomic(join(this.home, 'hub-addr.json'), JSON.stringify(a));
+  }
+
   // ---- mesh (M2) --------------------------------------------------------------------------------
 
   private receiverOptions(): Parameters<typeof createMeshServer>[0] {
@@ -881,7 +1049,10 @@ export class Engine extends EventEmitter {
         if (isHub) return { host: '127.0.0.1', port };
         const hubId = this.mesh?.list().hub.deviceId;
         const p = r.discovery.peers().find((x) => x.deviceId === hubId);
-        return p ? { host: p.host, port: p.port } : undefined;
+        if (p) return { host: p.host, port: p.port };
+        // Not announced (multicast off or blocked): the address we last reached the hub at.
+        const saved = this.readHubAddr();
+        return saved && saved.deviceId === hubId ? { host: saved.host, port: saved.port } : undefined;
       },
       ...(this.opts.hubBackoffMs ? { backoffMs: this.opts.hubBackoffMs } : {}),
     });
@@ -894,7 +1065,10 @@ export class Engine extends EventEmitter {
     });
     client.on('offline', () => mesh('offline'));
     client.on('membership', (sm: SignedMembership) => mesh('membership', { version: sm.list.version }));
-    client.on('directory', () => mesh('directory'));
+    client.on('directory', (devs: DirectoryEntry[]) => {
+      mesh('directory');
+      for (const d of devs ?? []) if (d.online) void this.maybeAutoResume(d.deviceId);
+    });
     client.on('revoked', () => void this.leaveMesh());
     client.on('invite-used', () => {
       this.invites.markUsed(this.identity.deviceId);
@@ -1089,6 +1263,11 @@ export class Engine extends EventEmitter {
     try {
       if (invite.lan.length === 0) throw new Error('no LAN address');
       status = await joinViaLan(this.identity, uri, name, this.home);
+      if (status === 'member' && invite.lan[0]) {
+        const list = (await MembershipStore.load(this.home))?.list();
+        // The inviter answered at this address; if it is the hub, remember where it lives.
+        if (list && list.hub.deviceId === invite.inviter) this.writeHubAddr({ deviceId: invite.inviter, ...invite.lan[0] });
+      }
     } catch (e) {
       if (invite.hubUrls.length === 0 || (e instanceof Error && /^join refused/.test(e.message))) throw e;
       status = await joinViaHub(this.identity, uri, name, this.home);
