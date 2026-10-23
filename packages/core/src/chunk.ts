@@ -73,6 +73,12 @@ export function newSessionId(): string {
 // ---- manifest shape / serialization ------------------------------------------------------------
 
 const SHA256_HEX = /^[0-9a-f]{64}$/;
+const DEVICE_ID_HEX = /^[0-9a-f]{64}$/;
+const SESSION_ID_RE = /^[A-Za-z0-9_-]{22}$/; // 16 random bytes, base64url
+/** Caps on untrusted manifest size (path validation itself is the inbox's job). */
+export const MAX_MANIFEST_FILES = 100000;
+export const MAX_MANIFEST_DIRS = 100000;
+export const MAX_MANIFEST_TEXT_BYTES = 1024 * 1024;
 
 function bad(msg: string): never {
   throw new Error(`invalid manifest: ${msg}`);
@@ -84,17 +90,23 @@ function normalizeManifest(x: unknown): Manifest {
   if (!isObj(x)) bad('not an object');
   if (x.v !== 1) bad('v must be 1');
   const { sessionId, from, to, createdAt, files, dirs, text } = x;
-  if (typeof sessionId !== 'string') bad('sessionId');
-  if (typeof from !== 'string') bad('from');
-  if (typeof to !== 'string') bad('to');
+  if (typeof sessionId !== 'string' || !SESSION_ID_RE.test(sessionId)) bad('sessionId');
+  if (typeof from !== 'string' || !DEVICE_ID_HEX.test(from)) bad('from');
+  if (typeof to !== 'string' || !DEVICE_ID_HEX.test(to)) bad('to');
   if (typeof createdAt !== 'number' || !Number.isSafeInteger(createdAt) || createdAt < 0) bad('createdAt');
   if (!Array.isArray(files)) bad('files');
   if (!Array.isArray(dirs)) bad('dirs');
   if (text !== undefined && typeof text !== 'string') bad('text');
+  if (files.length > MAX_MANIFEST_FILES) bad('too many files');
+  if (dirs.length > MAX_MANIFEST_DIRS) bad('too many dirs');
+  if (text !== undefined && Buffer.byteLength(text, 'utf8') > MAX_MANIFEST_TEXT_BYTES) bad('text too large');
+  const seenIds = new Set<number>();
   const outFiles: FileEntry[] = files.map((f: unknown) => {
     if (!isObj(f)) bad('file entry');
     const { fileId, path, size, mime, sha256 } = f;
     if (typeof fileId !== 'number' || !Number.isInteger(fileId) || fileId < 0 || fileId > U32_MAX) bad('fileId');
+    if (seenIds.has(fileId)) bad('duplicate fileId');
+    seenIds.add(fileId);
     if (typeof path !== 'string') bad('file path');
     if (typeof size !== 'number' || !Number.isSafeInteger(size) || size < 0) bad('file size');
     if (typeof mime !== 'string') bad('file mime');
@@ -172,13 +184,15 @@ export function createOffer(
 /** Receiver side. `senderPub` must come from the trust store, never from the offer. */
 export function acceptOffer(id: Identity, senderPub: KeyObject, o: Offer): { manifest: Manifest; ctx: HpkeContext } {
   if (!isObj(o) || o.v !== 1 || typeof o.sessionId !== 'string' || typeof o.to !== 'string' ||
-      typeof o.enc !== 'string' || typeof o.sealedManifest !== 'string') {
+      typeof o.from !== 'string' || !DEVICE_ID_HEX.test(o.from) || typeof o.enc !== 'string' || typeof o.sealedManifest !== 'string') {
     throw new Error('invalid offer');
   }
   if (o.to !== id.deviceId) throw new Error('offer is not addressed to this device');
   const ctx = setupAuthR(Buffer.from(o.enc, 'base64'), id.privateKey, sessionInfo(o.sessionId), senderPub);
   const manifest = openManifest(ctx, o.sessionId, Buffer.from(o.sealedManifest, 'base64'));
   if (manifest.sessionId !== o.sessionId) throw new Error('manifest sessionId does not match offer sessionId');
+  if (manifest.from !== o.from) throw new Error('manifest from does not match offer from');
+  if (manifest.to !== id.deviceId) throw new Error('manifest to does not match this device');
   return { manifest, ctx };
 }
 

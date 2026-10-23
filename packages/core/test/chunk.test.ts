@@ -5,6 +5,9 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   CHUNK_SIZE,
+  MAX_MANIFEST_DIRS,
+  MAX_MANIFEST_FILES,
+  MAX_MANIFEST_TEXT_BYTES,
   acceptOffer,
   chunkAad,
   chunkCount,
@@ -35,6 +38,7 @@ afterEach(() => {
   for (const d of tmps.splice(0)) rmSync(d, { recursive: true, force: true });
 });
 
+const OTHER_SESSION = 'BBBBBBBBBBBBBBBBBBBBBB';
 const sha256hex = (b: Buffer): string => createHash('sha256').update(b).digest('hex');
 
 async function twoIdentities(): Promise<[Identity, Identity]> {
@@ -119,9 +123,29 @@ describe('offer / manifest sealing', () => {
     const forged: Offer = {
       ...offer,
       enc: enc.toString('base64'),
-      sealedManifest: sealManifestRaw(ctx, offer.sessionId, sampleManifest(alice.deviceId, bob.deviceId, 'other-session')).toString('base64'),
+      sealedManifest: sealManifestRaw(ctx, offer.sessionId, sampleManifest(alice.deviceId, bob.deviceId, OTHER_SESSION)).toString('base64'),
     };
     expect(() => acceptOffer(bob, alice.publicKey, forged)).toThrow(/sessionId/);
+  });
+
+  it('rejects offer.from that disagrees with the authenticated manifest', async () => {
+    const [alice, bob] = await twoIdentities();
+    const { offer } = createOffer(alice, bob.publicKey, sampleManifest(alice.deviceId, bob.deviceId));
+    expect(() => acceptOffer(bob, alice.publicKey, { ...offer, from: 'e'.repeat(64) })).toThrow(/from/);
+    expect(() => acceptOffer(bob, alice.publicKey, { ...offer, from: 'nothex' })).toThrow(/invalid offer/);
+    expect(() => acceptOffer(bob, alice.publicKey, { ...offer, from: undefined } as unknown as Offer)).toThrow(/invalid offer/);
+  });
+
+  it('rejects a manifest whose to is not this device', async () => {
+    const [alice, bob] = await twoIdentities();
+    // Offer.to is bob, but the authenticated manifest names someone else.
+    const m = sampleManifest(alice.deviceId, 'd'.repeat(64));
+    const { enc, ctx } = setupAuthS(bob.publicKey, sessionInfo(m.sessionId), alice.privateKey);
+    const forged: Offer = {
+      v: 1, sessionId: m.sessionId, from: m.from, to: bob.deviceId,
+      enc: enc.toString('base64'), sealedManifest: sealManifest(ctx, m).toString('base64'),
+    };
+    expect(() => acceptOffer(bob, alice.publicKey, forged)).toThrow(/this device/);
   });
 
   it('createOffer refuses a manifest not from this identity', async () => {
@@ -141,15 +165,50 @@ describe('offer / manifest sealing', () => {
     expect(() => openManifest(ctx, m.sessionId, bad)).toThrow(/manifest/);
     // Wrong session AAD fails authentication.
     const ok = sealManifest(ctx, m);
-    expect(() => openManifest(ctx, 'other', ok)).toThrow(HpkeOpenError);
+    expect(() => openManifest(ctx, OTHER_SESSION, ok)).toThrow(HpkeOpenError);
     expect(openManifest(ctx, m.sessionId, ok)).toEqual(m);
   });
 
+  it('rejects duplicate fileIds', async () => {
+    const [alice, bob] = await twoIdentities();
+    const m = sampleManifest(alice.deviceId, bob.deviceId);
+    const { ctx } = createOffer(alice, bob.publicKey, m);
+    const dup = { ...m, files: [m.files[0]!, { ...m.files[1]!, fileId: 0 }] };
+    expect(() => sealManifest(ctx, dup)).toThrow(/duplicate fileId/);
+    expect(() => openManifest(ctx, m.sessionId, sealManifestRaw(ctx, m.sessionId, dup))).toThrow(/duplicate fileId/);
+  });
+
+  it('constrains sessionId, from and to formats', () => {
+    const m = sampleManifest('a'.repeat(64), 'b'.repeat(64));
+    expect(() => serializeManifest({ ...m, sessionId: 'sess' })).toThrow(/sessionId/);
+    expect(() => serializeManifest({ ...m, sessionId: 'A'.repeat(23) })).toThrow(/sessionId/);
+    expect(() => serializeManifest({ ...m, sessionId: 'A'.repeat(21) + '=' })).toThrow(/sessionId/);
+    expect(() => serializeManifest({ ...m, from: 'A'.repeat(64) })).toThrow(/from/);
+    expect(() => serializeManifest({ ...m, from: 'a'.repeat(63) })).toThrow(/from/);
+    expect(() => serializeManifest({ ...m, to: 'b'.repeat(65) })).toThrow(/to/);
+  });
+
+  it('enforces size caps (files, dirs, text bytes)', () => {
+    const m = sampleManifest('a'.repeat(64), 'b'.repeat(64));
+    const f = (i: number) => ({ fileId: i, path: 'p', size: 0, mime: 'x', sha256: '0'.repeat(64) });
+    const files = (n: number) => Array.from({ length: n }, (_, i) => f(i));
+    const dirs = (n: number) => Array.from({ length: n }, () => ({ path: 'd' }));
+    expect(() => serializeManifest({ ...m, files: files(MAX_MANIFEST_FILES) })).not.toThrow();
+    expect(() => serializeManifest({ ...m, files: files(MAX_MANIFEST_FILES + 1) })).toThrow(/too many files/);
+    expect(() => serializeManifest({ ...m, dirs: dirs(MAX_MANIFEST_DIRS) })).not.toThrow();
+    expect(() => serializeManifest({ ...m, dirs: dirs(MAX_MANIFEST_DIRS + 1) })).toThrow(/too many dirs/);
+    expect(() => serializeManifest({ ...m, text: 'a'.repeat(MAX_MANIFEST_TEXT_BYTES) })).not.toThrow();
+    expect(() => serializeManifest({ ...m, text: 'a'.repeat(MAX_MANIFEST_TEXT_BYTES + 1) })).toThrow(/text too large/);
+    // cap is on UTF-8 bytes, not characters: 2-byte chars
+    expect(() => serializeManifest({ ...m, text: '\u00e9'.repeat(MAX_MANIFEST_TEXT_BYTES / 2 + 1) })).toThrow(/text too large/);
+    expect(() => serializeManifest({ ...m, text: '\u00e9'.repeat(MAX_MANIFEST_TEXT_BYTES / 2) })).not.toThrow();
+  });
+
   it('manifest serialization is deterministic regardless of input key order', () => {
-    const m = sampleManifest('a'.repeat(64), 'b'.repeat(64), 'sess');
+    const m = sampleManifest('a'.repeat(64), 'b'.repeat(64), OTHER_SESSION);
     const shuffled = { text: m.text, dirs: m.dirs, files: m.files.map((f) => ({ sha256: f.sha256, mime: f.mime, size: f.size, path: f.path, fileId: f.fileId })), createdAt: m.createdAt, to: m.to, from: m.from, sessionId: m.sessionId, v: 1 } as Manifest;
     expect(serializeManifest(shuffled)).toBe(serializeManifest(m));
-    expect(serializeManifest(m).startsWith('{"v":1,"sessionId":"sess","from":"')).toBe(true);
+    expect(serializeManifest(m).startsWith(`{"v":1,"sessionId":"${OTHER_SESSION}","from":"`)).toBe(true);
     const { text: _t, ...noText } = m;
     expect(serializeManifest(noText as Manifest)).not.toContain('"text"');
   });
