@@ -1,3 +1,4 @@
+import { generateKeyPairSync } from 'node:crypto';
 import { createServer as createHttpsServer, type Server as HttpsServer } from 'node:https';
 import { createServer as createNetServer, type Server as NetServer, type Socket } from 'node:net';
 import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
@@ -236,6 +237,72 @@ describe('pinnedRequest', () => {
     await expect(pinnedRequest(sock, 'GET', '/')).rejects.toThrow(/invalid JSON/);
   });
 
+  for (const mode of ['reset', 'close'] as const) {
+    it(`rejects (no unhandled error) when the peer ${mode}s the connection between connect and request`, async () => {
+      const raws: Socket[] = [];
+      const server = createServer(serverTlsOptions(A), (sock) => {
+        sock.on('error', () => {});
+        // resetAndDestroy is unsupported on TLSSocket, so reset the underlying TCP socket.
+        if (mode === 'reset') raws.at(-1)!.resetAndDestroy();
+        else sock.destroy();
+      });
+      server.on('connection', (s) => raws.push(s));
+      server.on('tlsClientError', () => {});
+      const port = await listen(server, new Set());
+      const sock = await connectPinned('127.0.0.1', port, B, A.deviceId);
+      await new Promise((r) => setTimeout(r, 50)); // no request yet: any 'error' here would be unhandled
+      await expect(pinnedRequest(sock, 'GET', '/')).rejects.toThrow();
+    });
+  }
+
+  it('rejects after an idle timeout when the server never responds', async () => {
+    const port = await startHttps(() => {
+      /* accept the request, never respond */
+    });
+    const sock = await connectPinned('127.0.0.1', port, B, A.deviceId);
+    const t0 = Date.now();
+    await expect(pinnedRequest(sock, 'GET', '/', undefined, {}, { timeoutMs: 150 })).rejects.toThrow(
+      /timed out after 150 ms/,
+    );
+    expect(Date.now() - t0).toBeLessThan(2000);
+    expect(sock.destroyed).toBe(true);
+  });
+
+  it('idle timeout resets on activity: a slow but steady upload is not cut off', async () => {
+    const port = await startHttps((req, res) => {
+      req.resume();
+      req.on('end', () => res.end('ok'));
+    });
+    const sock = await connectPinned('127.0.0.1', port, B, A.deviceId);
+    async function* slow() {
+      for (let i = 0; i < 6; i++) {
+        await new Promise((r) => setTimeout(r, 60));
+        yield Buffer.from('x');
+      }
+    }
+    const r = await pinnedRequest(sock, 'PUT', '/', Readable.from(slow()), {}, { timeoutMs: 200 });
+    expect(r.body.toString()).toBe('ok');
+  });
+
+  it('abort via signal rejects with AbortError and destroys the socket', async () => {
+    const port = await startHttps(() => {});
+    const sock = await connectPinned('127.0.0.1', port, B, A.deviceId);
+    const ac = new AbortController();
+    const p = pinnedRequest(sock, 'GET', '/', undefined, {}, { signal: ac.signal });
+    setTimeout(() => ac.abort(), 50);
+    await expect(p).rejects.toMatchObject({ name: 'AbortError' });
+    expect(sock.destroyed).toBe(true);
+  });
+
+  it('an already-aborted signal rejects immediately', async () => {
+    const port = await startHttps(() => {});
+    const sock = await connectPinned('127.0.0.1', port, B, A.deviceId);
+    await expect(
+      pinnedRequest(sock, 'GET', '/', undefined, {}, { signal: AbortSignal.abort() }),
+    ).rejects.toMatchObject({ name: 'AbortError' });
+    expect(sock.destroyed).toBe(true);
+  });
+
   it('rejects when the body stream errors', async () => {
     const port = await startHttps((req, res) => {
       req.resume();
@@ -294,6 +361,35 @@ describe('TrustStore', () => {
     }
     expect(() => t.add({ ...dev(A.deviceId), publicKeyPem: 'nope' })).toThrow(/public key/i);
     expect(t.list()).toEqual([]);
+  });
+
+  it('rejects PKCS#8 private keys, certificates and non-P-256 keys as publicKeyPem', () => {
+    const t = new TrustStore(join(tmpDir(), 'trust.json'));
+    expect(() => t.add({ ...dev(A.deviceId), publicKeyPem: A.keyPem })).toThrow(/public key/i);
+    expect(() => t.add({ ...dev(A.deviceId), publicKeyPem: A.certPem })).toThrow(/public key/i);
+    expect(() =>
+      t.add({ ...dev(A.deviceId), publicKeyPem: A.keyPem + (A.publicKey.export({ type: 'spki', format: 'pem' }) as string) }),
+    ).toThrow(/public key/i);
+    const p384 = generateKeyPairSync('ec', { namedCurve: 'secp384r1' }).publicKey.export({ type: 'spki', format: 'pem' }) as string;
+    expect(() => t.add({ ...dev(A.deviceId), publicKeyPem: p384 })).toThrow(/public key/i);
+    const rsa = generateKeyPairSync('rsa', { modulusLength: 2048 }).publicKey.export({ type: 'spki', format: 'pem' }) as string;
+    expect(() => t.add({ ...dev(A.deviceId), publicKeyPem: rsa })).toThrow(/public key/i);
+    expect(t.list()).toEqual([]);
+  });
+
+  it('accepts an SPKI PEM with CRLF line endings and stores the canonical form', () => {
+    const file = join(tmpDir(), 'trust.json');
+    const t = new TrustStore(file);
+    const pem = (B.publicKey.export({ type: 'spki', format: 'pem' }) as string).replace(/\n/g, '\r\n');
+    t.add({ ...dev(A.deviceId), publicKeyPem: pem });
+    expect(t.get(A.deviceId)!.publicKeyPem).toBe(dev(A.deviceId).publicKeyPem);
+    expect(readFileSync(file, 'utf8')).not.toContain('PRIVATE');
+  });
+
+  it('refuses to load a trust file that contains a private key as publicKeyPem', () => {
+    const file = join(tmpDir(), 'trust.json');
+    writeFileSync(file, JSON.stringify({ devices: [{ ...dev(A.deviceId), publicKeyPem: A.keyPem }] }));
+    expect(() => new TrustStore(file)).toThrow(/trust/i);
   });
 
   it('list/get return copies, not live references', () => {

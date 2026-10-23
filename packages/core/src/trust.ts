@@ -14,18 +14,37 @@ export interface TrustedDevice {
 
 const DEVICE_ID_RE = /^[0-9a-f]{64}$/;
 
-function validate(d: TrustedDevice): void {
+/** Validates `d` and returns a normalized copy (canonical SPKI PEM). */
+function validate(d: TrustedDevice): TrustedDevice {
   if (typeof d?.deviceId !== 'string' || !DEVICE_ID_RE.test(d.deviceId)) {
     throw new Error('invalid device id: expected 64 lowercase hex characters');
   }
   if (typeof d.alias !== 'string') throw new Error('invalid alias');
   if (typeof d.addedAt !== 'number' || !Number.isFinite(d.addedAt)) throw new Error('invalid addedAt');
+  if (typeof d.publicKeyPem !== 'string') throw new Error('invalid public key: expected an SPKI PEM');
+  return { deviceId: d.deviceId, alias: d.alias, publicKeyPem: canonicalSpki(d.publicKeyPem), addedAt: d.addedAt };
+}
+
+/**
+ * Returns the canonical SPKI PEM for an EC P-256 public key, or throws. `createPublicKey`
+ * happily derives a public key from a PKCS#8 private-key PEM or a certificate PEM, which would
+ * let secret key material be persisted into trust.json; so we require that re-exporting as SPKI
+ * reproduces the input (modulo line endings / surrounding whitespace).
+ */
+function canonicalSpki(pem: string): string {
+  const bad = () => new Error('invalid public key: expected an EC P-256 SPKI PEM');
+  let key;
   try {
-    if (typeof d.publicKeyPem !== 'string') throw new Error('not a string');
-    createPublicKey(d.publicKeyPem);
+    key = createPublicKey(pem);
   } catch {
-    throw new Error('invalid public key: expected an SPKI PEM');
+    throw bad();
   }
+  if (key.type !== 'public' || key.asymmetricKeyType !== 'ec' || key.asymmetricKeyDetails?.namedCurve !== 'prime256v1') {
+    throw bad();
+  }
+  const canonical = key.export({ type: 'spki', format: 'pem' }) as string;
+  if (pem.replace(/\r\n/g, '\n').trim() !== canonical.trim()) throw bad();
+  return canonical;
 }
 
 function copy(d: TrustedDevice): TrustedDevice {
@@ -57,8 +76,8 @@ export class TrustStore {
       const parsed = JSON.parse(raw) as { devices?: TrustedDevice[] };
       if (!parsed || !Array.isArray(parsed.devices)) throw new Error('missing "devices" array');
       for (const d of parsed.devices) {
-        validate(d);
-        this.devices.set(d.deviceId, copy(d));
+        const v = validate(d);
+        this.devices.set(v.deviceId, v);
       }
     } catch (e) {
       throw new Error(`corrupt trust store ${file}: ${(e as Error).message}`);
@@ -80,10 +99,10 @@ export class TrustStore {
 
   /** Adds a device, replacing any existing entry with the same id. */
   add(d: TrustedDevice): void {
-    validate(d);
-    const prev = this.devices.get(d.deviceId);
-    this.devices.set(d.deviceId, copy(d));
-    this.persistOrRollback(d.deviceId, prev);
+    const v = validate(d);
+    const prev = this.devices.get(v.deviceId);
+    this.devices.set(v.deviceId, v);
+    this.persistOrRollback(v.deviceId, prev);
   }
 
   /** Removes a device; unknown ids are a no-op. */

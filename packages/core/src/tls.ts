@@ -6,6 +6,13 @@ import { deviceIdOf, type Identity } from './identity.ts';
 
 /** Default time allowed for TCP connect + TLS handshake + pin check. */
 export const DEFAULT_CONNECT_TIMEOUT_MS = 10_000;
+/** Default idle timeout for a pinnedRequest (resets on any socket activity). */
+export const DEFAULT_REQUEST_IDLE_TIMEOUT_MS = 30_000;
+/**
+ * Errors that hit a pinned socket between connectPinned() and pinnedRequest(). Without a listener
+ * a peer RST in that gap would be an unhandled 'error' event and crash the process.
+ */
+const socketErrors = new WeakMap<TLSSocket, Error>();
 /** Responses on this channel are small JSON/status bodies; refuse anything larger. */
 const MAX_RESPONSE_BYTES = 16 * 1024 * 1024;
 
@@ -57,8 +64,9 @@ export interface ConnectPinnedOptions {
  * 'secureConnect', before this function hands the socket back, so no application byte is ever
  * written to an unverified peer.
  *
- * The returned socket has no error listener from us; the caller (normally `pinnedRequest`) owns
- * it from then on.
+ * The returned socket keeps an 'error' listener that records the error, so a peer reset before
+ * the first request cannot crash the process; `pinnedRequest` rejects with the recorded error.
+ * The caller (normally `pinnedRequest`) owns the socket from then on.
  */
 export function connectPinned(
   host: string,
@@ -106,6 +114,7 @@ export function connectPinned(
       if (actual !== expectedDeviceId) return fail(new PinMismatchError(expectedDeviceId, actual));
       settled = true;
       cleanup();
+      sock.on('error', (e) => socketErrors.set(sock, e));
       resolve(sock);
     };
     const timer = setTimeout(
@@ -125,6 +134,19 @@ export interface PinnedResponse {
   body: Buffer;
 }
 
+export interface PinnedRequestOptions {
+  /** Idle timeout in ms, reset by any socket activity (default 30 000). */
+  timeoutMs?: number;
+  /** Aborts the request: the socket is destroyed and the promise rejects with an AbortError. */
+  signal?: AbortSignal;
+}
+
+function abortError(): Error {
+  const e = new Error('request aborted');
+  e.name = 'AbortError';
+  return e;
+}
+
 /**
  * Performs ONE HTTP/1.1 request over an already-pinned socket and resolves with the full
  * response. The socket is single-use: we pass no agent (Node then sends `Connection: close`) and
@@ -134,6 +156,9 @@ export interface PinnedResponse {
  *
  * `body` may be a Buffer (Content-Length set automatically) or a Readable (streamed; chunked
  * unless the caller passes a `content-length` header).
+ *
+ * `opts.timeoutMs` is an idle timeout (any socket read/write resets it); on timeout or abort the
+ * socket is destroyed and the promise rejects.
  */
 export function pinnedRequest(
   sock: TLSSocket,
@@ -141,7 +166,16 @@ export function pinnedRequest(
   path: string,
   body?: Buffer | Readable,
   headers: Record<string, string | number> = {},
+  opts: PinnedRequestOptions = {},
 ): Promise<PinnedResponse> {
+  const timeoutMs = opts.timeoutMs ?? DEFAULT_REQUEST_IDLE_TIMEOUT_MS;
+  const { signal } = opts;
+  const preError = socketErrors.get(sock) ?? (signal?.aborted ? abortError() : undefined);
+  if (preError || sock.destroyed) {
+    sock.destroy();
+    if (body && !Buffer.isBuffer(body)) body.destroy();
+    return Promise.reject(preError ?? new Error('socket closed before request'));
+  }
   return new Promise<PinnedResponse>((resolve, reject) => {
     const hostHeader = sock.remoteAddress
       ? `${sock.remoteAddress.includes(':') ? `[${sock.remoteAddress}]` : sock.remoteAddress}:${sock.remotePort}`
@@ -159,10 +193,20 @@ export function pinnedRequest(
     const finish = (err: Error | null, res?: PinnedResponse) => {
       if (done) return;
       done = true;
+      sock.setTimeout(0);
+      sock.removeListener('timeout', onTimeout);
+      signal?.removeEventListener('abort', onAbort);
       sock.destroy();
+      if (err && body && !Buffer.isBuffer(body)) body.destroy();
       if (err) reject(err);
       else resolve(res!);
     };
+
+    const onTimeout = () => finish(new Error(`request timed out after ${timeoutMs} ms of inactivity`));
+    const onAbort = () => finish(abortError());
+    sock.setTimeout(timeoutMs);
+    sock.on('timeout', onTimeout);
+    signal?.addEventListener('abort', onAbort, { once: true });
 
     req.on('error', (e) => finish(e));
     req.on('response', (res: IncomingMessage) => {
