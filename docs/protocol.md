@@ -11,7 +11,8 @@ Implemented in `identity.ts` and `x509.ts`.
 
 - Every device has one long-term **ECDSA P-256** key pair and a **self-signed X.509 v3 certificate** for it:
   signature ECDSA-with-SHA256, subject = issuer = `CN=meshdrop-<first 8 hex of SHA-256(SPKI DER)>`, a 16-byte
-  random positive serial, validity `20200101000000Z` to `99991231235959Z` (GeneralizedTime), and one critical
+  random positive serial, validity notBefore `200101000000Z` (UTCTime, as RFC 5280 requires before 2050) to
+  notAfter `99991231235959Z` (GeneralizedTime), and one critical
   `basicConstraints` extension with `cA` FALSE. The same key is used for TLS, ECDSA and HPKE (static DH key).
 - **Device id** = lowercase hex SHA-256 of the certificate **DER** (64 characters). The short display form is
   its first 8 characters. Ids are never taken from a JSON field when the certificate is available: on the

@@ -81,6 +81,14 @@ describe('device identity', () => {
       serial: Buffer.from(vec.serialHex, 'hex'),
     });
     const [tbs, sigAlg, sigBits] = derChildren(derChildren(der)[0]!.content);
+    // RFC 5280 4.1.2.5: dates before 2050 MUST be UTCTime; 9999-12-31 is GeneralizedTime.
+    const validity = derChildren(tbs!.content)[4]!;
+    const [notBefore, notAfter] = derChildren(validity.content);
+    expect(notBefore!.tag).toBe(0x17);
+    expect(notBefore!.content.toString('ascii')).toBe('200101000000Z');
+    expect(notAfter!.tag).toBe(0x18);
+    expect(notAfter!.content.toString('ascii')).toBe('99991231235959Z');
+    expect(new X509Certificate(der).validFromDate.toISOString()).toBe('2020-01-01T00:00:00.000Z');
     expect(tbs!.full.toString('hex')).toBe(vec.tbsHex);
     // outer signatureAlgorithm repeats ecdsa-with-SHA256 (1.2.840.10045.4.3.2), no parameters
     expect(sigAlg!.full.toString('hex')).toBe('300a06082a8648ce3d040302');

@@ -22,6 +22,7 @@ const utf8 = (s: string): Buffer => tlv(0x0c, Buffer.from(s, 'utf8'));
 const octets = (b: Buffer): Buffer => tlv(0x04, b);
 const bool = (v: boolean): Buffer => tlv(0x01, Buffer.from([v ? 0xff : 0x00]));
 const bitString = (b: Buffer): Buffer => tlv(0x03, Buffer.concat([Buffer.from([0]), b]));
+const utcTime = (s: string): Buffer => tlv(0x17, Buffer.from(s, 'ascii'));
 const generalizedTime = (s: string): Buffer => tlv(0x18, Buffer.from(s, 'ascii'));
 
 /** Non-negative INTEGER from big-endian magnitude bytes (minimal form). */
@@ -61,7 +62,8 @@ export interface SelfSignedCertOptions {
 export function buildSelfSignedCert(opts: SelfSignedCertOptions): Buffer {
   const sigAlg = seq(oid(OID_ECDSA_SHA256));
   const name = seq(set(seq(oid(OID_COMMON_NAME), utf8(opts.commonName))));
-  const validity = seq(generalizedTime('20200101000000Z'), generalizedTime('99991231235959Z'));
+  // RFC 5280 4.1.2.5: UTCTime for dates through 2049, GeneralizedTime from 2050 (here: "no expiry").
+  const validity = seq(utcTime('200101000000Z'), generalizedTime('99991231235959Z'));
   const spki = opts.publicKey.export({ type: 'spki', format: 'der' });
   // basicConstraints: critical, value = SEQUENCE {} (cA defaults to FALSE, so it is omitted in DER)
   const basicConstraints = seq(oid(OID_BASIC_CONSTRAINTS), bool(true), octets(seq()));
