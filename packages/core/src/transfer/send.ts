@@ -44,11 +44,13 @@ import {
 import type { HpkeContext } from '../crypto/hpke.ts';
 import type { Identity } from '../identity.ts';
 import { configDir } from '../paths.ts';
-import { PinMismatchError, connectPinned, pinnedRequest, type PinnedResponse } from '../tls.ts';
+import { PinMismatchError, type PinnedResponse } from '../tls.ts';
+import { LanTransport, NoRouteError, RelayReplyError, type Transport } from './transport.ts';
 
 export interface SendItem { kind: 'file' | 'dir' | 'text'; srcPath?: string; text?: string }
-export interface Target { deviceId: string; host: string; port: number; publicKey: KeyObject }
-export type SendResult = { deviceId: string; status: 'done' | 'failed' | 'cancelled'; sessionId: string; error?: string };
+export interface Target { deviceId: string; host?: string; port?: number; publicKey: KeyObject }
+/** 'held': the hub stores the session for an offline target and owns its delivery from now on. */
+export type SendResult = { deviceId: string; status: 'done' | 'held' | 'failed' | 'cancelled'; sessionId: string; error?: string };
 export interface SendProgress { fileId: number; sent: number; total: number } // plaintext bytes of that file
 
 export interface SendOptions {
@@ -67,6 +69,8 @@ export interface SendOptions {
   finalizeTimeoutMs?: number;
   /** TCP + TLS handshake + pin check timeout (default 10 000 ms). */
   connectTimeoutMs?: number;
+  /** How to reach the target (default: LanTransport to target.host:port). */
+  transport?: (t: Target) => Transport | Promise<Transport>;
 }
 
 export const DEFAULT_RETRY_DELAYS_MS: readonly number[] = Object.freeze([500, 1000, 2000]);
@@ -136,14 +140,15 @@ function isTerminal(e: unknown): boolean {
  */
 export async function postCancel(
   id: Identity,
-  t: { deviceId: string; host: string; port: number },
+  t: { deviceId: string; host?: string; port?: number },
   sessionId: string,
   timeoutMs: number = CANCEL_TIMEOUT_MS,
+  transport?: Transport,
 ): Promise<boolean> {
   if (!SESSION_ID_RE.test(sessionId)) return false;
   try {
-    const sock = await connectPinned(t.host, t.port, id, t.deviceId, { timeoutMs });
-    const res = await pinnedRequest(sock, 'POST', `${PREFIX}cancel/${sessionId}`, undefined, {}, {
+    const tr = transport ?? new LanTransport(id, t, timeoutMs);
+    const res = await tr.request('POST', `${PREFIX}cancel/${sessionId}`, undefined, {}, {
       timeoutMs,
       signal: AbortSignal.timeout(timeoutMs),
     });
@@ -156,6 +161,7 @@ export async function postCancel(
 function isTransient(e: unknown): boolean {
   if (e instanceof HttpStatusError) return e.status >= 500;
   if (e instanceof SourceChangedError || e instanceof PinMismatchError || e instanceof ProtocolError) return false;
+  if (e instanceof NoRouteError || e instanceof RelayReplyError) return false;
   if ((e as Error)?.name === 'AbortError') return false;
   return true; // network errors, resets, timeouts
 }
@@ -165,7 +171,8 @@ export function errorString(e: unknown): string {
   if (e instanceof HttpStatusError) return e.message;
   if (e instanceof SourceChangedError) return 'source-changed';
   if (e instanceof PinMismatchError) return 'pin-mismatch';
-  if (e instanceof ProtocolError) return 'bad-response';
+  if (e instanceof ProtocolError || e instanceof RelayReplyError) return 'bad-response';
+  if (e instanceof NoRouteError) return 'no-route';
   if (e instanceof Error) return e.message || e.name;
   return String(e);
 }
@@ -351,7 +358,8 @@ export interface OutboxEntry {
   v: 1;
   sessionId: string;
   createdAt: number;
-  target: { deviceId: string; host: string; port: number; publicKeyPem: string };
+  /** host/port: the LAN address at first send, if there was one. */
+  target: { deviceId: string; host?: string; port?: number; publicKeyPem: string };
   /** Identifies the item list, so a repeated sendTo of the same items resumes this entry. */
   itemsKey: string;
   /** The exact Offer first posted; a resume re-posts it byte-for-byte (else 409 session-conflict). */
@@ -537,7 +545,7 @@ export async function sendPrepared(id: Identity, t: Target, p: PreparedItems, op
         else {
           // Superseded: the old session can never complete; let the receiver drop its partial data.
           await opts.outbox.remove(match.sessionId);
-          await postCancel(id, t, match.sessionId);
+          await postCancel(id, t, match.sessionId, CANCEL_TIMEOUT_MS, await transportFor(id, t, opts).catch(() => undefined));
         }
       }
     }
@@ -551,8 +559,7 @@ export async function sendPrepared(id: Identity, t: Target, p: PreparedItems, op
         createdAt: manifest.createdAt,
         target: {
           deviceId: t.deviceId,
-          host: t.host,
-          port: t.port,
+          ...(t.host !== undefined && t.port !== undefined ? { host: t.host, port: t.port } : {}),
           publicKeyPem: t.publicKey.export({ type: 'spki', format: 'pem' }) as string,
         },
         itemsKey: p.itemsKey,
@@ -615,16 +622,18 @@ async function runSession(id: Identity, t: Target, entry: OutboxEntry, opts: Sen
   active.add(sessionId);
   const internal = new AbortController();
   const signal = opts.signal ? AbortSignal.any([opts.signal, internal.signal]) : internal.signal;
+  let transport: Transport | undefined;
   try {
     if (t.deviceId !== entry.target.deviceId) throw new TargetMismatchError();
     const ctx = importCtx(entry.ctxExport);
+    transport = await transportFor(id, t, opts);
     await checkSources(entry.sources);
-    await transfer(id, t, entry, ctx, signal, internal, opts);
+    const outcome = await transfer(transport, entry, ctx, signal, internal, opts);
     if (opts.outbox) await opts.outbox.remove(sessionId).catch(() => {});
-    return { ...base, status: 'done' };
+    return { ...base, status: outcome };
   } catch (e) {
     if (opts.signal?.aborted) return { ...base, status: 'cancelled' }; // pause: resumable, no cancel
-    if (isTerminal(e)) await postCancel(id, t, sessionId);
+    if (isTerminal(e) && transport) await postCancel(id, t, sessionId, CANCEL_TIMEOUT_MS, transport);
     return { ...base, status: 'failed', error: errorString(e) };
   } finally {
     internal.abort(); // releases AbortSignal.any's listener on the caller's signal
@@ -670,23 +679,26 @@ async function readChunk(src: OutboxSource, index: number): Promise<Buffer> {
   }
 }
 
+function transportFor(id: Identity, t: Target, opts: SendOptions): Promise<Transport> {
+  return Promise.resolve(opts.transport ? opts.transport(t) : new LanTransport(id, t, opts.connectTimeoutMs ?? DEFAULT_CONNECT_TIMEOUT_MS));
+}
+
+/** Runs the session over `tr`; 'held' when the hub took it for an offline target. */
 async function transfer(
-  id: Identity,
-  t: Target,
+  tr: Transport,
   entry: OutboxEntry,
   ctx: HpkeContext,
   signal: AbortSignal,
   internal: AbortController,
   opts: SendOptions,
-): Promise<void> {
+): Promise<'done' | 'held'> {
   const delays = opts.retryDelaysMs ?? DEFAULT_RETRY_DELAYS_MS;
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const finalizeTimeoutMs = opts.finalizeTimeoutMs ?? DEFAULT_FINALIZE_TIMEOUT_MS;
-  const connectTimeoutMs = opts.connectTimeoutMs ?? DEFAULT_CONNECT_TIMEOUT_MS;
   const concurrency = Math.max(1, Math.floor(opts.concurrency ?? DEFAULT_CONCURRENCY) || DEFAULT_CONCURRENCY);
   const { sessionId, manifest } = entry;
 
-  /** One request on a fresh pinned connection, with the retry policy. */
+  /** One request over the transport, with the retry policy. */
   const call = async (
     method: string,
     path: string,
@@ -697,10 +709,9 @@ async function transfer(
     for (let attempt = 0; ; attempt++) {
       if (signal.aborted) throw abortError();
       try {
-        const sock = await connectPinned(t.host, t.port, id, t.deviceId, { timeoutMs: connectTimeoutMs });
         let res: PinnedResponse;
         try {
-          res = await pinnedRequest(sock, method, PREFIX + path, body, headers, { timeoutMs: reqTimeout, signal });
+          res = await tr.request(method, PREFIX + path, body, headers, { timeoutMs: reqTimeout, signal });
         } catch (e) {
           // tls.ts reports unusable reply bodies as plain Errors; they are not transient.
           if (e instanceof Error && MALFORMED_REPLY.test(e.message)) throw new ProtocolError(e.message);
@@ -729,7 +740,7 @@ async function transfer(
   // 1. offer (the stored, byte-identical Offer)
   const offerRes = await call('POST', 'offer', Buffer.from(JSON.stringify(entry.offer)), { 'content-type': 'application/json' }, timeoutMs);
   const oj = offerRes.json;
-  if (isObj(oj) && oj.done === true) return; // already delivered (tombstone)
+  if (isObj(oj) && oj.done === true) return 'done'; // already delivered (tombstone)
   if (!isObj(oj)) throw new ProtocolError('bad offer reply');
   const have = parseHave(oj.have);
 
@@ -804,5 +815,6 @@ async function transfer(
   if (signal.aborted) throw abortError();
 
   // 3. finish
-  await call('POST', `finish/${sessionId}`, undefined, {}, finalizeTimeoutMs);
+  const fin = await call('POST', `finish/${sessionId}`, undefined, {}, finalizeTimeoutMs);
+  return tr.kind === 'held' && isObj(fin.json) && fin.json.held === true ? 'held' : 'done';
 }

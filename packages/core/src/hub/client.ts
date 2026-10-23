@@ -84,6 +84,11 @@ export class HubClient extends EventEmitter {
     return this.#state;
   }
 
+  /** The hub's device id per the current membership list. */
+  get hubDeviceId(): string {
+    return this.#o.members.list().hub.deviceId;
+  }
+
   directory(): DirectoryEntry[] {
     return this.#directory.map((d) => ({ ...d, lanAddrs: d.lanAddrs.map((a) => ({ ...a })) }));
   }
