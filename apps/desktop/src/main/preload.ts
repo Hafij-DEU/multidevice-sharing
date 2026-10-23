@@ -21,7 +21,3 @@ const api = {
 };
 
 contextBridge.exposeInMainWorld('meshdrop', api);
-if (process.env.MESHDROP_TEST === '1') {
-  // Test-only hooks (never present in normal runs): see e2e/.
-  contextBridge.exposeInMainWorld('meshdropTest', { invoke: (m: string, ...a: unknown[]) => ipcRenderer.invoke(`meshdrop:test:${m}`, ...a) });
-}

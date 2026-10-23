@@ -93,13 +93,19 @@ export class SettingsStore {
     return { ...this.#current };
   }
 
-  set(patch: Partial<Settings>): Settings {
+  /** The settings `patch` would produce, validated; nothing is saved. */
+  preview(patch: Partial<Settings>): Settings {
     const next = { ...this.#current };
     for (const [k, v] of Object.entries(patch)) {
       if (!(k in next)) throw new SettingsError(`Unknown setting ${k}.`);
       (next as Record<string, unknown>)[k] = v;
     }
     validate(next);
+    return next;
+  }
+
+  set(patch: Partial<Settings>): Settings {
+    const next = this.preview(patch);
     writeFileAtomic(this.#file, JSON.stringify(next, null, 2));
     this.#current = next;
     return this.get();

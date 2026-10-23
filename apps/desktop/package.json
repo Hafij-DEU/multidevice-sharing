@@ -22,6 +22,7 @@
   "devDependencies": {
     "@meshdrop/core": "workspace:*",
     "@playwright/test": "1.64.0",
+    "@types/qrcode": "1.5.5",
     "@types/react": "19.3.0",
     "@types/react-dom": "19.3.0",
     "electron": "42.1.0",
