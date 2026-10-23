@@ -7,7 +7,7 @@ import {
   randomBytes,
   type KeyObject,
 } from 'node:crypto';
-import { chmod, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { configDir } from './paths.ts';
 import { buildSelfSignedCert } from './x509.ts';
@@ -111,8 +111,21 @@ export async function loadOrCreateIdentity(dir: string = configDir()): Promise<I
       await rename(tmpDir, idDir); // replaces an empty identity/ dir
     } catch (e) {
       const c = (e as NodeJS.ErrnoException).code;
-      if (c === 'ENOTEMPTY' || c === 'EEXIST') return loadOrCreateIdentity(dir); // lost a race: use theirs
-      throw e;
+      if (c !== 'ENOTEMPTY' && c !== 'EEXIST') throw e;
+      // Lost a race to another process: use its identity.
+      if ((await readIfExists(keyPath)) || (await readIfExists(certPath))) return loadOrCreateIdentity(dir);
+      // identity/ holds neither file. Leftover `*.tmp` files from a crashed first run (older
+      // writeAtomic) are safe to clear; anything else is the user's and stops us, never a retry loop.
+      const names = await readdir(idDir);
+      const unexpected = names.filter((n) => !n.endsWith('.tmp'));
+      if (unexpected.length > 0) {
+        throw new Error(
+          `identity dir ${idDir} has no key.pem/cert.der but contains unexpected files: ${unexpected.join(', ')}. ` +
+            `Move them away (or restore key.pem and cert.der) and start again.`,
+        );
+      }
+      for (const n of names) await rm(join(idDir, n), { force: true });
+      await rename(tmpDir, idDir);
     }
   } finally {
     await rm(tmpDir, { recursive: true, force: true });

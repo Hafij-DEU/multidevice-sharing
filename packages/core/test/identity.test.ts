@@ -1,5 +1,5 @@
 import { X509Certificate, createHash, createPrivateKey, createPublicKey, verify } from 'node:crypto';
-import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { connect, createServer } from 'node:tls';
@@ -77,6 +77,27 @@ describe('device identity', () => {
       expect(existsSync(join(dir, 'identity', lose)), keep).toBe(false);
       expect(readFileSync(join(dir, 'identity', keep)).equals(keptBefore), keep).toBe(true);
     }
+  });
+
+  it('leftover *.tmp files from a crashed first run are cleared, not looped on', async () => {
+    const dir = tmpDir();
+    mkdirSync(join(dir, 'identity'), { recursive: true });
+    writeFileSync(join(dir, 'identity', 'key.pem.1234.tmp'), 'partial');
+    writeFileSync(join(dir, 'identity', 'cert.der.1234.tmp'), 'partial');
+    const id = await loadOrCreateIdentity(dir);
+    expect(id.deviceId).toMatch(/^[0-9a-f]{64}$/);
+    expect(readdirSync(join(dir, 'identity')).sort()).toEqual(['cert.der', 'key.pem']);
+    expect(readdirSync(dir).filter((n) => n.endsWith('.tmp'))).toEqual([]);
+    expect((await loadOrCreateIdentity(dir)).deviceId).toBe(id.deviceId);
+  });
+
+  it('an identity dir holding unknown files is an error, not an endless retry', async () => {
+    const dir = tmpDir();
+    mkdirSync(join(dir, 'identity'), { recursive: true });
+    writeFileSync(join(dir, 'identity', 'key.pem.bak'), 'user backup');
+    await expect(loadOrCreateIdentity(dir)).rejects.toThrow(/identity.*unexpected.*key\.pem\.bak/);
+    expect(readdirSync(join(dir, 'identity'))).toEqual(['key.pem.bak']);
+    expect(readdirSync(dir).filter((n) => n.endsWith('.tmp'))).toEqual([]);
   });
 
   it('frozen vector: TBSCertificate bytes are stable', () => {
