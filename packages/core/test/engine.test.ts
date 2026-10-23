@@ -32,7 +32,7 @@ afterEach(async () => {
 async function mk(opts: { home?: string; serve?: boolean } = {}): Promise<{ e: Engine; home: string; inbox: string; events: EngineEvent[] }> {
   const home = opts.home ?? tmp('md-home-');
   const inbox = join(home, 'inbox');
-  const e = await Engine.create({ home, inbox, port: 0, alias: 'test', discovery: false, serve: opts.serve ?? true });
+  const e = await Engine.create({ home, inbox, port: 0, alias: 'test', discovery: false, serve: opts.serve ?? true, autoResume: false }); // these tests drive resume by hand
   engines.push(e);
   const events: EngineEvent[] = [];
   e.on('event', (ev: EngineEvent) => events.push(ev));

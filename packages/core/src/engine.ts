@@ -770,10 +770,15 @@ export class Engine extends EventEmitter {
               transport: (t) => this.transportFor(routes.get(t.deviceId)!, t, holdBytes),
             });
       // A LAN attempt that failed for a transient reason resumes the same session over the hub once.
+      // A relay that found the target gone (our directory was stale) leaves it on the hub instead.
       for (const [i, res] of sent.entries()) {
-        if (res.status !== 'failed' || routes.get(res.deviceId)?.kind !== 'lan' || !this.hubOnline() || !isTransientError(res.error)) continue;
+        if (res.status !== 'failed' || !this.hubOnline() || this.mesh?.isTrusted(res.deviceId) !== true) continue;
+        const was = routes.get(res.deviceId)?.kind;
+        const lanHiccup = was === 'lan' && isTransientError(res.error);
+        const relayGone = was === 'relay' && res.error === 'http-503 offline';
+        if (!lanHiccup && !relayGone) continue;
         const dir = this.directory().find((d) => d.deviceId === res.deviceId);
-        const route: Route = dir?.online ? { kind: 'relay' } : { kind: 'held' };
+        const route: Route = dir?.online && !relayGone ? { kind: 'relay' } : { kind: 'held' };
         const hb = route.kind === 'held' ? await estimateHoldBytes(items) : 0;
         const t = targets.find((x) => x.deviceId === res.deviceId)!;
         sent[i] = await sendTo(this.identity, t, items, {
