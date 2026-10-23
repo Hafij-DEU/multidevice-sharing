@@ -20,6 +20,8 @@ export const DEFAULT_PING_MS = 240_000;
 /** An online link that lasts this long resets the backoff. */
 export const STABLE_LINK_MS = 60_000;
 const HANDSHAKE_TIMEOUT_MS = 15_000;
+/** Answers kept for repeats; they are small JSON bodies (chunk PUTs answer 204 with no body). */
+const ANSWER_CACHE_MAX = 1024;
 
 export class HubOfflineError extends Error {
   constructor() {
@@ -60,6 +62,8 @@ export class HubClient extends EventEmitter {
   readonly #replay = new ReplayGuard();
   readonly #pending = new Map<string, Pending>();
   readonly #keys = new Map<string, KeyObject>();
+  /** Signed answers to recently handled requests, by `${from}:${id}` (oldest evicted first). */
+  readonly #answers = new Map<string, Buffer>();
   #state: HubClientState = 'idle';
   #ws: WebSocket | null = null;
   #stopped = true;
@@ -355,7 +359,15 @@ export class HubClient extends EventEmitter {
       return; // forged, unknown sender or tampered: never reaches the handler
     }
     const h = e.header;
-    if (h.to !== me || this.#replay.seen(`${h.from}:${h.id}`)) return;
+    if (h.to !== me) return;
+    const key = `${h.from}:${h.id}`;
+    if (this.#replay.seen(key)) {
+      // Already handled: answer a repeat (the hub replaying after a link drop) from the cache,
+      // never by running the handler twice; one still in flight gets its answer when it ends.
+      const cached = this.#answers.get(key);
+      if (cached && ws.readyState === WebSocket.OPEN) ws.send(cached);
+      return;
+    }
     const headers: Record<string, string> = { 'content-length': String(e.body.length) };
     if (h.contentType) headers['content-type'] = h.contentType;
     let r: MeshResponse;
@@ -364,10 +376,14 @@ export class HubClient extends EventEmitter {
     } catch {
       r = { status: 500, headers: { 'content-type': 'application/json' }, body: Buffer.from('{"error":"internal"}') };
     }
-    if (r.noReply || ws.readyState !== WebSocket.OPEN) return;
+    if (r.noReply) return;
     const res: Parameters<typeof sealEnvelope>[0] = { v: 1, kind: 'res', id: h.id, from: me, to: h.from, status: r.status };
     if (r.headers['content-type']) res.contentType = r.headers['content-type'];
-    ws.send(encodeFrame(sealEnvelope(res, r.body, this.#o.id.privateKey)));
+    const frame = encodeFrame(sealEnvelope(res, r.body, this.#o.id.privateKey));
+    this.#answers.set(key, frame);
+    while (this.#answers.size > ANSWER_CACHE_MAX) this.#answers.delete(this.#answers.keys().next().value as string);
+    const live = this.#ws;
+    if (live && live.readyState === WebSocket.OPEN) live.send(frame);
   }
 
   #settle(id: string): Pending | undefined {

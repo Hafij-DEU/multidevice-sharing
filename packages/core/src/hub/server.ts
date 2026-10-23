@@ -20,6 +20,7 @@ import { MAX_OFFER_BODY } from '../api/handler.ts';
 import { deviceIdOf, type Identity } from '../identity.ts';
 import { signDomain, verifyDomain } from '../mesh/canonical.ts';
 import { decodeFrame, encodeFrame, openEnvelope, sealEnvelope, type Envelope } from '../mesh/envelope.ts';
+import { heldSessionOf, type HeldSession, type HeldStore } from './held.ts';
 import type { MembershipStore } from '../mesh/members.ts';
 import { signList, type Member, type MembershipList, type SignedMembership } from '../mesh/membership.ts';
 import { peerDeviceId } from '../tls.ts';
@@ -53,6 +54,8 @@ export interface HubServerOptions {
   hubLan?: () => LanAddr[];
   /** A relayed request the target does not answer within this is failed with 504 (default 600 000 ms). */
   relayTimeoutMs?: number;
+  /** Store for sessions sent to offline devices; without it they get 503 offline. */
+  held?: HeldStore;
   /** Observes every frame the hub forwards (tests, diagnostics). */
   onRelay?: (frame: Buffer) => void;
   now?: () => number;
@@ -60,7 +63,8 @@ export interface HubServerOptions {
 
 export const DEFAULT_RELAY_TIMEOUT_MS = 600_000;
 
-interface Relay { from: string; to: string; timer: NodeJS.Timeout }
+interface Relay { from: string; to: string; timer: NodeJS.Timeout; onRes?: (e: Envelope | null) => void }
+const HELD_PRUNE_INTERVAL_MS = 3600_000;
 
 interface Conn {
   ws: WebSocket;
@@ -98,7 +102,9 @@ export class HubServer extends EventEmitter {
   /** Relayed requests awaiting the target's res, by `${from}:${id}`. */
   readonly #relays = new Map<string, Relay>();
   readonly #keys = new Map<string, KeyObject>();
+  readonly #replaying = new Set<string>();
   #sweep: NodeJS.Timeout;
+  #prune: NodeJS.Timeout | null = null;
   #ingress: HttpServer | null = null;
   #closed = false;
 
@@ -111,6 +117,12 @@ export class HubServer extends EventEmitter {
     this.#wss = new WebSocketServer({ noServer: true, maxPayload: MAX_FRAME_BYTES });
     this.#sweep = setInterval(() => this.#dropSilent(), Math.max(20, Math.min(60_000, Math.floor(this.#heartbeatMs / 4))));
     this.#sweep.unref();
+    const held = opts.held;
+    if (held) {
+      void held.prune().catch(() => {});
+      this.#prune = setInterval(() => void held.prune().catch(() => {}), HELD_PRUNE_INTERVAL_MS);
+      this.#prune.unref();
+    }
   }
 
   /** Serves the link on an HTTPS (mTLS) server: the TLS client certificate, if any, must match. */
@@ -138,8 +150,8 @@ export class HubServer extends EventEmitter {
     if (this.#closed) return;
     this.#closed = true;
     clearInterval(this.#sweep);
-    for (const r of this.#relays.values()) clearTimeout(r.timer);
-    this.#relays.clear();
+    if (this.#prune) clearInterval(this.#prune);
+    for (const key of [...this.#relays.keys()]) this.#failRelay(key, 503, 'offline');
     for (const c of this.#all) c.ws.terminate();
     this.#all.clear();
     this.#online.clear();
@@ -213,7 +225,25 @@ export class HubServer extends EventEmitter {
     if (h.from !== sender || h.to === sender || !this.#opts.members.isTrusted(h.to)) {
       return this.#hubReply(sender, h.id, 400, 'bad-envelope');
     }
-    if (!this.#online.has(h.to)) return this.#offlineTarget(e);
+    const held = this.#opts.held;
+    if (held) {
+      // A held session in progress keeps being stored even if the target came online meanwhile.
+      const sid = heldSessionOf(e);
+      void (async () => {
+        if (sid !== null && (await held.isOpen(h.to, sid))) return this.#hold(e);
+        if (!this.#online.has(h.to)) return this.#hold(e);
+        this.#forward(e, buf);
+      })().catch(() => this.#hubReply(sender, h.id, 500, 'internal'));
+      return;
+    }
+    if (!this.#online.has(h.to)) return this.#hubReply(sender, h.id, 503, 'offline');
+    this.#forward(e, buf);
+  }
+
+  /** Relays a req to its (online) target; the target's res goes back to the sender. */
+  #forward(e: Envelope, buf: Buffer): void {
+    const h = e.header;
+    const sender = h.from;
     const key = `${sender}:${h.id}`;
     if (this.#relays.has(key)) return; // duplicate in flight: the first answer serves it
     const timer = setTimeout(() => {
@@ -224,7 +254,7 @@ export class HubServer extends EventEmitter {
     timer.unref();
     this.#relays.set(key, { from: sender, to: h.to, timer });
     this.#opts.onRelay?.(buf);
-    this.sendTo(h.to, buf);
+    if (!this.sendTo(h.to, buf)) this.#failRelay(key, 503, 'offline');
   }
 
   #routeRes(sender: string, e: Envelope, buf: Buffer): void {
@@ -240,13 +270,110 @@ export class HubServer extends EventEmitter {
     }
     clearTimeout(r.timer);
     this.#relays.delete(key);
+    if (r.onRes) return r.onRes(e);
     this.#opts.onRelay?.(buf);
     this.sendTo(r.from, buf);
   }
 
-  /** The target is not connected (held delivery hooks in here). */
-  #offlineTarget(e: Envelope): void {
-    this.#hubReply(e.header.from, e.header.id, 503, 'offline');
+  /** Ends a relay without the target's answer (hub replay: null; a sender: a hub-signed error). */
+  #failRelay(key: string, status: number, error: string): void {
+    const r = this.#relays.get(key);
+    if (!r) return;
+    clearTimeout(r.timer);
+    this.#relays.delete(key);
+    if (r.onRes) return r.onRes(null);
+    this.#hubReply(r.from, key.slice(key.indexOf(':') + 1), status, error);
+  }
+
+  // ---- held delivery ------------------------------------------------------------------------
+
+  async #hold(e: Envelope): Promise<void> {
+    const h = e.header;
+    const r = await this.#opts.held!.put(e);
+    const sid = heldSessionOf(e);
+    const res = sealEnvelope(
+      { v: 1, kind: 'res', id: h.id, from: this.#opts.id.deviceId, to: h.from, status: r.status, ...(r.body ? { contentType: 'application/json' } : {}) },
+      r.body ? Buffer.from(JSON.stringify(r.body)) : Buffer.alloc(0),
+      this.#opts.id.privateKey,
+    );
+    this.sendTo(h.from, encodeFrame(res));
+    // A session finished while its target is already online is delivered right away.
+    if (sid !== null && r.status === 200 && h.path?.startsWith('/mesh/v1/finish/') && this.#online.has(h.to)) void this.#replay(h.to);
+  }
+
+  /** Sends a stored req to its target as the hub, resolving with the target's res (null if none). */
+  #replayOne(e: Envelope): Promise<Envelope | null> {
+    const h = e.header;
+    const key = `${h.from}:${h.id}`;
+    return new Promise((resolve) => {
+      if (this.#relays.has(key)) this.#failRelay(key, 503, 'offline');
+      const timer = setTimeout(() => this.#failRelay(key, 504, 'relay-timeout'), this.#opts.relayTimeoutMs ?? DEFAULT_RELAY_TIMEOUT_MS);
+      timer.unref();
+      this.#relays.set(key, { from: h.from, to: h.to, timer, onRes: resolve });
+      if (!this.sendTo(h.to, encodeFrame(e))) this.#failRelay(key, 503, 'offline');
+    });
+  }
+
+  #notify(to: string, notice: { t: string; sessionId: string } & Record<string, unknown>): void {
+    if (!this.sendTo(to, JSON.stringify(notice))) void this.#opts.held!.queueNotice(to, notice.sessionId, notice).catch(() => {});
+  }
+
+  /** Replays every finished held session for `to`; a link drop leaves the rest for the next connect. */
+  async #replay(to: string): Promise<void> {
+    const held = this.#opts.held;
+    if (!held || this.#replaying.has(to)) return;
+    this.#replaying.add(to);
+    try {
+      for (const s of await held.pending(to)) {
+        if (!this.#online.has(to)) return;
+        const outcome = await this.#replaySession(s);
+        if (outcome === 'retry') return;
+      }
+    } catch {
+      /* a broken held session stays until the TTL prunes it */
+    } finally {
+      this.#replaying.delete(to);
+    }
+  }
+
+  async #replaySession(s: HeldSession): Promise<'done' | 'failed' | 'retry'> {
+    const held = this.#opts.held!;
+    let skip: Record<string, number[]> = {};
+    const fail = async (status: number, error: string): Promise<'failed'> => {
+      await held.remove(s.to, s.sessionId);
+      this.#notify(s.from, { t: 'held-failed', to: s.to, sessionId: s.sessionId, status, error });
+      return 'failed';
+    };
+    for await (const e of s.envelopes()) {
+      const chunk = /^\/mesh\/v1\/chunk\/[^/]+\/(\d+)\/(\d+)$/.exec(e.header.path ?? '');
+      if (chunk && skip[chunk[1]!]?.includes(Number(chunk[2]))) continue;
+      const res = await this.#replayOne(e);
+      if (!res) return 'retry';
+      const st = res.header.status!;
+      const body = (() => {
+        try {
+          return res.body.length ? (JSON.parse(res.body.toString()) as Record<string, unknown>) : {};
+        } catch {
+          return {};
+        }
+      })();
+      if (st >= 500) return 'retry';
+      if (st >= 400) return fail(st, typeof body.error === 'string' ? body.error : 'rejected');
+      if (e.header.path === '/mesh/v1/offer') {
+        if (body.done === true) {
+          await held.remove(s.to, s.sessionId);
+          this.#notify(s.from, { t: 'held-delivered', to: s.to, sessionId: s.sessionId, files: body.files ?? [] });
+          return 'done';
+        }
+        if (body.have && typeof body.have === 'object') skip = body.have as Record<string, number[]>;
+      }
+      if (e.header.path?.startsWith('/mesh/v1/finish/')) {
+        await held.remove(s.to, s.sessionId);
+        this.#notify(s.from, { t: 'held-delivered', to: s.to, sessionId: s.sessionId, files: body.files ?? [] });
+        return 'done';
+      }
+    }
+    return 'retry';
   }
 
   // ---- membership authority ----------------------------------------------------------------
@@ -327,6 +454,8 @@ export class HubServer extends EventEmitter {
         this.#online.delete(c.deviceId);
         const s = this.#seen.get(c.deviceId);
         if (s) s.lastSeen = c.lastSeen;
+        // Requests still waiting on this device will never be answered over this link.
+        for (const [key, r] of [...this.#relays]) if (r.to === c.deviceId) this.#failRelay(key, 503, 'offline');
         this.emit('offline', c.deviceId);
         this.#pushDirectory();
       }
@@ -395,6 +524,11 @@ export class HubServer extends EventEmitter {
     c.ws.send(JSON.stringify(welcome));
     this.emit('online', deviceId);
     this.#pushDirectory(deviceId);
+    const held = this.#opts.held;
+    if (held) {
+      void held.takeNotices(deviceId).then((ns) => { for (const n of ns) this.sendTo(deviceId, JSON.stringify(n)); }, () => {});
+      void this.#replay(deviceId);
+    }
   }
 
   #onAuthed(c: Conn, data: RawData, isBinary: boolean): void {

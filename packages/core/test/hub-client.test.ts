@@ -228,7 +228,7 @@ describe('HubClient inbound relay', () => {
     expect(replies).toEqual([]);
   });
 
-  it('a valid req is handled once (replays dropped) and answered with a signed res', async () => {
+  it('a valid req is handled once (an in-flight replay is dropped) and answered with a signed res', async () => {
     const { a, ws, replies } = await linked();
     ws.send(req(B));
     ws.send(req(B));
@@ -236,8 +236,17 @@ describe('HubClient inbound relay', () => {
     await sleep(150);
     expect(a.handled.length).toBe(1);
     expect(a.handled[0]!.peer).toBe(B.deviceId);
-    expect(replies.length).toBe(1);
     const res = decodeFrame(replies[0]!);
     expect(res.header).toMatchObject({ kind: 'res', id: 'BBBBBBBBBBBBBBBBBBBBBB', from: A.deviceId, to: B.deviceId, status: 200 });
+  });
+
+  it('a req repeated after it was answered gets the cached res again, without re-running the handler', async () => {
+    const { a, ws, replies } = await linked();
+    ws.send(req(B, 'CCCCCCCCCCCCCCCCCCCCCC'));
+    await until(() => replies.length === 1);
+    ws.send(req(B, 'CCCCCCCCCCCCCCCCCCCCCC')); // e.g. the hub replaying a held session after a link drop
+    await until(() => replies.length === 2);
+    expect(a.handled.length).toBe(1);
+    expect(replies[1]!.equals(replies[0]!)).toBe(true);
   });
 });
