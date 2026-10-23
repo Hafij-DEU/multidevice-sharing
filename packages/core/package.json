@@ -4,6 +4,9 @@
   "private": true,
   "license": "GPL-3.0-only",
   "type": "module",
+  "bin": {
+    "meshdrop": "src/cli.ts"
+  },
   "scripts": {
     "test": "vitest run",
     "typecheck": "tsc -p . --noEmit"

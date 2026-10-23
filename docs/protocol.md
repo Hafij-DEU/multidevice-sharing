@@ -1,6 +1,107 @@
-# MeshDrop wire protocol
+# MeshDrop wire protocol (v1)
 
-Written incrementally during M1; completed in Task 9. This file currently covers the receiver HTTP API.
+This is the normative description of protocol v1, as implemented by the Node engine in `packages/core/src`.
+A second engine (the M4 Android/Java engine) must follow it and reproduce the frozen vectors in
+`protocol/vectors/` byte for byte. Contents: identity and device id, TLS rules, HPKE suite and chunk
+sealing, manifest schema, endpoints, sender/resume algorithm, announce packet, M1 pairing, test vectors.
+
+## Identity and device id
+
+Implemented in `identity.ts` and `x509.ts`.
+
+- Every device has one long-term **ECDSA P-256** key pair and a **self-signed X.509 v3 certificate** for it:
+  signature ECDSA-with-SHA256, subject = issuer = `CN=meshdrop-<first 8 hex of SHA-256(SPKI DER)>`, a 16-byte
+  random positive serial, validity `20200101000000Z` to `99991231235959Z` (GeneralizedTime), and one critical
+  `basicConstraints` extension with `cA` FALSE. The same key is used for TLS, ECDSA and HPKE (static DH key).
+- **Device id** = lowercase hex SHA-256 of the certificate **DER** (64 characters). The short display form is
+  its first 8 characters. Ids are never taken from a JSON field when the certificate is available: on the
+  wire the id is always recomputed from the certificate the peer presented.
+- Stored as `<config>/identity/key.pem` (PKCS#8, mode 0600) and `<config>/identity/cert.der`. Config dir:
+  `$MESHDROP_HOME`, else `$XDG_CONFIG_HOME/meshdrop`, else `~/.config/meshdrop`. On load the certificate must
+  verify under the stored key.
+- A device id stays valid as long as the certificate DER is unchanged; re-issuing the certificate (even for
+  the same key) is a new device id and needs re-pairing.
+
+## TLS rules
+
+Implemented in `tls.ts`.
+
+- **TLS 1.3 only** (`minVersion: 'TLSv1.3'`) on every connection: server, pinned client, probe.
+- **Server** (TCP 53318 by default): presents the device certificate, requests a client certificate but
+  accepts any (self-signed peers cannot pass CA validation). The application decides trust: the client's
+  device id (SHA-256 of its certificate DER) must be in the TrustStore for every route except `GET info`.
+- **Pinned client** (every transfer request): presents its own certificate, disables CA and hostname
+  validation, and on `secureConnect` checks that SHA-256(server certificate DER) equals the expected device
+  id. On a mismatch (or no certificate) the socket is destroyed before any application byte is written
+  (`pin-mismatch`, never retried). Each request uses a fresh connection.
+- **Probe / pairing** (`GET info`, pairing): TLS 1.3 without pinning and **without a client certificate**,
+  so a scan does not reveal who is scanning. The result is only trusted as far as the certificate goes: the
+  device id is the hash of the presented certificate, and an `info.deviceId` that disagrees fails the probe.
+- The trust store (`<config>/trust.json`, mode 0600) holds `{deviceId, alias, publicKeyPem (SPKI, EC P-256
+  only), addedAt}` per device; anything else (a private key PEM, a certificate PEM, another curve) is refused.
+
+## HPKE suite and chunk sealing
+
+Implemented in `crypto/hpke.ts` (RFC 9180 over `node:crypto`) and `chunk.ts`.
+
+| Parameter | Value |
+|---|---|
+| mode | `mode_auth` `0x02` (sender authenticated by its static key) |
+| KEM | DHKEM(P-256, HKDF-SHA256) `0x0010` |
+| KDF | HKDF-SHA256 `0x0001` |
+| AEAD | AES-256-GCM `0x0002` (16-byte tag appended to the ciphertext) |
+| `info` | UTF-8 `"meshdrop/v1 " + sessionId` |
+| `enc` | uncompressed SEC1 point (65 bytes), base64 in the Offer |
+
+- One HPKE context per **(session, target)**. The sender runs `SetupAuthS(pkR = receiver's static key,
+  info, skS = sender's static key)`; the receiver runs `SetupAuthR(enc, skR, info, pkS)` with `pkS` taken from
+  its **trust store**, never from the offer.
+- Messages are sealed at an explicit sequence number (random access, so chunks can be resent in any order):
+  nonce = `base_nonce XOR I2OSP(seq, 12)` (RFC 9180 section 5.2).
+
+| Message | seq | AAD |
+|---|---|---|
+| manifest | `0` | UTF-8(`sessionId`) |
+| chunk `(fileId, index)` | `((fileId + 1) << 32) \| index` (u64; `fileId`, `index` are u32) | UTF-8(`sessionId`) ‖ u32be(`fileId`) ‖ u32be(`index`) |
+
+  Sequence numbers never repeat within a context, and every ciphertext is bound to its session and position.
+- **Chunks:** `CHUNK_SIZE` = 4 194 304 bytes (4 MiB) of plaintext; chunk `i` of a file covers bytes
+  `[i * CHUNK_SIZE, min(size, (i + 1) * CHUNK_SIZE))`. A file has `ceil(size / CHUNK_SIZE)` chunks (a 0-byte
+  file has none). A sealed chunk is at most `CHUNK_SIZE + 16` bytes. Different plaintext must never be sealed
+  under a seq already used in the same context (see Sender algorithm, step 5).
+- **Session id:** 16 random bytes, base64url without padding (22 characters `[A-Za-z0-9_-]`).
+- **Offer** (the body of `POST offer`):
+
+  ```json
+  {"v":1,"sessionId":"<22 chars>","from":"<sender device id>","to":"<receiver device id>","enc":"<base64>","sealedManifest":"<base64>"}
+  ```
+
+  `enc` and `sealedManifest` are standard base64 with padding. The receiver opens the manifest and requires
+  `manifest.sessionId`, `manifest.from` and `manifest.to` to equal the offer's `sessionId`, `from` and its own
+  device id; `offer.from` must also equal the TLS peer's device id.
+
+## Manifest schema
+
+The manifest is the HPKE plaintext at seq 0: UTF-8 JSON, serialized **compactly with keys in this fixed
+order** (byte-exactness matters only to the sealing side; receivers may parse with any JSON parser). String
+escaping is ECMAScript `JSON.stringify`'s: only `"`, `\`, control characters below U+0020 and lone surrogates
+are escaped; everything else is raw UTF-8.
+
+```text
+Manifest  = { v: 1, sessionId: string(22), from: deviceId, to: deviceId, createdAt: uint (epoch ms),
+              files: FileEntry[], dirs: DirEntry[], text?: string }      // text omitted when absent
+FileEntry = { fileId: u32, path: string, size: uint (<= 2^53-1), mime: string, sha256: hex64 (plaintext) }
+DirEntry  = { path: string }                                             // empty directories only
+```
+
+Rules enforced by the receiver (`422 bad-offer` otherwise): `v` is 1; `fileId`s unique; at most 100 000 files
+and 100 000 dirs; `text` at most 1 MiB of UTF-8. Paths are `/`-separated and relative; the receiver
+sanitizes every path (`sanitize.ts`): absolute paths, drive letters, NUL and `..` segments are rejected; `\` also
+splits segments; empty and `.` segments are dropped; `<>:"|?*`, control characters and lone surrogates become `_`;
+Windows-reserved stems (`con`, `nul`, `com1`, ...) get a `_` prefix; at most 32 segments, 240 UTF-8 bytes per
+segment (longer names are truncated, keeping an extension of up to 16 bytes) and 3072 bytes in total. A name that
+already exists in the inbox becomes `stem (n).ext`; nothing is ever overwritten. The sender numbers files
+`0..n-1`; `sha256` is checked by the receiver on `complete` (`422 integrity`).
 
 ## Endpoints (v1)
 
@@ -107,3 +208,43 @@ oversized). Unknown extra fields are ignored. Packets carrying the receiver's ow
   client certificate. The peer's device id is the hash of the certificate it presented; if `info.deviceId`
   differs, or `v`/`alias`/`deviceType` are invalid, the probe fails and nothing is emitted. Default timeout 5 s,
   response body capped at 4 KiB.
+
+## M1 pairing and the engine
+
+Implemented in `engine.ts` (`Engine`) and `cli.ts` (`meshdrop`). Not part of the wire protocol; recorded here so
+other engines behave the same.
+
+- **Manual pairing** (`pairManual(host, port, alias)`, CLI `meshdrop pair <host[:port]> <alias>`) is the M1
+  trust bootstrap; M2 replaces it with QR pairing plus hub membership. It opens an unpinned TLS 1.3 connection
+  without a client certificate, takes the device id (SHA-256 of the certificate DER) and the certificate's
+  public key (stored as SPKI PEM) from what the peer presented, then probes `GET info` (which must agree) and
+  adds the device to the trust store under the user-chosen alias. Pairing with one's own device id is refused.
+  Pairing is one-directional: the other device must pair back before it accepts our offers. The address is
+  remembered in `<config>/manual-peers.json` and re-probed (2 s timeout) on every engine start, so manually
+  paired devices are present without multicast.
+- **Targets.** A target is given as a unique prefix (at least 4 hex characters, case-insensitive) of a trusted
+  device id; an unknown, ambiguous or malformed prefix is an error before anything is sent. `all` means every
+  trusted device currently present in the peer table (empty: nothing is sent, the CLI exits non-zero). A trusted
+  device that is not present fails with `offline`. Host and port come from the peer table, the HPKE recipient
+  key from the trust store.
+- **Outbox.** Every engine send is persisted in `<config>/outbox/` (see Sender algorithm), so a send interrupted
+  by `stop()` or a crash is `cancelled`/`failed` and resumable. Nothing resumes automatically on start;
+  `resumePending()` (CLI `meshdrop resume`) resumes every entry whose device is trusted and present.
+- **Who runs discovery.** Only an engine that runs the receiver server announces and listens for multicast.
+  A client-only engine (the CLI's `pair`, `send`, `peers`, `resume`, which run next to a `listen` on the same
+  config dir) never announces, since it would advertise a server it does not run; it reaches trusted devices at
+  their recorded manual addresses.
+- **Trust changes across processes.** A running engine re-reads `trust.json` when the file changes on disk, so a
+  device paired by a separate `meshdrop pair` process is accepted by a running `meshdrop listen` at once.
+- **Defaults.** Port 53318, inbox `~/Downloads/MeshDrop`, alias = host name (at most 64 characters),
+  device type `desktop`.
+
+## Test vectors
+
+Frozen files in `protocol/vectors/`; a conforming engine must reproduce them byte for byte.
+
+| File | Pins | Checked by |
+|---|---|---|
+| `hpke-auth-p256.json` | RFC 9180 test vectors for mode_auth with DHKEM(P-256, HKDF-SHA256), HKDF-SHA256, AES-128-GCM and AES-256-GCM: shared secret, key schedule (key, base_nonce, exporter secret) and sealed messages at successive seqs | `packages/core/test/hpke.test.ts` |
+| `chunk-v1.json` | MeshDrop sealing: fixed sender/receiver/ephemeral scalars, `info`, the exact manifest JSON bytes, `enc`, the sealed manifest (seq 0), one sealed chunk (seq/AAD layout above) | `packages/core/test/chunk.test.ts` |
+| `x509-v1.json` | Device certificate: the TBSCertificate bytes for a fixed key, serial and CN (the ECDSA signature is randomized, so only the TBS is pinned) and the device-id rule | `packages/core/test/identity.test.ts` |
