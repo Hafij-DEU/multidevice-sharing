@@ -10,6 +10,7 @@ import { Discovery, type Announce, type PeerInfo } from '../src/discovery.ts';
 import { loadOrCreateIdentity, type Identity } from '../src/identity.ts';
 import { serverTlsOptions } from '../src/tls.ts';
 import { cleanupEngines, makeEngines } from './engines.ts';
+import { multicastIt, probeLoopbackMulticast } from './multicast.ts';
 
 const GROUP = '224.0.0.168';
 const LO = '127.0.0.1';
@@ -69,43 +70,11 @@ async function rawSender(port: number): Promise<(data: Buffer | string) => Promi
   return (data) => new Promise<void>((resolve, reject) => s.send(data, port, GROUP, (e) => (e ? reject(e) : resolve())));
 }
 
-// Loopback multicast is unavailable in some sandboxes/CI kernels: probe once with a self-send and
-// skip (with a reason) the tests that need it instead of failing them.
 let multicastOk = false;
 beforeAll(async () => {
-  const port = freshPort();
-  const rx = createSocket({ type: 'udp4', reuseAddr: true });
-  const tx = createSocket({ type: 'udp4', reuseAddr: true });
-  try {
-    await new Promise<void>((r, j) => {
-      rx.once('error', j);
-      rx.bind(port, () => r());
-    });
-    rx.addMembership(GROUP, LO);
-    await new Promise<void>((r) => tx.bind(0, LO, () => r()));
-    tx.setMulticastInterface(LO);
-    tx.setMulticastLoopback(true);
-    multicastOk = await new Promise<boolean>((resolve) => {
-      const t = setTimeout(() => resolve(false), 500);
-      rx.once('message', () => {
-        clearTimeout(t);
-        resolve(true);
-      });
-      tx.send('ping', port, GROUP, () => {});
-    });
-  } catch {
-    multicastOk = false;
-  } finally {
-    rx.close();
-    tx.close();
-  }
+  multicastOk = await probeLoopbackMulticast(freshPort());
 });
-
-const mcast = (name: string, fn: () => Promise<void>) =>
-  it.skipIf(!!process.env.CI)(name, async (ctx) => {
-    if (!multicastOk) ctx.skip('loopback multicast does not deliver in this environment');
-    await fn();
-  });
+const mcast = multicastIt(() => multicastOk);
 
 describe('Discovery (multicast)', () => {
   mcast('two instances discover each other within 1 s', async () => {

@@ -6,10 +6,11 @@ import { closeSync, existsSync, ftruncateSync, mkdtempSync, openSync, readFileSy
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { newSessionId } from '../src/chunk.ts';
 import { Engine, UnknownDeviceError, type EngineEvent } from '../src/engine.ts';
 import { Inbox } from '../src/inbox.ts';
+import { multicastIt, probeLoopbackMulticast } from './multicast.ts';
 import { TrustStore } from '../src/trust.ts';
 
 const sha = (b: Buffer) => createHash('sha256').update(b).digest('hex');
@@ -51,6 +52,14 @@ function fakeTrusted(store: TrustStore, deviceId: string, alias: string): void {
   const { publicKey } = generateKeyPairSync('ec', { namedCurve: 'P-256' });
   store.add({ deviceId, alias, publicKeyPem: publicKey.export({ type: 'spki', format: 'pem' }) as string, addedAt: 1 });
 }
+
+// Disjoint from discovery.test.ts's UDP ports (53900 + pid-derived offsets) and from 53317/53318.
+const mcastPort = 45000 + Math.floor(Math.random() * 999);
+let multicastOk = false;
+beforeAll(async () => {
+  multicastOk = await probeLoopbackMulticast(mcastPort);
+});
+const mcast = multicastIt(() => multicastOk);
 
 describe('Engine', () => {
   it('two engines pairManual each other, then send("all", [file]) delivers it', async () => {
@@ -206,9 +215,9 @@ describe('Engine', () => {
     expect(await a2.e.resumePending()).toEqual([]);
   });
 
-  it('only a serving engine runs multicast discovery; a client-only engine never announces', async () => {
+  mcast('only a serving engine runs multicast discovery; a client-only engine never announces', async () => {
     // Disjoint from discovery.test.ts's UDP ports (53900 + pid-derived offsets) and from 53317/53318.
-    const port = 45000 + Math.floor(Math.random() * 1000);
+    const port = mcastPort + 1;
     const d = { port, iface: '127.0.0.1', intervalMs: 50, ttlMs: 2000 };
     const watcherHome = tmp('md-home-');
     const watcher = await Engine.create({ home: watcherHome, inbox: join(watcherHome, 'inbox'), port: 0, discovery: d });
