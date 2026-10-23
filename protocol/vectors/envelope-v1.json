@@ -1,0 +1,32 @@
+{
+  "description": "Relay envelope v1. sig = ECDSA-P256-SHA256 (DER, base64) over utf8(domain) || 0x00 || utf8(canonicalJson(header without sig)). bodySha256 = hex SHA-256 of the body. frame = u32be(len(utf8(canonicalJson(header)))) || that header || body.",
+  "domain": "meshdrop-envelope-v1",
+  "senderScalarHex": "8f1a8e5d9a2c3b4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5",
+  "senderSpkiDerHex": "3059301306072a8648ce3d020106082a8648ce3d03010703420004c989714a3e04c17bbcac35c61630b326addf88d8aac4f78d2b04d5cb128081e96446ac00bb687c816ed5a94c17d84684bed5265618bf4daa3080a55ca29a1597",
+  "unsignedHeader": {
+    "v": 1,
+    "kind": "req",
+    "id": "AAAAAAAAAAAAAAAAAAAAAA",
+    "from": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "to": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "method": "PUT",
+    "path": "/mesh/v1/chunk/AAAAAAAAAAAAAAAAAAAAAA/0/1",
+    "contentType": "application/octet-stream",
+    "bodySha256": "1e6f3841a825ff680f003dbea70725edf9a4df64b1e0bbfe20a68960c755e2ba"
+  },
+  "unsignedHeaderCanonical": "{\"bodySha256\":\"1e6f3841a825ff680f003dbea70725edf9a4df64b1e0bbfe20a68960c755e2ba\",\"contentType\":\"application/octet-stream\",\"from\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"id\":\"AAAAAAAAAAAAAAAAAAAAAA\",\"kind\":\"req\",\"method\":\"PUT\",\"path\":\"/mesh/v1/chunk/AAAAAAAAAAAAAAAAAAAAAA/0/1\",\"to\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"v\":1}",
+  "bodyHex": "7365616c6564206368756e6b206279746573",
+  "header": {
+    "v": 1,
+    "kind": "req",
+    "id": "AAAAAAAAAAAAAAAAAAAAAA",
+    "from": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "to": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "method": "PUT",
+    "path": "/mesh/v1/chunk/AAAAAAAAAAAAAAAAAAAAAA/0/1",
+    "contentType": "application/octet-stream",
+    "bodySha256": "1e6f3841a825ff680f003dbea70725edf9a4df64b1e0bbfe20a68960c755e2ba",
+    "sig": "MEUCIQCluKpHSOoAOwr4V+wMXHjPrDsgfqeqqC5SK1BeLtYTXwIgJBcMXZsOSM/M07FyIIvdsoe1P18iEVrHooR2rEzBFsA="
+  },
+  "frameHex": "000001e87b22626f6479536861323536223a2231653666333834316138323566663638306630303364626561373037323565646639613464663634623165306262666532306136383936306337353565326261222c22636f6e74656e7454797065223a226170706c69636174696f6e2f6f637465742d73747265616d222c2266726f6d223a2261616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161222c226964223a2241414141414141414141414141414141414141414141222c226b696e64223a22726571222c226d6574686f64223a22505554222c2270617468223a222f6d6573682f76312f6368756e6b2f414141414141414141414141414141414141414141412f302f31222c22736967223a224d4555434951436c754b7048534f6f414f777234562b774d58486a507244736766716571714335534b3142654c745954587749674a42634d585a734f534d2f4d3037467949497664736f653150313869455672486f6f523272457a424673413d222c22746f223a2262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262222c2276223a317d7365616c6564206368756e6b206279746573"
+}
