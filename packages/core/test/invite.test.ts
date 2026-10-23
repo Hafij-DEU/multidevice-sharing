@@ -49,8 +49,9 @@ async function until(cond: () => boolean, ms = 5000): Promise<void> {
 let H: Identity;
 let A: Identity;
 let N: Identity; // the joining device
+let M: Identity; // a second device holding the same QR
 beforeAll(async () => {
-  [H, A, N] = (await Promise.all([1, 2, 3].map(() => loadOrCreateIdentity(tmpDir())))) as [Identity, Identity, Identity];
+  [H, A, N, M] = (await Promise.all([1, 2, 3, 4].map(() => loadOrCreateIdentity(tmpDir())))) as [Identity, Identity, Identity, Identity];
 });
 const spkiPem = (id: Identity) => id.publicKey.export({ type: 'spki', format: 'pem' }) as string;
 const ID1 = '1'.repeat(64);
@@ -113,6 +114,33 @@ describe('InviteBook', () => {
     for (let k = 0; k < INVITE_MAX_ATTEMPTS; k++) expect(book.consume(ID2, ID1, 'AAAA')).toBe('bad-proof');
     expect(INVITE_MAX_ATTEMPTS).toBe(5);
     expect(book.consume(ID2, ID1, joinProof(i.secret, ID2, ID1))).toBe('burned');
+  });
+
+  it('registering a secret the book already holds never resets it (a used invite stays used)', () => {
+    const book = new InviteBook();
+    const i = book.create(ID1, ID2, [], []);
+    expect(book.consume(ID2, ID1, joinProof(i.secret, ID2, ID1))).toBe('ok');
+    book.register(i);
+    expect(book.consume(ID2, ID1, joinProof(i.secret, ID2, ID1))).toBe('used');
+  });
+
+  it('register keeps the remaining lifetime it is given, never more than the invite TTL', () => {
+    let t = 1_000;
+    const book = new InviteBook(() => t);
+    const s = Buffer.alloc(16, 3);
+    book.register({ secret: s, inviter: ID1, mesh: ID2, lan: [], hubUrls: [], expiresAt: 0 }, 1000);
+    t += 1001;
+    expect(book.consume(ID2, ID1, joinProof(s, ID2, ID1))).toBe('expired');
+    book.register({ secret: Buffer.alloc(16, 4), inviter: ID1, mesh: ID2, lan: [], hubUrls: [], expiresAt: 0 }, 10 * INVITE_TTL_MS);
+    t += INVITE_TTL_MS + 1;
+    expect(book.consume(ID2, ID1, joinProof(Buffer.alloc(16, 4), ID2, ID1))).toBe('expired');
+  });
+
+  it('markUsed burns the live invite of an inviter', () => {
+    const book = new InviteBook();
+    const i = book.create(ID1, ID2, [], []);
+    expect(book.markUsed(ID1)).toBe(true);
+    expect(book.consume(ID2, ID1, joinProof(i.secret, ID2, ID1))).toBe('used');
   });
 
   it('expiry is judged by the book’s own clock', () => {
@@ -240,6 +268,40 @@ describe('joining over the LAN', () => {
     const invite = h.invites.create(H.deviceId, spkiSha256(m.anchor), [{ host: '127.0.0.1', port: h.port }], []);
     const forged = { ...invite, secret: Buffer.alloc(16, 1) };
     await expect(joinViaLan(N, inviteUri(forged), 'phone', tmpDir())).rejects.toThrow(/bad-proof/);
+  });
+});
+
+describe('an invite is single-use across the LAN and the hub (I2)', () => {
+  it('redeemed over the LAN via a member: the hub copy is burned too', async () => {
+    const m = await makeMesh();
+    const h = await startHub(m);
+    const url = `ws://127.0.0.1:${h.ingress}/mesh/v1/hub`;
+    await h.hub.setUrls([url]);
+    const a = await startA(m, () => h.port);
+    a.client.start();
+    await until(() => a.client.state === 'online' && a.members.list().hub.urls.length === 1);
+    const invite = a.invites.create(A.deviceId, spkiSha256(m.anchor), [{ host: '127.0.0.1', port: a.port }], [url]);
+    a.client.registerInvite(invite);
+    await sleep(100);
+    expect(await joinViaLan(N, inviteUri(invite), 'n', tmpDir())).toBe('member');
+    await expect(joinViaHub(M, inviteUri(invite), 'm', tmpDir())).rejects.toThrow(/used/);
+  });
+
+  it('redeemed over the hub: the inviter’s own copy is burned too', async () => {
+    const m = await makeMesh();
+    const h = await startHub(m);
+    const url = `ws://127.0.0.1:${h.ingress}/mesh/v1/hub`;
+    await h.hub.setUrls([url]);
+    const a = await startA(m, () => h.port);
+    a.client.on('invite-used', () => a.invites.markUsed(A.deviceId));
+    a.client.start();
+    await until(() => a.client.state === 'online' && a.members.list().hub.urls.length === 1);
+    const invite = a.invites.create(A.deviceId, spkiSha256(m.anchor), [{ host: '127.0.0.1', port: a.port }], [url]);
+    a.client.registerInvite(invite);
+    await sleep(100);
+    expect(await joinViaHub(N, inviteUri(invite), 'n', tmpDir())).toBe('member');
+    await sleep(200);
+    await expect(joinViaLan(M, inviteUri(invite), 'm', tmpDir())).rejects.toThrow(/used/);
   });
 });
 

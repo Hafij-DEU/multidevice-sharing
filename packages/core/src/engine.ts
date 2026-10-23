@@ -849,9 +849,12 @@ export class Engine extends EventEmitter {
       alias: this.alias,
       deviceType: this.deviceType,
       onEvent: (e) => this.emitEvent({ source: 'receiver', ...e }),
-      onJoin: (peer, body) => {
+      onJoin: async (peer, body) => {
         this.syncInvite();
-        return this.joinHandler ? this.joinHandler(peer, body) : Promise.resolve({ status: 404, body: { error: 'not-found' } });
+        if (!this.joinHandler) return { status: 404, body: { error: 'not-found' } };
+        const r = await this.joinHandler(peer, body);
+        if (r.status === 200) this.markInviteUsed(); // single use, also across restarts
+        return r;
       },
       membership: () => this.mesh?.current() ?? null,
     };
@@ -886,6 +889,10 @@ export class Engine extends EventEmitter {
     client.on('membership', (sm: SignedMembership) => mesh('membership', { version: sm.list.version }));
     client.on('directory', () => mesh('directory'));
     client.on('revoked', () => void this.leaveMesh());
+    client.on('invite-used', () => {
+      this.invites.markUsed(this.identity.deviceId);
+      this.markInviteUsed();
+    });
     for (const t of ['held-delivered', 'held-failed'] as const) {
       client.on(t, (n: Record<string, unknown>) => {
         const extra: Record<string, unknown> = {};
@@ -925,21 +932,35 @@ export class Engine extends EventEmitter {
     }
   }
 
-  /** Picks up an invite written by another process on this home (`meshdrop invite`) and registers it. */
+  private readInvite(): { secret: string; expiresAt: number; used: boolean } | null {
+    try {
+      const j = JSON.parse(readFileSync(join(this.home, 'invite.json'), 'utf8')) as Record<string, unknown>;
+      if (typeof j.secret !== 'string' || typeof j.expiresAt !== 'number') return null;
+      return { secret: j.secret, expiresAt: j.expiresAt, used: j.used === true };
+    } catch {
+      return null;
+    }
+  }
+
+  /** The invite in invite.json was redeemed: it must never be registered again (restart, relink). */
+  private markInviteUsed(): void {
+    const cur = this.readInvite();
+    if (cur && !cur.used) writeFileAtomic(join(this.home, 'invite.json'), JSON.stringify({ ...cur, used: true }));
+  }
+
+  /**
+   * Picks up an invite written by another process on this home (`meshdrop invite`) and registers it
+   * here and with the hub, with its remaining lifetime. A used or expired invite is never registered.
+   */
   private syncInvite(): void {
     if (!this.mesh) return;
-    let j: { secret?: unknown };
-    try {
-      j = JSON.parse(readFileSync(join(this.home, 'invite.json'), 'utf8')) as { secret?: unknown };
-    } catch {
-      return;
-    }
-    if (typeof j.secret !== 'string' || j.secret === this.lastInviteSecret) return;
+    const j = this.readInvite();
+    if (!j || j.used || Date.now() >= j.expiresAt || j.secret === this.lastInviteSecret) return;
     const secret = Buffer.from(j.secret, 'base64url');
     if (secret.length !== 16) return;
     this.lastInviteSecret = j.secret;
-    const invite: Invite = { secret, inviter: this.identity.deviceId, mesh: this.mesh.list().mesh, lan: [], hubUrls: [], expiresAt: 0 };
-    this.invites.register(invite);
+    const invite: Invite = { secret, inviter: this.identity.deviceId, mesh: this.mesh.list().mesh, lan: [], hubUrls: [], expiresAt: j.expiresAt };
+    this.invites.register(invite, j.expiresAt - Date.now());
     this.running?.client?.registerInvite(invite);
   }
 
@@ -1044,7 +1065,7 @@ export class Engine extends EventEmitter {
     const list = this.mesh.list();
     const invite = this.invites.create(this.identity.deviceId, list.mesh, this.lanAddrs(this.port), list.hub.urls);
     const secret = invite.secret.toString('base64url');
-    writeFileAtomic(join(this.home, 'invite.json'), JSON.stringify({ secret, createdAt: Date.now() }));
+    writeFileAtomic(join(this.home, 'invite.json'), JSON.stringify({ secret, expiresAt: invite.expiresAt, used: false }));
     this.lastInviteSecret = secret;
     this.running?.client?.registerInvite(invite);
     return { invite, uri: inviteUri(invite) };

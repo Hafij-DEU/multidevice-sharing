@@ -143,10 +143,25 @@ export class InviteBook {
     return invite;
   }
 
-  /** Adopts an invite created on another device; its expiry is re-based on this book's clock. */
-  register(i: Invite): void {
+  /**
+   * Adopts an invite created on another device (or re-loaded): it expires `ttlMs` from now on this
+   * book's clock, at most INVITE_TTL_MS. Registering a secret this book already holds for the inviter
+   * changes nothing, so a used, burned or expired invite can never be brought back to life.
+   */
+  register(i: Invite, ttlMs: number = INVITE_TTL_MS): void {
     if (i.secret.length !== SECRET_BYTES) throw new InviteError('invalid invite: secret');
-    this.#byInviter.set(i.inviter, { invite: { ...i, expiresAt: this.#now() + INVITE_TTL_MS }, attempts: 0, used: false });
+    const cur = this.#byInviter.get(i.inviter);
+    if (cur && cur.invite.secret.equals(i.secret)) return;
+    const ttl = Number.isFinite(ttlMs) ? Math.max(0, Math.min(ttlMs, INVITE_TTL_MS)) : 0;
+    this.#byInviter.set(i.inviter, { invite: { ...i, expiresAt: this.#now() + ttl }, attempts: 0, used: false });
+  }
+
+  /** Burns the inviter's live invite (it was redeemed elsewhere). False if there is none. */
+  markUsed(inviter: string): boolean {
+    const e = this.#byInviter.get(inviter);
+    if (!e) return false;
+    e.used = true;
+    return true;
   }
 
   consume(newId: string, inviter: string, proof: string): ConsumeResult {

@@ -41,6 +41,26 @@ async function make(home: string, extra: Partial<EngineOptions> = {}): Promise<{
 }
 const meshEvents = (ev: EngineEvent[], type: string) => ev.filter((x) => x.source === 'mesh' && x.type === type);
 
+describe('invite lifetime across restarts (C1)', () => {
+  it('a redeemed invite stays dead after the inviter restarts; a fresh one works', async () => {
+    const hHome = tmpDir();
+    let H = await make(hHome, { alias: 'hub' });
+    await H.e.hubInit([]);
+    await H.e.start();
+    const { uri } = H.e.createInvite();
+    const A = await make(tmpDir(), { alias: 'a' });
+    expect(await A.e.join(uri)).toBe('member');
+    const port = H.e.port;
+    await H.e.stop();
+    H = await make(hHome, { alias: 'hub', port });
+    await H.e.start();
+    await sleep(1500); // the invite poll runs every second
+    const B = await make(tmpDir(), { alias: 'b' });
+    await expect(B.e.join(uri)).rejects.toThrow(/used|expired|unknown/);
+    expect(await B.e.join(H.e.createInvite().uri)).toBe('member');
+  }, 30_000);
+});
+
 describe('engine with a hub', () => {
   it('init, join by QR (LAN), relay, held, revoke and recovery, end to end', async () => {
     // Hub

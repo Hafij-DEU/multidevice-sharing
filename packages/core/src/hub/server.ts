@@ -536,6 +536,8 @@ export class HubServer extends EventEmitter {
       }
       try {
         this.#addMemberSync({ deviceId, alias: m.alias as string, publicKeyPem: pub.export({ type: 'spki', format: 'pem' }) as string });
+        // Redeemed here: tell the inviter to burn its own copy (single use across LAN and hub).
+        this.sendTo(inviter, JSON.stringify({ t: 'invite-used' }));
       } catch {
         c.ws.send(JSON.stringify({ t: 'join-failed', error: 'refused' }));
         c.ws.close(CLOSE_REVOKED);
@@ -600,7 +602,9 @@ export class HubServer extends EventEmitter {
     const secret = Buffer.from(m.secret, 'base64url');
     if (secret.length !== 16) return;
     const mesh = this.#opts.members.list().mesh;
-    invites.register({ secret, inviter, mesh, lan: [], hubUrls: [], expiresAt: 0 });
+    // The inviter's remaining lifetime, on our clock; never more than a fresh invite.
+    const ttl = typeof m.ttlMs === 'number' && Number.isFinite(m.ttlMs) ? m.ttlMs : 0;
+    invites.register({ secret, inviter, mesh, lan: [], hubUrls: [], expiresAt: 0 }, ttl);
   }
 
   /**
@@ -618,6 +622,8 @@ export class HubServer extends EventEmitter {
     if (nm.deviceId === inviter) return answer({ ok: false, error: 'bad-request' });
     try {
       const s = this.#addMemberSync({ deviceId: nm.deviceId, alias: nm.alias as string, publicKeyPem: nm.publicKeyPem });
+      // The inviter redeemed its live invite on the LAN: burn the copy registered here too.
+      this.#opts.invites?.markUsed(inviter);
       answer({ ok: true, membership: s });
     } catch (e) {
       answer({ ok: false, error: e instanceof Error && /revoked/.test(e.message) ? 'revoked' : 'refused' });
