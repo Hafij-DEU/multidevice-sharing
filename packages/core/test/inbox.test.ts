@@ -492,6 +492,43 @@ describe('Inbox', () => {
     });
   });
 
+  it('prune() removes partial sessions untouched for 30 days (configurable) and stale tombstones', async () => {
+    const root = tmpRoot();
+    const inbox = new Inbox(root);
+    const mkSession = async () => {
+      const sid = newSessionId();
+      const d = Buffer.from('x');
+      await inbox.begin(sid, manifest(sid, [{ path: 'x.txt', data: d }]), 'c');
+      await inbox.writeChunk(sid, 0, 0, d);
+      return sid;
+    };
+    const age = async (sid: string, days: number) => {
+      const t = new Date(Date.now() - days * 24 * 3600 * 1000);
+      for (const f of readdirSync(partialDir(root, sid))) await fsp.utimes(join(partialDir(root, sid), f), t, t);
+      await fsp.utimes(partialDir(root, sid), t, t);
+    };
+    const stale = await mkSession();
+    const fresh = await mkSession();
+    const tenDays = await mkSession();
+    await age(stale, 31);
+    await age(tenDays, 10);
+    const tomb = newSessionId();
+    await inbox.markFinished(tomb, { from: 'f'.repeat(64), files: [] });
+    const t8 = new Date(Date.now() - 8 * 24 * 3600 * 1000);
+    await fsp.utimes(join(root, '.meshdrop-partial', '.finished', `${tomb}.json`), t8, t8);
+
+    expect(await inbox.prune()).toEqual([stale]);
+    expect(existsSync(partialDir(root, stale))).toBe(false);
+    expect(await inbox.load(stale)).toBeNull(); // not served from the in-memory cache either
+    expect(await inbox.have(fresh)).toEqual({ 0: [0] });
+    expect(await inbox.finished(tomb)).toBeNull();
+    // configurable age
+    expect(await new Inbox(root).prune({ partialMaxAgeMs: 7 * 24 * 3600 * 1000 })).toEqual([tenDays]);
+    expect(existsSync(partialDir(root, fresh))).toBe(true);
+    // nothing to prune in an inbox that was never used
+    expect(await new Inbox(join(root, 'nope')).prune()).toEqual([]);
+  });
+
   it('completed() lists finalized fileIds; markFinished/finished tombstone persists and prunes after 7 days', async () => {
     const root = tmpRoot();
     const sid = newSessionId();

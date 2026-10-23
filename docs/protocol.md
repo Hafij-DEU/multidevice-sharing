@@ -137,6 +137,9 @@ Notes:
 - **Error events.** Any failure carrying an errno-style code (ENOSPC, EACCES, EIO, ...) emits an `error`
   event with that code; the HTTP reply stays generic (507 `no-space` for ENOSPC, 500 `internal` otherwise).
 - **Session ids** are 22 base64url characters; anything else in a path is `404 unknown-session`.
+- **Abandoned sessions.** A receiver deletes partial sessions whose state (session dir, `state.json`, progress
+  log) was last touched more than 30 days ago when it starts (configurable), and tombstones older than 7 days.
+  Senders normally clean up earlier by posting `cancel` (see Sender algorithm, step 7).
 - **Paths on the wire** (`complete`, `finish`, `offer` `{done, files}`, and the tombstone) are always relative
   to the receiver's inbox root with `/` separators; a receiver never reveals its absolute directory layout.
 - **Receiver events** (not on the wire): `offer`, `progress {fileId, chunks, total}`, `file {fileId, path}`,
@@ -181,6 +184,11 @@ Implemented in `packages/core/src/transfer/send.ts` (`sendTo`, `Outbox`) and `mu
 7. **Outcome.** `done` deletes the outbox entry. `failed` keeps it. Aborting the caller's `AbortSignal` means
    *pause*: the result is `cancelled`, nothing is posted to the receiver (no `cancel`), and the entry is kept
    so `sendTo` with the same items, or `Outbox.resumeAll`, continues from the receiver's have map.
+   A session that can never complete is cancelled on the receiver: after a terminal failure (`source-changed`,
+   including `422 integrity`, and any 4xx such as `409 session-conflict`), and when an outbox entry is superseded
+   by a new session (step 5) or removed by the user, the sender posts `cancel/:sessionId` once, best effort (one
+   attempt, 3 s connect and request timeout, every error ignored). Transient failures (network, 5xx) and pause
+   never post `cancel`, since those sessions stay resumable.
    `resumeAll(id, resolveTarget)` resumes all entries concurrently; entries whose device cannot be resolved are
    kept and reported as `failed` / `target-unresolved`.
 8. **Multi-send.** Items are hashed once; each target gets its own session, keys and outbox entry, all run

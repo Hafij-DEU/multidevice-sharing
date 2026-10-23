@@ -537,6 +537,12 @@ export class Inbox {
     const dir = `${this.root}/${PARTIAL_DIR}/${FINISHED_DIR}`;
     await this.fs.mkdir(dir, { recursive: true, mode: 0o700 });
     await this.writeAtomic(`${dir}/${sessionId}.json`, JSON.stringify({ from: info.from, files: info.files }));
+    await this.pruneTombstones();
+  }
+
+  /** Removes tombstones older than FINISHED_TTL_MS. Best effort, never throws. */
+  private async pruneTombstones(): Promise<void> {
+    const dir = `${this.root}/${PARTIAL_DIR}/${FINISHED_DIR}`;
     try {
       const cutoff = Date.now() - FINISHED_TTL_MS;
       for (const name of await this.fs.readdir(dir)) {
@@ -550,6 +556,43 @@ export class Inbox {
     } catch {
       /* pruning is best effort */
     }
+  }
+
+  /**
+   * Removes partial sessions whose state was last touched more than `partialMaxAgeMs` ago (default
+   * 30 days: the sender abandoned them without a `cancel`), and tombstones older than 7 days.
+   * "Touched" is the newest mtime of the session dir, state.json and progress.log (every recorded
+   * chunk appends to the log). Returns the pruned session ids. Run it when the receiver starts.
+   */
+  async prune(opts: { partialMaxAgeMs?: number } = {}): Promise<string[]> {
+    const maxAge = opts.partialMaxAgeMs ?? PARTIAL_TTL_MS;
+    const base = `${this.root}/${PARTIAL_DIR}`;
+    let names: string[];
+    try {
+      names = await this.fs.readdir(base);
+    } catch (e) {
+      if (code(e) === 'ENOENT') return [];
+      throw e;
+    }
+    const cutoff = Date.now() - maxAge;
+    const pruned: string[] = [];
+    for (const name of names.sort()) {
+      if (!SESSION_ID_RE.test(name)) continue;
+      const dir = `${base}/${name}`;
+      let newest = -Infinity;
+      for (const p of [dir, `${dir}/state.json`, `${dir}/${LOG}`]) {
+        const st = await this.statOrNull(p).catch(() => null);
+        if (st) newest = Math.max(newest, st.mtimeMs);
+      }
+      if (newest === -Infinity || newest >= cutoff) continue;
+      await this.lock(name, async () => {
+        this.sessions.delete(name);
+        await this.fs.rm(dir, { recursive: true, force: true });
+      });
+      pruned.push(name);
+    }
+    await this.pruneTombstones();
+    return pruned;
   }
 
   async finished(sessionId: string): Promise<{ from: string; files: string[] } | null> {

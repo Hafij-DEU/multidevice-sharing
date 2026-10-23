@@ -15,6 +15,11 @@
 // the session at once. Aborting `signal` means "pause": the session ends 'cancelled', nothing is
 // posted to the receiver (no `cancel`), and the outbox entry stays resumable.
 //
+// Abandoned sessions: when a session can never complete (a terminal failure: source-changed, an
+// integrity error, any 4xx such as 409 session-conflict) or an outbox entry is superseded by a new
+// session, the sender posts `cancel` once (best effort: one attempt, short timeout, errors ignored)
+// so the receiver drops its partial data instead of keeping it until its 30-day prune.
+//
 // Source safety: re-sealing different plaintext under the same (session, fileId, index) would reuse
 // an AES-GCM nonce, so before every chunk read the source's size and mtime are compared with the
 // values recorded at manifest time; any change fails the session with 'source-changed'.
@@ -69,6 +74,8 @@ export const DEFAULT_CONCURRENCY = 3;
 const DEFAULT_TIMEOUT_MS = 30_000;
 const DEFAULT_FINALIZE_TIMEOUT_MS = 10 * 60_000;
 const DEFAULT_CONNECT_TIMEOUT_MS = 10_000;
+/** Connect and request timeout of the best-effort `cancel`. */
+export const CANCEL_TIMEOUT_MS = 3000;
 const HASH_BUF = 1024 * 1024;
 const SESSION_ID_RE = /^[A-Za-z0-9_-]{22}$/;
 const DEVICE_ID_RE = /^[0-9a-f]{64}$/;
@@ -114,6 +121,36 @@ function abortError(): Error {
   const e = new Error('aborted');
   e.name = 'AbortError';
   return e;
+}
+
+/** A failure after which this session can never complete, so the receiver's copy is garbage. */
+function isTerminal(e: unknown): boolean {
+  if (e instanceof SourceChangedError) return true;
+  return e instanceof HttpStatusError && e.status >= 400 && e.status < 500;
+}
+
+/**
+ * Best-effort `POST cancel/<sessionId>` so the receiver drops a session's partial data: one
+ * attempt, at most ~`timeoutMs` for the connection and the request each, never throws. Resolves
+ * true if the receiver acknowledged it (2xx).
+ */
+export async function postCancel(
+  id: Identity,
+  t: { deviceId: string; host: string; port: number },
+  sessionId: string,
+  timeoutMs: number = CANCEL_TIMEOUT_MS,
+): Promise<boolean> {
+  if (!SESSION_ID_RE.test(sessionId)) return false;
+  try {
+    const sock = await connectPinned(t.host, t.port, id, t.deviceId, { timeoutMs });
+    const res = await pinnedRequest(sock, 'POST', `${PREFIX}cancel/${sessionId}`, undefined, {}, {
+      timeoutMs,
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+    return res.status >= 200 && res.status < 300;
+  } catch {
+    return false;
+  }
 }
 
 function isTransient(e: unknown): boolean {
@@ -487,7 +524,11 @@ export async function sendPrepared(id: Identity, t: Target, p: PreparedItems, op
       const match = await opts.outbox.findMatch(t.deviceId, p.itemsKey);
       if (match && !active.has(match.sessionId)) {
         if (sameContent(match, p)) entry = match;
-        else await opts.outbox.remove(match.sessionId);
+        else {
+          // Superseded: the old session can never complete; let the receiver drop its partial data.
+          await opts.outbox.remove(match.sessionId);
+          await postCancel(id, t, match.sessionId);
+        }
       }
     }
     if (!entry) {
@@ -571,7 +612,8 @@ async function runSession(id: Identity, t: Target, entry: OutboxEntry, opts: Sen
     if (opts.outbox) await opts.outbox.remove(sessionId).catch(() => {});
     return { ...base, status: 'done' };
   } catch (e) {
-    if (opts.signal?.aborted) return { ...base, status: 'cancelled' };
+    if (opts.signal?.aborted) return { ...base, status: 'cancelled' }; // pause: resumable, no cancel
+    if (isTerminal(e)) await postCancel(id, t, sessionId);
     return { ...base, status: 'failed', error: errorString(e) };
   } finally {
     internal.abort(); // releases AbortSignal.any's listener on the caller's signal

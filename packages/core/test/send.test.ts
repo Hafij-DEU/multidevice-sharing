@@ -159,7 +159,9 @@ describe('sendTo', () => {
       writeFileSync(file, 'x');
       const r = await sendTo(a!.id, f.target, [{ kind: 'file', srcPath: file }], { retryDelaysMs: FAST });
       expect(r).toMatchObject({ status: 'failed', error: 'source-changed' });
-      expect(f.seen.map((x) => x.split(' ')[1]!.split('/')[3])).toEqual(['offer', 'chunk', 'complete']);
+      // terminal: the receiver is told once to drop the session
+      expect(f.seen.map((x) => x.split(' ')[1]!.split('/')[3])).toEqual(['offer', 'chunk', 'complete', 'cancel']);
+      expect(f.seen.at(-1)).toBe(`POST /mesh/v1/cancel/${r.sessionId}`);
     });
 
     it('5xx is retried 3 times, then the session fails and the outbox entry is kept', async () => {
@@ -172,6 +174,7 @@ describe('sendTo', () => {
       expect(r.status).toBe('failed');
       expect(r.error).toBe('http-503 nope');
       expect(f.hits()).toBe(4);
+      expect(f.seen.filter((x) => x.includes('/cancel/'))).toEqual([]); // transient: stays resumable
       expect(existsSync(join(a!.outboxDir, `${r.sessionId}.json`))).toBe(true);
     });
 
@@ -185,7 +188,7 @@ describe('sendTo', () => {
       expect(f.hits()).toBe(1);
     });
 
-    it.each([403, 404, 409, 413, 422])('%i is not retried', async (status) => {
+    it.each([403, 404, 409, 413, 422])('%i is not retried; one best-effort cancel is posted', async (status) => {
       const [a] = await makeEngines(1);
       const f = await fake(status);
       const file = join(tmpDir(), 'x.bin');
@@ -193,7 +196,8 @@ describe('sendTo', () => {
       const r = await sendTo(a!.id, f.target, [{ kind: 'file', srcPath: file }], { retryDelaysMs: FAST });
       expect(r.status).toBe('failed');
       expect(r.error).toBe(`http-${status} nope`);
-      expect(f.hits()).toBe(1);
+      // one offer, then exactly one cancel (its own failure is ignored)
+      expect(f.seen).toEqual(['POST /mesh/v1/offer', `POST /mesh/v1/cancel/${r.sessionId}`]);
     });
   });
 
@@ -230,15 +234,38 @@ describe('sendTo', () => {
 
     const t = new Date(Date.now() + 5000);
     utimesSync(file, t, t);
+    expect(existsSync(join(b!.inboxRoot, '.meshdrop-partial', r.sessionId))).toBe(true);
     const res = await new Outbox(a!.outboxDir).resumeAll(a!.id, () => b!.target());
     expect(res).toEqual([{ deviceId: b!.id.deviceId, status: 'failed', sessionId: r.sessionId, error: 'source-changed' }]);
     expect(existsSync(join(a!.outboxDir, `${r.sessionId}.json`))).toBe(true);
+    // terminal failure: the receiver was told to drop its partial data
+    expect(b!.events).toContainEqual({ type: 'cancelled', sessionId: r.sessionId, from: a!.id.deviceId });
+    expect(existsSync(join(b!.inboxRoot, '.meshdrop-partial', r.sessionId))).toBe(false);
 
     // a fresh sendTo of the same (changed) items supersedes the stale entry with a new session
     const r2 = await sendTo(a!.id, b!.target(), [{ kind: 'file', srcPath: file }], { outbox });
     expect(r2.status).toBe('done');
     expect(r2.sessionId).not.toBe(r.sessionId);
     expect(readdirSync(a!.outboxDir).filter((n) => n.endsWith('.json'))).toEqual([]);
+  });
+
+  it('a superseded outbox entry is cancelled on the receiver (its partial data is dropped)', async () => {
+    const [a, b] = await makeEngines(2);
+    const file = join(tmpDir(), 'sup.bin');
+    writeFileSync(file, randomBytes(3 * CHUNK_SIZE));
+    const outbox = new Outbox(a!.outboxDir);
+    const ac = new AbortController();
+    b!.listeners.push((e) => { if (e.type === 'progress') ac.abort(); });
+    const r = await sendTo(a!.id, b!.target(), [{ kind: 'file', srcPath: file }], { outbox, signal: ac.signal, concurrency: 1 });
+    expect(r.status).toBe('cancelled');
+    b!.listeners.length = 0;
+    expect(existsSync(join(b!.inboxRoot, '.meshdrop-partial', r.sessionId))).toBe(true);
+    writeFileSync(file, randomBytes(3 * CHUNK_SIZE)); // changed: the next sendTo supersedes the entry
+    const r2 = await sendTo(a!.id, b!.target(), [{ kind: 'file', srcPath: file }], { outbox });
+    expect(r2.status).toBe('done');
+    expect(r2.sessionId).not.toBe(r.sessionId);
+    expect(b!.events).toContainEqual({ type: 'cancelled', sessionId: r.sessionId, from: a!.id.deviceId });
+    expect(existsSync(join(b!.inboxRoot, '.meshdrop-partial', r.sessionId))).toBe(false);
   });
 
   describe('same-size rewrite with the mtime restored (cp -p, rsync -t, coarse timestamps)', () => {

@@ -2,12 +2,14 @@
 // discovery disabled (pairing via manual probe only), plus a smoke test of the CLI.
 import { execFile, spawn } from 'node:child_process';
 import { createHash, generateKeyPairSync, randomBytes } from 'node:crypto';
-import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
+import { newSessionId } from '../src/chunk.ts';
 import { Engine, UnknownDeviceError, type EngineEvent } from '../src/engine.ts';
+import { Inbox } from '../src/inbox.ts';
 import { TrustStore } from '../src/trust.ts';
 
 const sha = (b: Buffer) => createHash('sha256').update(b).digest('hex');
@@ -153,6 +155,26 @@ describe('Engine', () => {
     expect(resumed).toEqual([{ deviceId: b.e.identity.deviceId, status: 'done', sessionId: res[0]!.sessionId }]);
     expect(sha(readFileSync(join(b.inbox, 'forty.bin')))).toBe(sha(data));
     expect(a2.events).toContainEqual({ source: 'sender', type: 'result', ...resumed[0]! });
+  });
+
+  it('start() prunes partial receive sessions untouched for longer than partialMaxAgeMs', async () => {
+    const home = tmp('md-home-');
+    const inboxDir = join(home, 'inbox');
+    const inbox = new Inbox(inboxDir);
+    const sid = newSessionId();
+    const m = { v: 1 as const, sessionId: sid, from: 'a'.repeat(64), to: 'b'.repeat(64), createdAt: 1, files: [], dirs: [] };
+    await inbox.begin(sid, m, 'c');
+    const dir = join(inboxDir, '.meshdrop-partial', sid);
+    const old = new Date(Date.now() - 2 * 24 * 3600 * 1000);
+    for (const f of readdirSync(dir)) utimesSync(join(dir, f), old, old);
+    utimesSync(dir, old, old);
+    const keep = newSessionId();
+    await inbox.begin(keep, { ...m, sessionId: keep }, 'c');
+    const e = await Engine.create({ home, inbox: inboxDir, port: 0, discovery: false, partialMaxAgeMs: 24 * 3600 * 1000 });
+    engines.push(e);
+    await e.start();
+    expect(existsSync(dir)).toBe(false);
+    expect(existsSync(join(inboxDir, '.meshdrop-partial', keep))).toBe(true);
   });
 
   it('only a serving engine runs multicast discovery; a client-only engine never announces', async () => {

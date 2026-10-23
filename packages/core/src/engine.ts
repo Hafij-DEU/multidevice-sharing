@@ -55,6 +55,11 @@ export interface EngineOptions {
   serve?: boolean;
   /** Multicast discovery overrides, or false to rely on manual peers only (default: on when serving). */
   discovery?: Pick<DiscoveryOptions, 'group' | 'port' | 'intervalMs' | 'ttlMs' | 'iface'> | false;
+  /**
+   * A serving engine's start() removes partial receive sessions untouched for longer than this
+   * (default 30 days; their sender abandoned them without a cancel), plus tombstones older than 7 days.
+   */
+  partialMaxAgeMs?: number;
 }
 
 /** A device id prefix that is not a unique prefix (>= 4 hex chars) of exactly one trusted device. */
@@ -315,6 +320,9 @@ export class Engine extends EventEmitter {
     let server: Server | null = null;
     let port = this.opts.port ?? DEFAULT_MESH_PORT;
     if (this.opts.serve !== false) {
+      const prune: { partialMaxAgeMs?: number } = {};
+      if (this.opts.partialMaxAgeMs !== undefined) prune.partialMaxAgeMs = this.opts.partialMaxAgeMs;
+      await this.inbox.prune(prune).catch(() => {}); // housekeeping must never block receiving
       const s = createMeshServer({
         id: this.identity,
         trust: this.trust,
