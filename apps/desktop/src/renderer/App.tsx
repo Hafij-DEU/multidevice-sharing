@@ -64,7 +64,7 @@ export function App() {
           <div className="self muted">
             {state.self.alias}
             <br />
-            {state.mode === 'client-only' ? 'Sharing the port with meshdrop listen' : `Port ${state.self.port}`}
+            {state.mode === 'client-only' ? 'Receiving is handled by the MeshDrop background service' : `Port ${state.self.port}`}
           </div>
         )}
       </nav>
