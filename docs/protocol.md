@@ -78,3 +78,30 @@ Implemented in `packages/core/src/transfer/send.ts` (`sendTo`, `Outbox`) and `mu
    kept and reported as `failed` / `target-unresolved`.
 8. **Multi-send.** Items are hashed once; each target gets its own session, keys and outbox entry, all run
    concurrently. One target failing never affects the others; results come back in target order.
+
+## Announce packet
+
+Implemented in `packages/core/src/discovery.ts` (`Discovery`).
+
+Transport: UDP multicast to `224.0.0.168:53318` (TTL 1, link-local), sent every 5 s from every non-internal IPv4
+interface (or one chosen interface). Payload: one JSON object, at most 1024 bytes, UTF-8:
+
+```json
+{"v":1,"deviceId":"<64 lowercase hex>","alias":"<string, at most 64 chars>","deviceType":"desktop|mobile|headless","port":53318}
+```
+
+`port` is the TCP port of the mesh HTTPS server (integer 1-65535). Receivers validate every field strictly and
+silently drop anything else (non-JSON, non-object, `v` other than 1, bad `deviceId`/`alias`/`deviceType`/`port`,
+oversized). Unknown extra fields are ignored. Packets carrying the receiver's own `deviceId` are ignored.
+
+- **An announce is an unauthenticated hint.** Anyone on the LAN can forge one. Trust is never taken from it:
+  the sender is pinned by certificate (device id = SHA-256 of the cert DER) at connect time and must be in the
+  TrustStore for any route other than `GET info`.
+- **Host.** A peer's address is the UDP source address of the packet, never a field of the payload.
+- **Peer table.** Keyed by `deviceId`, at most 256 entries; when full, announces from unknown device ids are
+  ignored (live peers are never evicted). `peer` is emitted for a new peer or when host/port/alias/deviceType
+  changes, not on a plain refresh. A peer not heard from for `ttlMs` (15 s) is dropped with `lost`.
+- **Probe** (manual add, later subnet scan): `GET /mesh/v1/info` over TLS 1.3 without pinning and without a
+  client certificate. The peer's device id is the hash of the certificate it presented; if `info.deviceId`
+  differs, or `v`/`alias`/`deviceType` are invalid, the probe fails and nothing is emitted. Default timeout 5 s,
+  response body capped at 4 KiB.
