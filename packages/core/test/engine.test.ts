@@ -177,6 +177,35 @@ describe('Engine', () => {
     expect(existsSync(join(inboxDir, '.meshdrop-partial', keep))).toBe(true);
   });
 
+  it('listOutbox / removeOutbox: lists paused sends; removing one cancels it on the receiver', async () => {
+    const { a, b } = await pairedPair();
+    const data = randomBytes(12 * 1024 * 1024);
+    const src = join(tmp(), 'paused.bin');
+    writeFileSync(src, data);
+    let stopping: Promise<void> | undefined;
+    a.e.on('event', (ev: EngineEvent) => {
+      if (ev.source === 'sender' && ev.type === 'progress' && !stopping) stopping = a.e.stop();
+    });
+    const [r] = await a.e.send('all', [{ kind: 'file', srcPath: src }, { kind: 'text', text: 'note' }]);
+    await stopping;
+    expect(r!.status).toBe('cancelled');
+    const sid = r!.sessionId;
+    expect(existsSync(join(b.inbox, '.meshdrop-partial', sid))).toBe(true);
+
+    const a2 = await mk({ home: a.home });
+    expect(await a2.e.listOutbox()).toEqual([
+      { sessionId: sid, deviceId: b.e.identity.deviceId, alias: 'bee', createdAt: expect.any(Number), files: 1, bytes: data.length, text: true },
+    ]);
+    await expect(a2.e.removeOutbox('zzzzzz')).rejects.toThrow(/no outbox entry/);
+    const removed = await a2.e.removeOutbox(sid.slice(0, 6));
+    expect(removed).toMatchObject({ removed: { sessionId: sid }, cancelled: true });
+    expect(await a2.e.listOutbox()).toEqual([]);
+    expect(b.events).toContainEqual(expect.objectContaining({ source: 'receiver', type: 'cancelled', sessionId: sid }));
+    expect(existsSync(join(b.inbox, '.meshdrop-partial', sid))).toBe(false);
+    // nothing left to resume
+    expect(await a2.e.resumePending()).toEqual([]);
+  });
+
   it('only a serving engine runs multicast discovery; a client-only engine never announces', async () => {
     // Disjoint from discovery.test.ts's UDP ports (53900 + pid-derived offsets) and from 53317/53318.
     const port = 45000 + Math.floor(Math.random() * 1000);
@@ -342,6 +371,30 @@ describe('CLI', () => {
       child.kill('SIGKILL');
     }
   }, 20_000);
+
+  it('outbox lists unfinished sends; outbox rm <prefix> removes one and notifies the receiver', async () => {
+    const { a, b } = await pairedPair();
+    const src = join(tmp(), 'cli-paused.bin');
+    writeFileSync(src, randomBytes(12 * 1024 * 1024));
+    let stopping: Promise<void> | undefined;
+    a.e.on('event', (ev: EngineEvent) => {
+      if (ev.source === 'sender' && ev.type === 'progress' && !stopping) stopping = a.e.stop();
+    });
+    const [r] = await a.e.send('all', [{ kind: 'file', srcPath: src }]);
+    await stopping;
+    const sid = r!.sessionId;
+    const list = await runCli(['outbox', '--home', a.home]);
+    expect(list.code).toBe(0);
+    expect(list.stdout).toContain(sid);
+    expect(list.stdout).toContain('bee');
+    expect(list.stdout).toMatch(/1 file\(s\), 12\.00 MiB/);
+    expect((await runCli(['outbox', 'rm', 'nope', '--home', a.home])).code).toBe(2);
+    const rm = await runCli(['outbox', 'rm', sid.slice(0, 5), '--home', a.home]);
+    expect(rm.code).toBe(0);
+    expect(rm.stdout).toMatch(new RegExp(`removed ${sid}.*receiver notified`));
+    expect((await runCli(['outbox', '--home', a.home])).stdout).toMatch(/outbox is empty/);
+    expect(b.events).toContainEqual(expect.objectContaining({ source: 'receiver', type: 'cancelled', sessionId: sid }));
+  }, 30_000);
 
   it('id prints the device id of --home (and MESHDROP_HOME is overridden by --home)', async () => {
     const home = tmp('md-cli-');

@@ -2,12 +2,20 @@
 // meshdrop command line (M1). Run with `node packages/core/src/cli.ts <command>` (Node 24 strips
 // the types). Every command takes --home (overrides $MESHDROP_HOME) so two instances can run side
 // by side. `listen` is the long-running receiver (and the only command that runs multicast
-// discovery); `pair`, `send`, `peers` and `resume` are one-shot client commands that never bind the
+// discovery); `pair`, `send`, `peers`, `resume` and `outbox` are one-shot client commands that never bind the
 // mesh port, so they work next to a running `listen` on the same home. They reach trusted devices
 // at the address recorded by `pair` (re-probed on start).
 import { stat } from 'node:fs/promises';
 import { parseArgs } from 'node:util';
-import { Engine, UnknownDeviceError, type EngineEvent, type EngineOptions, type SendItem, type SendResult } from './engine.ts';
+import {
+  Engine,
+  UnknownDeviceError,
+  UnknownOutboxEntryError,
+  type EngineEvent,
+  type EngineOptions,
+  type SendItem,
+  type SendResult,
+} from './engine.ts';
 import { DEFAULT_MESH_PORT, type DeviceType } from './discovery.ts';
 import { configDir } from './paths.ts';
 import { installStopSignals } from './signals.ts';
@@ -22,6 +30,8 @@ commands:
   send <deviceId-prefix|all> <path...> [--text "..."]
                                         send files/folders (and/or text); exit 0 only if every target is done
   resume                                resume unfinished sends from the outbox
+  outbox                                list unfinished sends (paused, failed or interrupted)
+  outbox rm <sessionId-prefix>          drop an unfinished send (and tell its receiver to discard it)
 
 options:
   --home DIR            config dir (default: $MESHDROP_HOME, $XDG_CONFIG_HOME/meshdrop, ~/.config/meshdrop)
@@ -137,6 +147,8 @@ async function main(argv: string[]): Promise<number> {
       return cmdSend(base, args, values.text);
     case 'resume':
       return cmdResume(base, args);
+    case 'outbox':
+      return cmdOutbox(base, args);
     default:
       throw new UsageError(`unknown command "${cmd}"`);
   }
@@ -373,6 +385,34 @@ async function cmdResume(base: EngineOptions, args: string[]): Promise<number> {
   }
 }
 
+async function cmdOutbox(base: EngineOptions, args: string[]): Promise<number> {
+  const [sub, ...rest] = args;
+  if (sub === undefined || sub === 'list' || sub === 'ls') {
+    noArgs('outbox', rest);
+    const e = await Engine.create({ ...base, serve: false });
+    const items = await e.listOutbox();
+    if (items.length === 0) out('outbox is empty');
+    for (const it of items) {
+      const to = it.alias !== undefined ? `${printable(it.alias)} (${short(it.deviceId)})` : `${short(it.deviceId)} (no longer trusted)`;
+      const what = `${it.files} file(s), ${fmtBytes(it.bytes)}${it.text ? ', text' : ''}`;
+      out(`${it.sessionId}  to ${to}  ${what}  created ${new Date(it.createdAt).toISOString()}`);
+    }
+    return 0;
+  }
+  if (sub === 'rm' || sub === 'remove') {
+    if (rest.length !== 1) throw new UsageError('outbox rm: expected <sessionId-prefix>');
+    const e = await startClient(base); // re-probes manual peers so the receiver can be told
+    try {
+      const { removed, cancelled } = await e.removeOutbox(rest[0]!);
+      out(`removed ${removed.sessionId} (to ${nameOf(e, removed.deviceId)}); ${cancelled ? 'receiver notified' : 'receiver not reachable, it discards the partial data after 30 days'}`);
+      return 0;
+    } finally {
+      await e.stop();
+    }
+  }
+  throw new UsageError(`outbox: unknown subcommand "${sub}"`);
+}
+
 main(process.argv.slice(2)).then(
   (code) => {
     process.exitCode = code;
@@ -382,7 +422,7 @@ main(process.argv.slice(2)).then(
       err(`meshdrop: ${printable((e as Error).message)}`);
       err(USAGE);
       process.exitCode = 2;
-    } else if (e instanceof UnknownDeviceError) {
+    } else if (e instanceof UnknownDeviceError || e instanceof UnknownOutboxEntryError) {
       err(`meshdrop: ${printable(e.message)}`);
       process.exitCode = 2;
     } else {

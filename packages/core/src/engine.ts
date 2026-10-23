@@ -5,7 +5,8 @@
 // Layout under `home` (default configDir()):
 //   identity/{key.pem,cert.der}   device identity (identity.ts)
 //   trust.json                    trusted devices (trust.ts); re-read when another process changes it
-//   outbox/<sessionId>.json       unfinished sends (transfer/send.ts); every send goes through it
+//   outbox/<sessionId>.json       unfinished sends (transfer/send.ts); every send goes through it;
+//                                 listOutbox()/removeOutbox() manage it
 //   manual-peers.json             addresses added by pairManual, re-probed on start()
 //
 // Events: everything is emitted on the single 'event' channel as an EngineEvent.
@@ -22,7 +23,7 @@ import { deviceIdOf, loadOrCreateIdentity, type Identity } from './identity.ts';
 import { Inbox } from './inbox.ts';
 import { configDir } from './paths.ts';
 import { multiSend } from './transfer/multisend.ts';
-import { Outbox, type SendItem, type SendResult, type Target } from './transfer/send.ts';
+import { Outbox, isSessionActive, postCancel, type OutboxEntry, type SendItem, type SendResult, type Target } from './transfer/send.ts';
 import { TrustStore, type TrustedDevice } from './trust.ts';
 
 export type { SendItem, SendResult } from './transfer/send.ts';
@@ -33,6 +34,33 @@ export type EngineEvent =
   | { source: 'sender'; type: 'progress'; deviceId: string; fileId: number; sent: number; total: number }
   | ({ source: 'sender'; type: 'result' } & SendResult)
   | { source: 'discovery'; type: 'peer' | 'lost'; peer: PeerInfo };
+
+/** An unfinished send waiting in the outbox (paused, failed, or interrupted by a crash). */
+export interface OutboxItem {
+  sessionId: string;
+  /** Target device. */
+  deviceId: string;
+  /** The target's alias in the trust store (absent if it is no longer trusted). */
+  alias?: string;
+  createdAt: number;
+  files: number;
+  /** Total plaintext bytes of the files. */
+  bytes: number;
+  /** Whether the send carries a text item. */
+  text: boolean;
+}
+
+/** A session id prefix that matches no outbox entry, or several. */
+export class UnknownOutboxEntryError extends Error {
+  readonly query: string;
+  readonly reason: 'unknown' | 'ambiguous';
+  constructor(query: string, reason: 'unknown' | 'ambiguous', matches: string[] = []) {
+    super(reason === 'unknown' ? `no outbox entry matches "${query}"` : `"${query}" matches ${matches.length} outbox entries (${matches.join(', ')})`);
+    this.name = 'UnknownOutboxEntryError';
+    this.query = query;
+    this.reason = reason;
+  }
+}
 
 /** A discovery peer annotated with what the trust store says about it. */
 export type EnginePeer = PeerInfo & { trusted: boolean; trustedAlias?: string };
@@ -500,6 +528,47 @@ export class Engine extends EventEmitter {
       return results;
     };
     return this.track(run());
+  }
+
+  private outboxItem(e: OutboxEntry): OutboxItem {
+    const item: OutboxItem = {
+      sessionId: e.sessionId,
+      deviceId: e.target.deviceId,
+      createdAt: e.createdAt,
+      files: e.manifest.files.length,
+      bytes: e.manifest.files.reduce((n, f) => n + f.size, 0),
+      text: e.manifest.text !== undefined,
+    };
+    const t = this.trust.get(e.target.deviceId);
+    if (t) item.alias = t.alias;
+    return item;
+  }
+
+  /** Unfinished sends in the outbox, oldest first. Works without start(). */
+  async listOutbox(): Promise<OutboxItem[]> {
+    return (await this.outbox.list()).map((e) => this.outboxItem(e));
+  }
+
+  /**
+   * Removes an unfinished send from the outbox (`sessionId` may be a unique prefix), so it is never
+   * resumed, and posts a best-effort `cancel` to its receiver so it drops the partial data: at the
+   * address discovery currently knows (when started), else the one recorded with the entry.
+   * `cancelled` tells whether the receiver acknowledged. Rejects with UnknownOutboxEntryError for an
+   * unknown or ambiguous prefix, and refuses a send that is running in this process.
+   */
+  async removeOutbox(sessionId: string): Promise<{ removed: OutboxItem; cancelled: boolean }> {
+    const entries = await this.outbox.list();
+    const exact = entries.find((e) => e.sessionId === sessionId);
+    const matches = exact ? [exact] : entries.filter((e) => sessionId.length > 0 && e.sessionId.startsWith(sessionId));
+    if (matches.length === 0) throw new UnknownOutboxEntryError(sessionId, 'unknown');
+    if (matches.length > 1) throw new UnknownOutboxEntryError(sessionId, 'ambiguous', matches.map((e) => e.sessionId));
+    const e = matches[0]!;
+    if (isSessionActive(e.sessionId)) throw new Error(`outbox entry ${e.sessionId} is being sent right now; stop that send first`);
+    await this.outbox.remove(e.sessionId);
+    const peer = this.running?.discovery.peers().find((p) => p.deviceId === e.target.deviceId);
+    const addr = peer ? { host: peer.host, port: peer.port } : { host: e.target.host, port: e.target.port };
+    const cancelled = await postCancel(this.identity, { deviceId: e.target.deviceId, ...addr }, e.sessionId);
+    return { removed: this.outboxItem(e), cancelled };
   }
 
   /**

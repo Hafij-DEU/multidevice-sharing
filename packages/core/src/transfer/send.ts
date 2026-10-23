@@ -499,6 +499,11 @@ export class Outbox {
 /** Sessions currently running in this process; a second runner for the same session is refused. */
 const active = new Set<string>();
 
+/** Whether a session is being sent by this process right now. */
+export function isSessionActive(sessionId: string): boolean {
+  return active.has(sessionId);
+}
+
 function sameContent(e: OutboxEntry, p: PreparedItems): boolean {
   const a = JSON.stringify([
     e.manifest.files.map((f) => [f.fileId, f.path, f.size, f.sha256]),

@@ -250,6 +250,10 @@ other engines behave the same.
 - **Outbox.** Every engine send is persisted in `<config>/outbox/` (see Sender algorithm), so a send interrupted
   by `stop()` or a crash is `cancelled`/`failed` and resumable. Nothing resumes automatically on start;
   `resumePending()` (CLI `meshdrop resume`) resumes every entry whose device is trusted and present.
+  `listOutbox()` (CLI `meshdrop outbox`) lists the entries; `removeOutbox(sessionId or unique prefix)` (CLI
+  `meshdrop outbox rm <prefix>`) deletes one and posts a best-effort `cancel` to its receiver (at the address
+  discovery knows, else the recorded one) so the receiver drops the partial data. A send running in the same
+  process cannot be removed.
 - **Who runs discovery.** Only an engine that runs the receiver server announces and listens for multicast.
   A client-only engine (the CLI's `pair`, `send`, `peers`, `resume`, which run next to a `listen` on the same
   config dir) never announces, since it would advertise a server it does not run; it reaches trusted devices at
