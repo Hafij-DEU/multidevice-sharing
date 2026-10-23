@@ -158,8 +158,11 @@ export async function postCancel(
   }
 }
 
+/** The hub has no room to hold this upload: retrying now cannot help (not terminal: kept to resume later). */
+const HUB_FULL = new Set(['hub-quota', 'hub-no-space']);
+
 function isTransient(e: unknown): boolean {
-  if (e instanceof HttpStatusError) return e.status >= 500;
+  if (e instanceof HttpStatusError) return e.status >= 500 && !(e.status === 507 && HUB_FULL.has(e.code));
   if (e instanceof SourceChangedError || e instanceof PinMismatchError || e instanceof ProtocolError) return false;
   if (e instanceof NoRouteError || e instanceof RelayReplyError) return false;
   if ((e as Error)?.name === 'AbortError') return false;

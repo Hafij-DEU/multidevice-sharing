@@ -68,6 +68,7 @@ export const DEFAULT_RELAY_TIMEOUT_MS = 600_000;
 
 interface Relay { from: string; to: string; timer: NodeJS.Timeout; onRes?: (e: Envelope | null) => void }
 const HELD_PRUNE_INTERVAL_MS = 3600_000;
+const REPLAY_RETRY_MS = 30_000;
 
 interface Conn {
   ws: WebSocket;
@@ -111,6 +112,7 @@ export class HubServer extends EventEmitter {
   readonly #relays = new Map<string, Relay>();
   readonly #keys = new Map<string, KeyObject>();
   readonly #replaying = new Set<string>();
+  readonly #replayAgain = new Set<string>();
   #sweep: NodeJS.Timeout;
   #prune: NodeJS.Timeout | null = null;
   #ingress: HttpServer | null = null;
@@ -125,10 +127,9 @@ export class HubServer extends EventEmitter {
     this.#wss = new WebSocketServer({ noServer: true, maxPayload: MAX_FRAME_BYTES });
     this.#sweep = setInterval(() => this.#dropSilent(), Math.max(20, Math.min(60_000, Math.floor(this.#heartbeatMs / 4))));
     this.#sweep.unref();
-    const held = opts.held;
-    if (held) {
-      void held.prune().catch(() => {});
-      this.#prune = setInterval(() => void held.prune().catch(() => {}), HELD_PRUNE_INTERVAL_MS);
+    if (opts.held) {
+      void this.pruneHeld().catch(() => {});
+      this.#prune = setInterval(() => void this.pruneHeld().catch(() => {}), HELD_PRUNE_INTERVAL_MS);
       this.#prune.unref();
     }
   }
@@ -168,6 +169,15 @@ export class HubServer extends EventEmitter {
     if (ing) {
       ing.closeAllConnections();
       await new Promise<void>((r) => ing.close(() => r()));
+    }
+  }
+
+  /** Drops held sessions past their TTL and tells each sender (held-failed, error 'expired'). */
+  async pruneHeld(): Promise<void> {
+    const held = this.#opts.held;
+    if (!held) return;
+    for (const x of await held.pruneExpired()) {
+      this.#notify(x.from, { t: 'held-failed', to: x.to, sessionId: x.sessionId, status: 410, error: 'expired' });
     }
   }
 
@@ -329,18 +339,35 @@ export class HubServer extends EventEmitter {
   /** Replays every finished held session for `to`; a link drop leaves the rest for the next connect. */
   async #replay(to: string): Promise<void> {
     const held = this.#opts.held;
-    if (!held || this.#replaying.has(to)) return;
+    if (!held) return;
+    if (this.#replaying.has(to)) {
+      this.#replayAgain.add(to); // run again once the current pass ends
+      return;
+    }
     this.#replaying.add(to);
+    let retry = false;
     try {
       for (const s of await held.pending(to)) {
         if (!this.#online.has(to)) return;
-        const outcome = await this.#replaySession(s);
-        if (outcome === 'retry') return;
+        if (!this.#opts.members.isTrusted(s.from)) {
+          await held.remove(s.to, s.sessionId); // its sender was revoked: undeliverable
+          continue;
+        }
+        if ((await this.#replaySession(s)) === 'retry') {
+          retry = true;
+          break;
+        }
       }
     } catch {
       /* a broken held session stays until the TTL prunes it */
     } finally {
       this.#replaying.delete(to);
+    }
+    if (this.#replayAgain.delete(to) && this.#online.has(to)) {
+      void this.#replay(to);
+    } else if (retry && this.#online.has(to)) {
+      // The target answered 5xx: try again later even if it stays connected.
+      setTimeout(() => void this.#replay(to), REPLAY_RETRY_MS).unref();
     }
   }
 
@@ -459,6 +486,8 @@ export class HubServer extends EventEmitter {
     const c = this.#online.get(deviceId);
     if (c) this.#reject(c, CLOSE_REVOKED);
     this.#seen.delete(deviceId);
+    // Its held sessions could never be delivered (targets refuse it) and would block the rest.
+    await this.#opts.held?.purgeDevice(deviceId).catch(() => {});
     return s;
   }
 
@@ -592,7 +621,12 @@ export class HubServer extends EventEmitter {
     c.deviceId = deviceId;
     this.#online.set(deviceId, c);
     this.#seen.set(deviceId, { lastSeen: this.#now(), lanAddrs: lan });
-    if (prev && prev !== c) prev.ws.close(CLOSE_REPLACED);
+    if (prev && prev !== c) {
+      // Whatever was sent on the old link is lost with it: fail it now (a replay then restarts on
+      // the new link) instead of waiting for the relay timeout.
+      for (const [key, r] of [...this.#relays]) if (r.to === deviceId) this.#failRelay(key, 503, 'offline');
+      prev.ws.close(CLOSE_REPLACED);
+    }
 
     const welcome: Record<string, unknown> = {
       t: 'welcome',

@@ -54,7 +54,7 @@ const member = (id: Identity, alias: string, role: 'hub' | 'member' = 'member') 
 interface Hub { port: number; close(): Promise<void> }
 interface Mesh { anchor: KeyObject; v1: SignedMembership; rootKey: KeyObject; hubHome: string; held: HeldStore }
 
-async function makeMesh(): Promise<Mesh> {
+async function makeMesh(heldQuota?: number): Promise<Mesh> {
   const rootKey = await loadOrCreateRootKey(tmpDir());
   const anchor = createPublicKey(rootKey);
   const list: MembershipList = {
@@ -64,7 +64,7 @@ async function makeMesh(): Promise<Mesh> {
     revoked: [],
   };
   const hubHome = tmpDir();
-  return { anchor, v1: signList(list, rootKey), rootKey, hubHome, held: new HeldStore(join(hubHome, 'held')) };
+  return { anchor, v1: signList(list, rootKey), rootKey, hubHome, held: new HeldStore(join(hubHome, 'held'), heldQuota !== undefined ? { quotaBytes: heldQuota } : {}) };
 }
 
 async function startHub(m: Mesh, port = 0): Promise<Hub> {
@@ -208,6 +208,48 @@ describe('sender transports', () => {
     expect(b.writes.length).toBe(3);
     expect(new Set(b.writes.map((w) => w.index)).size).toBe(3);
     expect(stored).toBeGreaterThanOrEqual(1);
+    expect(sha(readFileSync(join(b.root, 'big.bin')))).toBe(sha(f.data));
+  });
+
+  it('a full hub: the sender reports hub-quota at once, keeps its outbox entry, no retries (I3)', async () => {
+    const m = await makeMesh(1024);
+    const hub = await startHub(m);
+    const a = await device(m, A, () => hub.port);
+    await until(() => a.client.state === 'online');
+    const outbox = new Outbox(tmpDir());
+    const f = file(1);
+    let offers = 0;
+    const r = await sendTo(A, targetB(), [{ kind: 'file', srcPath: f.path }], {
+      retryDelaysMs: [10, 10, 10], outbox,
+      transport: () => {
+        const t = new RelayTransport(A, a.client, B.deviceId, pubOf(a), 'held', f.data.length + 1_000_000);
+        const orig = t.request.bind(t);
+        t.request = (method, path, ...rest) => { if (path.endsWith('/offer')) offers++; return orig(method, path, ...rest); };
+        return t;
+      },
+    });
+    expect(r).toMatchObject({ status: 'failed', error: 'http-507 hub-quota' });
+    expect(offers).toBe(1);
+    expect((await outbox.list()).length).toBe(1);
+  });
+
+  it('an interrupted held upload resumes from the outbox and ends held (I5)', async () => {
+    const m = await makeMesh();
+    const hub = await startHub(m);
+    const a = await device(m, A, () => hub.port);
+    await until(() => a.client.state === 'online');
+    const outbox = new Outbox(tmpDir());
+    const f = file(3);
+    const ac = new AbortController();
+    const first = await sendTo(A, targetB(), [{ kind: 'file', srcPath: f.path }], {
+      ...fast, outbox, signal: ac.signal, onProgress: (p) => { if (p.sent > 0) ac.abort(); },
+      transport: () => new RelayTransport(A, a.client, B.deviceId, pubOf(a), 'held', f.data.length + 4096 * 8),
+    });
+    expect(first.status).toBe('cancelled');
+    const [again] = await outbox.resumeAll(A, () => targetB(), { ...fast, transport: () => new RelayTransport(A, a.client, B.deviceId, pubOf(a), 'relay') });
+    expect(again!.status).toBe('held');
+    const b = await device(m, B, () => hub.port);
+    await until(() => readdirSync(b.root).includes('big.bin'), 10_000);
     expect(sha(readFileSync(join(b.root, 'big.bin')))).toBe(sha(f.data));
   });
 

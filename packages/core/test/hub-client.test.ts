@@ -112,7 +112,7 @@ async function startFakeHub(welcomeKey: KeyObject): Promise<{ port: number; sock
 }
 
 interface Dev { client: HubClient; members: MembershipStore; handled: MeshRequest[] }
-async function device(mesh: Mesh, who: Identity, port: () => number, opts: { backoffMs?: number[] } = {}): Promise<Dev> {
+async function device(mesh: Mesh, who: Identity, port: () => number, opts: { backoffMs?: number[]; answerCacheSize?: number } = {}): Promise<Dev> {
   const members = await MembershipStore.init(tmpDir(), mesh.anchor, mesh.v1);
   const handled: MeshRequest[] = [];
   const handler = async (r: MeshRequest): Promise<MeshResponse> => {
@@ -122,6 +122,7 @@ async function device(mesh: Mesh, who: Identity, port: () => number, opts: { bac
   const client = new HubClient({
     id: who, members, handler, lanAddrs: () => [{ host: '10.0.0.5', port: 53318 }],
     hubLan: () => ({ host: '127.0.0.1', port: port() }), backoffMs: opts.backoffMs ?? [50, 50],
+    ...(opts.answerCacheSize !== undefined ? { answerCacheSize: opts.answerCacheSize } : {}),
   });
   closers.push(() => client.stop());
   return { client, members, handled };
@@ -296,6 +297,24 @@ describe('HubClient inbound relay', () => {
     expect(a.handled[0]!.peer).toBe(B.deviceId);
     const res = decodeFrame(replies[0]!);
     expect(res.header).toMatchObject({ kind: 'res', id: 'BBBBBBBBBBBBBBBBBBBBBB', from: A.deviceId, to: B.deviceId, status: 200 });
+  });
+
+  it('a repeat whose cached answer was evicted is handled again, never silently dropped', async () => {
+    const mesh = await makeMesh();
+    const fake = await startFakeHub(H.privateKey);
+    const a = await device(mesh, A, () => fake.port, { answerCacheSize: 1 });
+    a.client.start();
+    await until(() => a.client.state === 'online');
+    const ws = fake.sockets[0]!;
+    const replies: Buffer[] = [];
+    ws.on('message', (d, isBinary) => { if (isBinary) replies.push(d as Buffer); });
+    ws.send(req(B, 'XXXXXXXXXXXXXXXXXXXXXX'));
+    await until(() => replies.length === 1);
+    ws.send(req(B, 'YYYYYYYYYYYYYYYYYYYYYY'));
+    await until(() => replies.length === 2);
+    ws.send(req(B, 'XXXXXXXXXXXXXXXXXXXXXX')); // evicted from the cache of 1
+    await until(() => replies.length === 3);
+    expect(decodeFrame(replies[2]!).header.id).toBe('XXXXXXXXXXXXXXXXXXXXXX');
   });
 
   it('a req repeated after it was answered gets the cached res again, without re-running the handler', async () => {

@@ -207,6 +207,63 @@ describe('held files', () => {
   });
 });
 
+describe('held store edge cases (I4, I6)', () => {
+  it('a repeated finish (lost reply) is answered again, and a cancel cannot delete a finished session', async () => {
+    const store = new HeldStore(tmpDir());
+    const s = session(1);
+    await store.put(env('POST', '/mesh/v1/offer', Buffer.from(JSON.stringify(s.offer)), s.holdBytes));
+    await store.put(chunkEnv(s, 0));
+    await store.put(env('POST', `/mesh/v1/complete/${s.sessionId}/0`));
+    expect((await store.put(env('POST', `/mesh/v1/finish/${s.sessionId}`))).status).toBe(200);
+    expect(await store.put(env('POST', `/mesh/v1/finish/${s.sessionId}`))).toEqual({ status: 200, body: { held: true } });
+    expect(await store.put(env('POST', `/mesh/v1/complete/${s.sessionId}/0`))).toEqual({ status: 200, body: { held: true } });
+    expect((await store.put(env('POST', `/mesh/v1/cancel/${s.sessionId}`))).status).toBe(409);
+    expect((await store.pending(B.deviceId)).length).toBe(1);
+  });
+
+  it('pruning an expired session tells the sender (held-failed expired)', async () => {
+    let t = 1_000_000;
+    const m = await startMesh({ now: () => t });
+    const a = await device(m, A);
+    const s = session(1);
+    await upload(a, s);
+    await finishUpload(a, s);
+    t += 7 * 24 * 3600 * 1000 + 1;
+    await m.hub.pruneHeld();
+    await until(() => a.notices.length === 1);
+    expect(a.notices[0]).toMatchObject({ t: 'held-failed', to: B.deviceId, sessionId: s.sessionId, error: 'expired' });
+  });
+
+  it('revoking the sender purges its held sessions so they cannot block the target', async () => {
+    const m = await startMesh();
+    const a = await device(m, A);
+    const s = session(1);
+    await upload(a, s);
+    await finishUpload(a, s);
+    expect((await m.held.pending(B.deviceId)).length).toBe(1);
+    await m.hub.revoke(A.deviceId);
+    await until(() => true);
+    await sleep(100);
+    expect(await m.held.pending(B.deviceId)).toEqual([]);
+  });
+
+  it('a target that reconnects while a replay is stuck on its old link gets the session at once', async () => {
+    const m = await startMesh();
+    const a = await device(m, A);
+    const s = session(1);
+    await upload(a, s);
+    await finishUpload(a, s);
+    await device(m, B, (h) => async (r) => {
+      if (r.path.startsWith('/mesh/v1/chunk/')) await new Promise(() => {}); // the old link stalls (half-open)
+      return h(r);
+    });
+    await sleep(300);
+    const b2 = await device(m, B); // replaces the old link (4409)
+    await until(() => a.notices.length === 1, 8000);
+    expect(sha(readFileSync(join(b2.root, 'held.bin')))).toBe(sha(s.data));
+  });
+});
+
 describe('HeldStore limits (Review Focus #4)', () => {
   it('holdBytes over the quota is 507 hub-quota and stores nothing', async () => {
     const m = await startMesh({ quotaBytes: 1024 });

@@ -68,7 +68,12 @@ const HUB_ERRORS = new Set([400, 503, 504, 507]);
  * accepted from the hub (its own signature) as well as from the target.
  */
 export class RelayTransport implements Transport {
-  readonly kind: 'relay' | 'held';
+  readonly #mode: 'relay' | 'held';
+  /** A 'relay' transport whose session turned out to be held on the hub (an interrupted held upload). */
+  #latched = false;
+  get kind(): 'relay' | 'held' {
+    return this.#latched ? 'held' : this.#mode;
+  }
   readonly #id: Identity;
   readonly #hub: HubClient;
   readonly #to: string;
@@ -77,7 +82,7 @@ export class RelayTransport implements Transport {
 
   constructor(id: Identity, hub: HubClient, to: string, pubOf: (id: string) => KeyObject | undefined, mode: 'relay' | 'held', holdBytes?: number) {
     if (mode === 'held' && (holdBytes === undefined || !Number.isSafeInteger(holdBytes) || holdBytes < 0)) throw new TypeError('held mode needs holdBytes');
-    this.kind = mode;
+    this.#mode = mode;
     this.#id = id;
     this.#hub = hub;
     this.#to = to;
@@ -94,10 +99,10 @@ export class RelayTransport implements Transport {
     if (typeof ct === 'string') h.contentType = ct;
     if (this.kind === 'held' && method === 'POST' && path === '/mesh/v1/offer') h.holdBytes = this.#holdBytes!;
     const res = await this.#hub.request(sealEnvelope(h, buf, this.#id.privateKey), opts.timeoutMs, opts.signal);
-    return this.#check(res, h.id);
+    return this.#check(res, h.id, method === 'POST' && path === '/mesh/v1/offer');
   }
 
-  #check(res: Envelope, id: string): PinnedResponse {
+  #check(res: Envelope, id: string, isOffer: boolean): PinnedResponse {
     const hubId = this.#hub.hubDeviceId;
     try {
       openEnvelope(res, this.#pubOf);
@@ -109,7 +114,12 @@ export class RelayTransport implements Transport {
     const status = r.status!;
     if (r.from !== this.#to) {
       // The hub may only answer for the target with its own errors, or (held mode) held replies.
-      const allowed = r.from === hubId && (HUB_ERRORS.has(status) || (this.kind === 'held' && (status >= 200 && status < 300 || status === 403 || status === 409)));
+      let allowed = r.from === hubId && (HUB_ERRORS.has(status) || (this.kind === 'held' && (status >= 200 && status < 300 || status === 403 || status === 409)));
+      if (!allowed && r.from === hubId && this.#mode === 'relay' && isOffer && status === 200 && isHeldBody(res.body)) {
+        // Resuming an upload the hub already holds for an offline target: continue it as held.
+        this.#latched = true;
+        allowed = true;
+      }
       if (!allowed) throw new RelayReplyError('relay reply from an unexpected device');
     }
     const out: PinnedResponse = { status, body: res.body };
@@ -121,6 +131,14 @@ export class RelayTransport implements Transport {
       }
     }
     return out;
+  }
+}
+
+function isHeldBody(b: Buffer): boolean {
+  try {
+    return (JSON.parse(b.toString('utf8')) as { held?: unknown }).held === true;
+  } catch {
+    return false;
   }
 }
 

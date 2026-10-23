@@ -191,11 +191,16 @@ export class HeldStore {
     if (!meta) return reply(503, { error: 'offline' });
 
     const cancel = CANCEL_RE.exec(path ?? '');
+    if (meta.finished) {
+      // The upload is complete and owned by the hub. A repeated complete/finish (its reply was lost)
+      // gets the same answer; nothing, not even a cancel, may delete it now.
+      if (method === 'POST' && (FINISH_RE.test(path ?? '') || COMPLETE_RE.test(path ?? ''))) return reply(200, { held: true });
+      return reply(409, { error: 'held-finished' });
+    }
     if (method === 'POST' && cancel) {
       await this.#fs.rm(sdir, { recursive: true, force: true });
       return reply(204);
     }
-    if (meta.finished) return reply(409, { error: 'held-finished' });
 
     let name: string;
     let status = 200;
@@ -283,7 +288,12 @@ export class HeldStore {
 
   /** Deletes sessions older than the TTL (hub clock); returns how many. */
   async prune(): Promise<number> {
-    let n = 0;
+    return (await this.pruneExpired()).length;
+  }
+
+  /** Deletes sessions older than the TTL (hub clock) and returns them, so their senders can be told. */
+  async pruneExpired(): Promise<{ from: string; to: string; sessionId: string }[]> {
+    const out: { from: string; to: string; sessionId: string }[] = [];
     const now = this.#now();
     for (const to of await this.#ls(this.dir)) {
       if (!DEVICE_ID_RE.test(to)) continue;
@@ -292,11 +302,25 @@ export class HeldStore {
         const m = await this.#meta(to, sid);
         if (m && now - m.createdAt > this.#ttl) {
           await this.remove(to, sid);
-          n++;
+          out.push({ from: m.from, to, sessionId: sid });
         }
       }
     }
-    return n;
+    return out;
+  }
+
+  /** Removes every held session to or from `deviceId` (it was revoked). */
+  async purgeDevice(deviceId: string): Promise<void> {
+    if (!DEVICE_ID_RE.test(deviceId)) return;
+    await this.#fs.rm(join(this.dir, deviceId), { recursive: true, force: true });
+    for (const to of await this.#ls(this.dir)) {
+      if (!DEVICE_ID_RE.test(to)) continue;
+      for (const sid of await this.#ls(join(this.dir, to))) {
+        if (!SESSION_ID_RE.test(sid)) continue;
+        if ((await this.#meta(to, sid))?.from === deviceId) await this.remove(to, sid);
+      }
+    }
+    await this.#fs.rm(join(this.dir, NOTICES, deviceId), { recursive: true, force: true });
   }
 
   // ---- delivery notices for an offline sender -------------------------------------------------
