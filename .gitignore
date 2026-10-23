@@ -2,3 +2,5 @@ node_modules/
 dist/
 .vitest-tmp/
 .superpowers/
+apps/desktop/test-results/
+apps/desktop/playwright-report/
