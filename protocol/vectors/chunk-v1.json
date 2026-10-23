@@ -1,0 +1,76 @@
+{
+  "description": [
+    "Frozen MeshDrop chunk/manifest sealing vector (v1). A second engine (Java) must reproduce every output byte-for-byte from the inputs.",
+    "Keys: P-256 private keys are given as raw 32-byte big-endian scalars (d); public keys as uncompressed SEC1 points (04||X||Y), hex.",
+    "HPKE: RFC 9180 mode_auth 0x02, DHKEM(P-256,HKDF-SHA256) 0x0010, HKDF-SHA256 0x0001, AES-256-GCM 0x0002. Sender runs SetupAuthS(pkR=receiver public, info, skS=sender private) with the fixed ephemeral skE; receiver runs SetupAuthR(enc, skR, info, pkS).",
+    "info = UTF-8(\"meshdrop/v1 \" + sessionId).",
+    "Nonce for seq: baseNonce XOR I2OSP(seq, 12) (RFC 9180 section 5.2). seal output = ciphertext || 16-byte GCM tag.",
+    "Manifest seq = 0, AAD = UTF-8(sessionId). Manifest plaintext = UTF-8 of manifestJson below.",
+    "manifestJson serialization: compact JSON (no whitespace) with keys in fixed order. Manifest: v, sessionId, from, to, createdAt, files, dirs, then text (omitted when absent). File entry: fileId, path, size, mime, sha256. Dir entry: path. Integers as plain decimal. Strings escape only \", \\, and control chars below U+0020 (as \\b \\f \\n \\r \\t, others \\u00xx with lowercase hex); everything else, including non-ASCII, is raw UTF-8 (this is exactly ECMAScript JSON.stringify).",
+    "Chunk seq = ((fileId + 1) << 32) | chunkIndex (fileId, chunkIndex are u32). AAD = UTF-8(sessionId) || u32be(fileId) || u32be(chunkIndex).",
+    "Offer wire fields: enc and sealedManifest are standard base64 (with padding) of the hex values given here."
+  ],
+  "inputs": {
+    "senderPrivateKeyScalarHex": "4b1e54cdaf25624ade1bc2bae65dfa0596aeac64bccb4370fd91c0c4daa80524",
+    "receiverPrivateKeyScalarHex": "26b079d7ee5747edcd754daf81d0567eb231fc70369ff836f6dbd109e9567a8d",
+    "skEScalarHex": "de60b8ba4de931c4856cd335a7ef0dd5dc403f6831c2e620f174b7cface0f4ab",
+    "sessionId": "AAECAwQFBgcICQoLDA0ODw",
+    "fromDeviceId": "1111111111111111111111111111111111111111111111111111111111111111",
+    "toDeviceId": "2222222222222222222222222222222222222222222222222222222222222222",
+    "chunkFileId": 0,
+    "chunkIndex": 0,
+    "chunkPlaintextHex": "00112233445566778899",
+    "senderPublicKeyHex": "0434573818bf0aad3eb19282f49b58a5e427d20e9633763b440ac3ae280b7ddf14862cd4fe0f565e512103a1080d761a76e1767b1e600eab91d737204596300256",
+    "receiverPublicKeyHex": "041058075693c4a5555925fe2d432f4afa9aa8dfaff6256b8576a53686ef06dd4ed1c3dd609a7bf6e4e2b5196419a2c71d68281099791984f4d7facf26cb36376e",
+    "skEPublicKeyHex": "04fbde29f18d9871c864d2ff04eef0d51f12cebf25bbf1d2de3ce729d0fd180ddb2801dcf3bcbb06c6e3031e9081fde21e7cfba952b3d0a2a0ef1406b8cec1867b"
+  },
+  "manifest": {
+    "v": 1,
+    "sessionId": "AAECAwQFBgcICQoLDA0ODw",
+    "from": "1111111111111111111111111111111111111111111111111111111111111111",
+    "to": "2222222222222222222222222222222222222222222222222222222222222222",
+    "createdAt": 1790000000000,
+    "files": [
+      {
+        "fileId": 0,
+        "path": "docs/héllo.bin",
+        "size": 10,
+        "mime": "application/octet-stream",
+        "sha256": "6654161b54048b504dc862520e84f46dfbc727e5df0dd807abc9a437d2dd6490"
+      }
+    ],
+    "dirs": [
+      {
+        "path": "empty/dir"
+      }
+    ],
+    "text": "hi \"quoted\"\n"
+  },
+  "manifestJson": "{\"v\":1,\"sessionId\":\"AAECAwQFBgcICQoLDA0ODw\",\"from\":\"1111111111111111111111111111111111111111111111111111111111111111\",\"to\":\"2222222222222222222222222222222222222222222222222222222222222222\",\"createdAt\":1790000000000,\"files\":[{\"fileId\":0,\"path\":\"docs/héllo.bin\",\"size\":10,\"mime\":\"application/octet-stream\",\"sha256\":\"6654161b54048b504dc862520e84f46dfbc727e5df0dd807abc9a437d2dd6490\"}],\"dirs\":[{\"path\":\"empty/dir\"}],\"text\":\"hi \\\"quoted\\\"\\n\"}",
+  "manifestJsonHex": "7b2276223a312c2273657373696f6e4964223a2241414543417751464267634943516f4c4441304f4477222c2266726f6d223a2231313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131222c22746f223a2232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232222c22637265617465644174223a313739303030303030303030302c2266696c6573223a5b7b2266696c654964223a302c2270617468223a22646f63732f68c3a96c6c6f2e62696e222c2273697a65223a31302c226d696d65223a226170706c69636174696f6e2f6f637465742d73747265616d222c22736861323536223a2236363534313631623534303438623530346463383632353230653834663436646662633732376535646630646438303761626339613433376432646436343930227d5d2c2264697273223a5b7b2270617468223a22656d7074792f646972227d5d2c2274657874223a226869205c2271756f7465645c225c6e227d",
+  "infoHex": "6d65736864726f702f76312041414543417751464267634943516f4c4441304f4477",
+  "manifestSeq": "0",
+  "manifestAadHex": "41414543417751464267634943516f4c4441304f4477",
+  "encHex": "04fbde29f18d9871c864d2ff04eef0d51f12cebf25bbf1d2de3ce729d0fd180ddb2801dcf3bcbb06c6e3031e9081fde21e7cfba952b3d0a2a0ef1406b8cec1867b",
+  "keyHex": "3062386004773891433e04acb3710229eb21270498552d942a8cafa57892985a",
+  "baseNonceHex": "3962ae7f482339cd5665c174",
+  "exporterSecretHex": "a0c3ec7e19391af1e1dee5242b5b0bb80e07f1ea6819e9d7282d0991efdc0c06",
+  "sealedManifestHex": "04858618a19677cbd4f7a5dad156be8233304de3515e815107bf129890805898c0616f12e4204a0c57cb60ce49e11dd57fce5001bf93452cf11348c696f4fe97dfcaf3f66743bdf39672d66d20ed5f5c0a7f1a8971b5376e77e55fe3cfa04d2ca2a65f74572f96b7052e0538b853044004d72cae8b71f557ca26a86093b701edc541d246caf84d3ab77ec8038eaf944c8d95c7a156b2e738f9664460962f06ec1ef333d7daed9a4954c83e9cd12ab62ea4c5a773763fdda6ead8ad366e4147615ca82903f0e8c87069cfced7fb37cf515f1e8e9af210c6a82ac1ef96f11cac3b61fc770fbefe9cf44320f90cf0152b7fa5518a666de07ba058120f5296314706d2f98ffa03e649de8ef65d74716e3c0eb0471c56729fe4fc6ca4d675d6648f9c5440cc03bdc1246a18c792f45becba98d98805ff5f62022e716e55d3f1ad4d7d448546692f151344f3b2a6718ebf86c274127b1457c08b286d67874faa85f6f38f830abd12288758ef3e6896329c615b1e46eb6255f9ab15b1248441c561ca93ab325c3f4d433d4f77c3c1c7007b52a47236f1770f20dfcb7f5b9d4edafa0c64ba19213f568d8d6f516119138c3d5045d23b582f6de3100cfa87578df2f2f489a4f712b455c581",
+  "offer": {
+    "v": 1,
+    "sessionId": "AAECAwQFBgcICQoLDA0ODw",
+    "from": "1111111111111111111111111111111111111111111111111111111111111111",
+    "to": "2222222222222222222222222222222222222222222222222222222222222222",
+    "enc": "BPveKfGNmHHIZNL/BO7w1R8Szr8lu/HS3jznKdD9GA3bKAHc87y7BsbjAx6Qgf3iHnz7qVKz0KKg7xQGuM7Bhns=",
+    "sealedManifest": "BIWGGKGWd8vU96Xa0Va+gjMwTeNRXoFRB78SmJCAWJjAYW8S5CBKDFfLYM5J4R3Vf85QAb+TRSzxE0jGlvT+l9/K8/ZnQ73zlnLWbSDtX1wKfxqJcbU3bnflX+PPoE0soqZfdFcvlrcFLgU4uFMEQATXLK6LcfVXyiaoYJO3Ae3FQdJGyvhNOrd+yAOOr5RMjZXHoVay5zj5ZkRgli8G7B7zM9fa7ZpJVMg+nNEqti6kxadzdj/dpurYrTZuQUdhXKgpA/DoyHBpz87X+zfPUV8ejpryEMaoKsHvlvEcrDth/HcPvv6c9EMg+QzwFSt/pVGKZm3ge6BYEg9SljFHBtL5j/oD5knejvZddHFuPA6wRxxWcp/k/Gyk1nXWZI+cVEDMA73BJGoYx5L0W+y6mNmIBf9fYgIucW5V0/GtTX1EhUZpLxUTRPOypnGOv4bCdBJ7FFfAiyhtZ4dPqoX284+DCr0SKIdY7z5oljKcYVseRutiVfmrFbEkhEHFYcqTqzJcP01DPU93w8HHAHtSpHI28XcPIN/Lf1udTtr6DGS6GSE/Vo2Nb1FhGROMPVBF0jtYL23jEAz6h1eN8vL0iaT3ErRVxYE="
+  },
+  "chunk": {
+    "fileId": 0,
+    "index": 0,
+    "plaintextHex": "00112233445566778899",
+    "seq": "4294967296",
+    "seqHex": "000000000000000100000000",
+    "aadHex": "41414543417751464267634943516f4c4441304f44770000000000000000",
+    "sealedHex": "d3ec5ec8c529bb74c417365cbee257a68e86f7d52d118773c8d6"
+  }
+}
