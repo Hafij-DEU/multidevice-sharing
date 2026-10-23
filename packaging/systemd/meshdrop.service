@@ -1,0 +1,13 @@
+[Unit]
+Description=MeshDrop device (hub on the hub PC): receiver, hub link and relay
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/meshdrop listen --device-type headless
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

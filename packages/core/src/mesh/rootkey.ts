@@ -63,3 +63,11 @@ export async function loadOrCreateRootKey(home: string): Promise<KeyObject> {
     return winner;
   }
 }
+
+/** Installs a recovered root key; refuses if this home already has one (never overwritten). */
+export async function saveRootKey(home: string, key: KeyObject): Promise<void> {
+  if (key.type !== 'private' || key.asymmetricKeyType !== 'ec' || key.asymmetricKeyDetails?.namedCurve !== 'prime256v1') {
+    throw new MembershipError('root key must be an EC P-256 private key');
+  }
+  writeFileAtomic(keyFile(home), key.export({ type: 'pkcs8', format: 'pem' }) as string, { noClobber: true });
+}

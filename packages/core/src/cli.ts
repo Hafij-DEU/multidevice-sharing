@@ -5,7 +5,12 @@
 // discovery); `pair`, `send`, `peers`, `resume` and `outbox` are one-shot client commands that never bind the
 // mesh port, so they work next to a running `listen` on the same home. They reach trusted devices
 // at the address recorded by `pair` (re-probed on start).
+import { randomBytes } from 'node:crypto';
+import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { stat } from 'node:fs/promises';
+import { join } from 'node:path';
+import { createInterface } from 'node:readline';
+import QRCode from 'qrcode';
 import { parseArgs } from 'node:util';
 import {
   Engine,
@@ -19,6 +24,7 @@ import {
 import { DEFAULT_MESH_PORT, type DeviceType } from './discovery.ts';
 import { configDir } from './paths.ts';
 import { installStopSignals } from './signals.ts';
+import { writeFileAtomic } from './trust.ts';
 
 const USAGE = `usage: meshdrop <command> [options]
 
@@ -32,6 +38,14 @@ commands:
   resume                                resume unfinished sends from the outbox
   outbox                                list unfinished sends (paused, failed or interrupted)
   outbox rm <sessionId-prefix>          drop an unfinished send (and tell its receiver to discard it)
+  hub init [--url wss://...]...         make this device the hub of a new mesh
+  hub status                            this device's role, list version, members and hub URLs
+  hub revoke <deviceId-prefix>          remove a device from the mesh for good (hub only)
+  hub recovery-export <file>            save the mesh root key + device list, passphrase-encrypted
+  hub recovery-import <file>            restore a mesh on this (fresh) device; it becomes the hub
+  invite                                print a single-use QR invite (valid 5 minutes)
+  join <meshdrop://join?...> [--alias]  join a mesh with an invite
+  members                               list the devices in this mesh
 
 options:
   --home DIR            config dir (default: $MESHDROP_HOME, $XDG_CONFIG_HOME/meshdrop, ~/.config/meshdrop)
@@ -40,6 +54,8 @@ options:
   --alias NAME          name shown to peers (default: host name)
   --device-type T       desktop | mobile | headless (default desktop)
   --no-discovery        listen: no multicast announce/discovery
+  --url URL             hub init: public wss:// URL of the hub (repeatable)
+  --passphrase-file F   hub recovery-*: read the passphrase from F instead of the terminal
   -h, --help            this help`;
 
 class UsageError extends Error {}
@@ -111,6 +127,8 @@ async function main(argv: string[]): Promise<number> {
       'device-type': { type: 'string' },
       text: { type: 'string' },
       'no-discovery': { type: 'boolean' },
+      url: { type: 'string', multiple: true },
+      'passphrase-file': { type: 'string' },
       help: { type: 'boolean', short: 'h' },
     },
   });
@@ -149,6 +167,17 @@ async function main(argv: string[]): Promise<number> {
       return cmdResume(base, args);
     case 'outbox':
       return cmdOutbox(base, args);
+    case 'hub':
+      return cmdHub(base, args, values.url ?? [], values['passphrase-file']);
+    case 'invite':
+      noArgs('invite', args);
+      return cmdInvite(base);
+    case 'join':
+      if (args.length !== 1) throw new UsageError('join: expected <meshdrop://join?...>');
+      return cmdJoin(base, args[0]!);
+    case 'members':
+      noArgs('members', args);
+      return cmdMembers(base);
     default:
       throw new UsageError(`unknown command "${cmd}"`);
   }
@@ -205,6 +234,18 @@ async function cmdListen(base: EngineOptions, args: string[]): Promise<number> {
       }
       return;
     }
+    if (ev.source === 'mesh') {
+      switch (ev.type) {
+        case 'online': out('hub    linked'); break;
+        case 'offline': out('hub    link lost (reconnecting)'); break;
+        case 'membership': out(`mesh   device list v${ev.version ?? '?'}`); break;
+        case 'joined': out(`mesh   joined (list v${ev.version ?? '?'})`); break;
+        case 'revoked': out('mesh   this device was removed from the mesh'); break;
+        case 'held-delivered': out(`held   delivered to ${nameOf(e, ev.to ?? '')} [${printable(ev.sessionId)}]`); break;
+        case 'held-failed': out(`held   delivery to ${nameOf(e, ev.to ?? '')} failed: ${printable(ev.error)} [${printable(ev.sessionId)}]`); break;
+      }
+      return;
+    }
     if (ev.source !== 'receiver') return;
     const who = nameOf(e, ev.from);
     switch (ev.type) {
@@ -247,7 +288,12 @@ async function cmdListen(base: EngineOptions, args: string[]): Promise<number> {
   }
   out(`listening on port ${e.port} as ${printable(e.alias)} (${short(e.identity.deviceId)}), inbox ${printable(e.inboxDir)}`);
   out(`device id ${e.identity.deviceId}`);
+  const st = e.hubStatus();
+  if (st.role === 'hub') out(`hub    serving the mesh (list v${st.version}, ${st.members} device(s)), tunnel ingress 127.0.0.1:${e.hubIngressPort}`);
+  const pidFile = join(e.home, 'listen.pid');
+  writeFileSync(pidFile, JSON.stringify({ pid: process.pid, port: e.port }), { mode: 0o600 });
   const s = await sig.promise;
+  rmSync(pidFile, { force: true });
   await e.stop();
   sig.dispose();
   out(`stopped (${s})`);
@@ -257,6 +303,21 @@ async function cmdListen(base: EngineOptions, args: string[]): Promise<number> {
 async function startClient(base: EngineOptions): Promise<Engine> {
   const e = await Engine.create({ ...base, serve: false });
   await e.start();
+  return e;
+}
+
+/**
+ * The engine for `send` / `resume`. Next to a running `listen` it is client-only (LAN only: the
+ * listener owns this device's single hub link). Without a listener, a device in a mesh runs a
+ * short-lived engine with its own hub link (ephemeral ports, no multicast), so it can relay or
+ * leave files on the hub.
+ */
+async function startSender(base: EngineOptions): Promise<Engine> {
+  const probe = await Engine.create({ ...base, serve: false });
+  if (probe.hubStatus().role === 'none' || listenerRunning(base.home!)) return startClient(base);
+  const e = await Engine.create({ ...base, serve: true, port: 0, discovery: false, hub: { ingressPort: 0 } });
+  await e.start();
+  for (let i = 0; i < 50 && !e.hubStatus().online; i++) await new Promise((r) => setTimeout(r, 100));
   return e;
 }
 
@@ -303,7 +364,7 @@ function printResults(e: Engine, results: SendResult[], stats: Map<string, { byt
     const bytes = s ? [...s.bytes.values()].reduce((a, b) => a + b, 0) : 0;
     const secs = s?.ended !== undefined ? (s.ended - s.started) / 1000 : 0;
     const rate = secs > 0 && bytes > 0 ? ` in ${secs.toFixed(1)} s (${fmtBytes(bytes / secs)}/s)` : '';
-    const detail = r.status === 'done' ? `${fmtBytes(bytes)}${rate}` : printable(r.error ?? '');
+    const detail = r.status === 'done' ? `${fmtBytes(bytes)}${rate}` : r.status === 'held' ? 'left on the hub until the device connects' : printable(r.error ?? '');
     out(`${r.status.padEnd(9)} ${nameOf(e, r.deviceId)}  ${detail}${r.sessionId ? `  [${r.sessionId}]` : ''}`.trimEnd());
   }
 }
@@ -346,7 +407,7 @@ async function cmdSend(base: EngineOptions, args: string[], text: string | undef
   }
   if (text !== undefined) items.push({ kind: 'text', text });
 
-  const e = await startClient(base);
+  const e = await startSender(base);
   const sig = onSignal(e);
   try {
     const ids = target === 'all' ? 'all' : target.split(',').map((q) => e.resolveDeviceId(q));
@@ -359,7 +420,7 @@ async function cmdSend(base: EngineOptions, args: string[], text: string | undef
       return 1;
     }
     printResults(e, results, stats);
-    return results.every((r) => r.status === 'done') ? 0 : 1;
+    return results.every((r) => r.status === 'done' || r.status === 'held') ? 0 : 1;
   } finally {
     await e.stop();
     sig.dispose();
@@ -368,7 +429,7 @@ async function cmdSend(base: EngineOptions, args: string[], text: string | undef
 
 async function cmdResume(base: EngineOptions, args: string[]): Promise<number> {
   noArgs('resume', args);
-  const e = await startClient(base);
+  const e = await startSender(base);
   const sig = onSignal(e);
   try {
     const stats = trackSends(e, Date.now());
@@ -378,7 +439,7 @@ async function cmdResume(base: EngineOptions, args: string[]): Promise<number> {
       return 0;
     }
     printResults(e, results, stats);
-    return results.every((r) => r.status === 'done') ? 0 : 1;
+    return results.every((r) => r.status === 'done' || r.status === 'held') ? 0 : 1;
   } finally {
     await e.stop();
     sig.dispose();
@@ -411,6 +472,150 @@ async function cmdOutbox(base: EngineOptions, args: string[]): Promise<number> {
     }
   }
   throw new UsageError(`outbox: unknown subcommand "${sub}"`);
+}
+
+// ---- mesh (M2) ----------------------------------------------------------------------------------
+
+/** The `meshdrop listen` running on this home ({pid, port} in listen.pid, live process), or null. */
+function listener(home: string): { pid: number; port: number } | null {
+  try {
+    const j = JSON.parse(readFileSync(join(home, 'listen.pid'), 'utf8')) as { pid?: unknown; port?: unknown };
+    if (!Number.isInteger(j.pid) || (j.pid as number) <= 0 || !Number.isInteger(j.port)) return null;
+    process.kill(j.pid as number, 0);
+    return { pid: j.pid as number, port: j.port as number };
+  } catch {
+    return null;
+  }
+}
+
+function listenerRunning(home: string): boolean {
+  return listener(home) !== null;
+}
+
+async function readPassphrase(file: string | undefined, confirm: boolean): Promise<string> {
+  if (file !== undefined) return readFileSync(file, 'utf8').replace(/\r?\n$/, '');
+  if (!process.stdin.isTTY) throw new UsageError('no terminal to ask for the passphrase: use --passphrase-file');
+  const ask = (q: string) =>
+    new Promise<string>((resolve) => {
+      const rl = createInterface({ input: process.stdin, output: process.stderr, terminal: true });
+      (rl as unknown as { _writeToOutput: (s: string) => void })._writeToOutput = (s: string) => {
+        if (s.startsWith(q)) process.stderr.write(q);
+      };
+      rl.question(q, (a) => {
+        rl.close();
+        process.stderr.write('\n');
+        resolve(a);
+      });
+    });
+  const p = await ask('passphrase: ');
+  if (confirm && (await ask('again:      ')) !== p) throw new UsageError('the passphrases do not match');
+  return p;
+}
+
+async function cmdHub(base: EngineOptions, args: string[], urls: string[], passFile: string | undefined): Promise<number> {
+  const [sub, ...rest] = args;
+  const home = base.home!;
+  switch (sub) {
+    case 'init': {
+      noArgs('hub init', rest);
+      if (listenerRunning(home)) throw new UsageError('hub init: stop `meshdrop listen` on this device first');
+      const e = await Engine.create(base);
+      const s = await e.hubInit(urls);
+      out(`mesh created: ${s.list.mesh}`);
+      out(`this device is the hub (${short(e.identity.deviceId)}); run \`meshdrop listen\`, then \`meshdrop invite\` to add devices`);
+      return 0;
+    }
+    case 'status': {
+      noArgs('hub status', rest);
+      const e = await Engine.create(base);
+      const st = e.hubStatus();
+      out(`role:     ${st.role}`);
+      if (st.role === 'none') return 0;
+      out(`list:     v${st.version}, ${st.members} device(s)`);
+      out(`hub:      ${st.hubId ? short(st.hubId) : '?'}`);
+      out(`urls:     ${st.urls.length ? st.urls.map(printable).join(' ') : '(none: LAN only)'}`);
+      out(`listener: ${listenerRunning(home) ? 'running' : 'not running'}`);
+      return 0;
+    }
+    case 'revoke': {
+      if (rest.length !== 1) throw new UsageError('hub revoke: expected <deviceId-prefix>');
+      const prefix = rest[0]!;
+      if (listenerRunning(home)) {
+        // The running hub owns the list: hand it the request and wait for its answer.
+        const id = randomBytes(9).toString('base64url');
+        const dir = join(home, 'hub', 'requests');
+        writeFileAtomic(join(dir, `${id}.json`), JSON.stringify({ op: 'revoke', prefix }));
+        const done = join(dir, `${id}.done.json`);
+        for (let i = 0; i < 100 && !existsSync(done); i++) await new Promise((r) => setTimeout(r, 100));
+        if (!existsSync(done)) throw new Error('hub revoke: the running listener did not answer');
+        const r = JSON.parse(readFileSync(done, 'utf8')) as { ok: boolean; version?: number; error?: string };
+        rmSync(done, { force: true });
+        if (!r.ok) throw new Error(`hub revoke: ${r.error ?? 'failed'}`);
+        out(`revoked; device list is now v${r.version}`);
+        return 0;
+      }
+      const e = await Engine.create({ ...base, serve: true, port: 0, discovery: false, hub: { ingressPort: 0 } });
+      await e.start();
+      try {
+        const s = await e.revoke(prefix);
+        out(`revoked; device list is now v${s.list.version} (devices get it when they next reach the hub)`);
+        return 0;
+      } finally {
+        await e.stop();
+      }
+    }
+    case 'recovery-export': {
+      if (rest.length !== 1) throw new UsageError('hub recovery-export: expected <file>');
+      const e = await Engine.create(base);
+      const text = e.exportRecovery(await readPassphrase(passFile, true));
+      writeFileSync(rest[0]!, text, { mode: 0o600, flag: 'wx' });
+      out(`saved ${printable(rest[0]!)}; keep it and the passphrase safe: together they control the mesh`);
+      return 0;
+    }
+    case 'recovery-import': {
+      if (rest.length !== 1) throw new UsageError('hub recovery-import: expected <file>');
+      if (listenerRunning(home)) throw new UsageError('hub recovery-import: stop `meshdrop listen` on this device first');
+      const e = await Engine.create(base);
+      const s = await e.importRecovery(readFileSync(rest[0]!, 'utf8'), await readPassphrase(passFile, false));
+      out(`restored mesh ${s.list.mesh}; this device is the hub now (list v${s.list.version}). Run \`meshdrop listen\`.`);
+      return 0;
+    }
+    default:
+      throw new UsageError(`hub: unknown subcommand "${sub ?? ''}"`);
+  }
+}
+
+async function cmdInvite(base: EngineOptions): Promise<number> {
+  // The invite carries the address of this device's receiver: the running listener's port.
+  const l = listener(base.home!);
+  const e = await Engine.create(l ? { ...base, port: l.port } : base);
+  const { uri } = e.createInvite();
+  out(uri);
+  out(await QRCode.toString(uri, { type: 'terminal', small: true }));
+  out(l ? 'valid for 5 minutes, once' : 'note: start `meshdrop listen` on this device so the invite can be redeemed');
+  return 0;
+}
+
+async function cmdJoin(base: EngineOptions, uri: string): Promise<number> {
+  const e = await Engine.create(base);
+  const status = await e.join(uri);
+  if (status === 'member') out(`joined: this device is in the mesh (list v${e.hubStatus().version})`);
+  else out('joined provisionally: the inviting device will have the hub sign this device in; keep `meshdrop listen` running');
+  return 0;
+}
+
+async function cmdMembers(base: EngineOptions): Promise<number> {
+  const e = await Engine.create(base);
+  const ms = e.members();
+  if (ms.length === 0) {
+    out('not in a mesh (run `meshdrop hub init`, or `meshdrop join <invite>`)');
+    return 0;
+  }
+  for (const m of ms) {
+    const me = m.deviceId === e.identity.deviceId ? ' (this device)' : '';
+    out(`${printable(m.alias).padEnd(20)} ${m.role.padEnd(6)} ${short(m.deviceId)}${me}`);
+  }
+  return 0;
 }
 
 main(process.argv.slice(2)).then(

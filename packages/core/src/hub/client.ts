@@ -236,6 +236,7 @@ export class HubClient extends EventEmitter {
       const timer = setTimeout(() => { ws.terminate(); done(false); }, HANDSHAKE_TIMEOUT_MS);
       const myNonce = randomBytes(32).toString('base64');
       let authed = false;
+      let helloHub = hubId;
       ws.on('error', () => {});
       ws.on('upgrade', (res: IncomingMessage) => {
         if (!t.pinned) return;
@@ -252,8 +253,12 @@ export class HubClient extends EventEmitter {
             return ws.terminate();
           }
           if (m.t === 'hello') {
-            if (m.hub !== hubId || typeof m.nonce !== 'string') return ws.terminate();
-            const sig = signDomain(HUB_AUTH_DOMAIN, `${hubId}\0${id.deviceId}\0${m.nonce}`, id.privateKey);
+            if (typeof m.hub !== 'string' || !/^[0-9a-f]{64}$/.test(m.hub) || typeof m.nonce !== 'string') return ws.terminate();
+            // A different hub id is only possible after a recovery (a new hub took over the mesh);
+            // it must then hand us a newer list, signed by the mesh root, naming it as the hub.
+            if (m.hub !== hubId && t.pinned) return ws.terminate();
+            helloHub = m.hub;
+            const sig = signDomain(HUB_AUTH_DOMAIN, `${helloHub}\0${id.deviceId}\0${m.nonce}`, id.privateKey);
             ws.send(JSON.stringify({
               t: 'auth', deviceId: id.deviceId, cert: id.certDer.toString('base64'), nonce: myNonce, sig,
               lan: this.#o.lanAddrs(), mv: members.list().version,
@@ -262,7 +267,18 @@ export class HubClient extends EventEmitter {
           }
           if (m.t === 'revoked') return this.#revoked();
           if (m.t !== 'welcome') return ws.terminate();
-          const hubPub = this.#pubOf(hubId);
+          if (helloHub !== hubId) {
+            if (!m.membership) return ws.terminate();
+            try {
+              members.accept(m.membership as SignedMembership);
+            } catch {
+              return ws.terminate();
+            }
+            if (members.list().hub.deviceId !== helloHub) return ws.terminate();
+            this.#keys.clear();
+            this.emit('membership', members.current());
+          }
+          const hubPub = this.#pubOf(helloHub);
           if (!hubPub || typeof m.sig !== 'string' || !verifyDomain(HUB_AUTH_DOMAIN, `hub\0${id.deviceId}\0${myNonce}`, m.sig, hubPub)) {
             return ws.terminate();
           }
