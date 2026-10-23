@@ -32,7 +32,7 @@ async function make(home: string, extra: Partial<EngineOptions> = {}): Promise<{
   const inbox = extra.inbox ?? tmpDir();
   const e = await Engine.create({
     home, inbox, port: 0, discovery: false, alias: extra.alias ?? 'dev',
-    hub: { ingressPort: 0 }, hubBackoffMs: [50, 100], ...extra,
+    hub: { ingressPort: 0 }, hubBackoffMs: [50, 100], allowLoopbackHubUrls: true, ...extra,
   });
   const events: EngineEvent[] = [];
   e.on('event', (x: EngineEvent) => events.push(x));
@@ -40,6 +40,18 @@ async function make(home: string, extra: Partial<EngineOptions> = {}): Promise<{
   return { e, events, inbox };
 }
 const meshEvents = (ev: EngineEvent[], type: string) => ev.filter((x) => x.source === 'mesh' && x.type === type);
+
+describe('hub URL validation', () => {
+  it('only wss:// URLs, plus ws:// loopback when explicitly allowed', async () => {
+    const strict = await make(tmpDir(), { alias: 'h', allowLoopbackHubUrls: false });
+    await strict.e.hubInit([]);
+    await strict.e.start();
+    await expect(strict.e.setHubUrls(['http://hub.example/mesh/v1/hub'])).rejects.toThrow(/wss/);
+    await expect(strict.e.setHubUrls(['ws://127.0.0.1:1/mesh/v1/hub'])).rejects.toThrow(/wss/);
+    await expect(strict.e.setHubUrls(['wss://hub.example.ts.net/mesh/v1/hub'])).resolves.toBeTruthy();
+    await expect((await make(tmpDir(), { alias: 'x', allowLoopbackHubUrls: false })).e.hubInit(['ftp://x'])).rejects.toThrow(/wss/);
+  });
+});
 
 describe('invite lifetime across restarts (C1)', () => {
   it('a redeemed invite stays dead after the inviter restarts; a fresh one works', async () => {

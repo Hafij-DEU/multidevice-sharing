@@ -233,6 +233,28 @@ describe('HubServer authority and registry', () => {
   });
 });
 
+describe('pre-auth limits', () => {
+  it('at most 64 unauthenticated links: the 65th is closed 4429', async () => {
+    const h = await startHub({ authTimeoutMs: 5000 });
+    const clients: Client[] = [];
+    for (let i = 0; i < 64; i++) {
+      const c = new Client(url(h.port));
+      await c.next('hello');
+      clients.push(c);
+    }
+    const extra = new Client(url(h.port));
+    expect(await extra.closed).toBe(4429);
+  });
+
+  it('an oversized message before auth closes 4401', async () => {
+    const h = await startHub();
+    const c = new Client(url(h.port), A);
+    await c.next('hello');
+    c.ws.send('x'.repeat(20_000));
+    expect(await c.closed).toBe(4401);
+  });
+});
+
 describe('ingress', () => {
   it('listens on 127.0.0.1 only and speaks the same handshake over plain ws', async () => {
     const h = await startHub();

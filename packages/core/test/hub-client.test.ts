@@ -206,6 +206,25 @@ describe('HubClient', () => {
   });
 });
 
+describe('link liveness', () => {
+  it('a hub that stops answering pings is dropped and relinked', async () => {
+    const mesh = await makeMesh();
+    const fake = await startFakeHub(H.privateKey);
+    const members = await MembershipStore.init(tmpDir(), mesh.anchor, mesh.v1);
+    const client = new HubClient({
+      id: A, members, handler: async () => ({ status: 404, headers: {}, body: Buffer.alloc(0) }), lanAddrs: () => [],
+      hubLan: () => ({ host: '127.0.0.1', port: fake.port }), backoffMs: [50, 50], pingMs: 200,
+    });
+    closers.push(() => client.stop());
+    let onlines = 0;
+    client.on('online', () => { onlines++; });
+    client.start();
+    await until(() => onlines === 1);
+    // the fake hub never answers pings and sends nothing: within 2 x pingMs + slack the client relinks
+    await until(() => onlines === 2, 2 * 200 + 1500);
+  });
+});
+
 describe('revocation must be proven (I1)', () => {
   /** A hub endpoint that answers every auth with {t:'revoked', s?} and close 4403. */
   async function revokingHub(s?: SignedMembership): Promise<number> {

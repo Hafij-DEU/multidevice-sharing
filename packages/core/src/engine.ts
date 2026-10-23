@@ -1209,7 +1209,24 @@ export class Engine extends EventEmitter {
   }
 
   /** Makes this device the hub of a new mesh (root key + list v1). Call before start(). */
+  /** Hub URLs must be wss:// (CA-validated); ws:// to this machine only when allowed (tests, local tunnels). */
+  private checkHubUrls(urls: string[]): void {
+    for (const u of urls) {
+      let p: URL;
+      try {
+        p = new URL(u);
+      } catch {
+        throw new Error(`invalid hub URL ${JSON.stringify(u)}: expected wss://…`);
+      }
+      const loopback = ['127.0.0.1', 'localhost', '[::1]'].includes(p.hostname);
+      if (p.protocol === 'wss:' && u.length <= 512) continue;
+      if (p.protocol === 'ws:' && loopback && this.opts.allowLoopbackHubUrls) continue;
+      throw new Error(`invalid hub URL ${JSON.stringify(u)}: expected wss://…`);
+    }
+  }
+
   async hubInit(urls: string[]): Promise<SignedMembership> {
+    this.checkHubUrls(urls);
     if (this.running) throw new Error('hub init: stop the engine first');
     if (this.mesh || (await hasRootKey(this.home))) throw new Error('hub init: this device is already in a mesh');
     const rootKey = await loadOrCreateRootKey(this.home);
@@ -1234,6 +1251,7 @@ export class Engine extends EventEmitter {
 
   /** Hub only: the public wss:// URLs devices use to reach the hub from outside the LAN. */
   async setHubUrls(urls: string[]): Promise<SignedMembership> {
+    this.checkHubUrls(urls);
     return this.requireHub().setUrls(urls);
   }
 

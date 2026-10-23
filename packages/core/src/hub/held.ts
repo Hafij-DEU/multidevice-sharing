@@ -181,12 +181,15 @@ export class HeldStore {
       }
       const holdBytes = e.header.holdBytes;
       if (holdBytes === undefined) return reply(503, { error: 'offline' });
-      if (holdBytes > this.#quota - (await this.#used())) return reply(507, { error: 'hub-quota' });
-      await this.#fs.mkdir(sdir, { recursive: true, mode: 0o700 });
-      meta = { from: e.header.from, holdBytes, storedBytes: frame.length, createdAt: this.#now(), completes: [], finished: false };
-      await this.#write(join(sdir, 'offer.env'), frame);
-      await this.#write(join(sdir, 'meta.json'), JSON.stringify(meta));
-      return reply(200, { have: {}, held: true });
+      // Reserving is check-then-write: one new offer at a time, so two cannot both fit the quota.
+      return this.#lock('quota', async () => {
+        if (holdBytes > this.#quota - (await this.#used())) return reply(507, { error: 'hub-quota' });
+        await this.#fs.mkdir(sdir, { recursive: true, mode: 0o700 });
+        const m: Meta = { from: e.header.from, holdBytes, storedBytes: frame.length, createdAt: this.#now(), completes: [], finished: false };
+        await this.#write(join(sdir, 'offer.env'), frame);
+        await this.#write(join(sdir, 'meta.json'), JSON.stringify(m));
+        return reply(200, { have: {}, held: true });
+      });
     }
     if (!meta) return reply(503, { error: 'offline' });
 

@@ -253,6 +253,32 @@ describe('sender transports', () => {
     expect(sha(readFileSync(join(b.root, 'big.bin')))).toBe(sha(f.data));
   });
 
+  it('a hub-signed 500 is retried like any transient failure', async () => {
+    const m = await makeMesh();
+    const hub = await startHub(m);
+    const a = await device(m, A, () => hub.port);
+    await until(() => a.client.state === 'online');
+    const realPut = m.held.put.bind(m.held);
+    let n = 0;
+    m.held.put = async (e) => {
+      if (n++ === 0) throw new Error('disk hiccup'); // hub answers 500 internal once
+      return realPut(e);
+    };
+    const f = file(1);
+    let offers = 0;
+    const r = await sendTo(A, targetB(), [{ kind: 'file', srcPath: f.path }], {
+      retryDelaysMs: [10, 10],
+      transport: () => {
+        const t = new RelayTransport(A, a.client, B.deviceId, pubOf(a), 'held', f.data.length + 1_000_000);
+        const orig = t.request.bind(t);
+        t.request = (method, path, ...rest) => { if (path.endsWith('/offer')) offers++; return orig(method, path, ...rest); };
+        return t;
+      },
+    });
+    expect(offers).toBe(2);
+    expect(r.status).toBe('held');
+  });
+
   it('a LanTransport without an address fails with NoRouteError, not a retry loop', async () => {
     const t = new LanTransport(A, targetB());
     await expect(t.request('GET', '/mesh/v1/info', undefined, {}, { timeoutMs: 1000 })).rejects.toBeInstanceOf(NoRouteError);

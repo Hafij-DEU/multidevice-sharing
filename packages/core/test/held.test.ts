@@ -266,6 +266,19 @@ describe('held store edge cases (I4, I6)', () => {
   });
 });
 
+describe('HeldStore quota under concurrency', () => {
+  it('two concurrent offers that together exceed the quota: exactly one is refused', async () => {
+    const s1 = session(1);
+    const s2 = session(1);
+    const store = new HeldStore(tmpDir(), { quotaBytes: s1.holdBytes + 10 });
+    const [r1, r2] = await Promise.all([
+      store.put(env('POST', '/mesh/v1/offer', Buffer.from(JSON.stringify(s1.offer)), s1.holdBytes)),
+      store.put(env('POST', '/mesh/v1/offer', Buffer.from(JSON.stringify(s2.offer)), s2.holdBytes)),
+    ]);
+    expect([r1.status, r2.status].sort()).toEqual([200, 507]);
+  });
+});
+
 describe('HeldStore limits (Review Focus #4)', () => {
   it('holdBytes over the quota is 507 hub-quota and stores nothing', async () => {
     const m = await startMesh({ quotaBytes: 1024 });

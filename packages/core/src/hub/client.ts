@@ -71,6 +71,7 @@ export class HubClient extends EventEmitter {
   /** Requests being handled right now, by `${from}:${id}`. */
   readonly #inflight = new Set<string>();
   #state: HubClientState = 'idle';
+  #lastRx = 0;
   #ws: WebSocket | null = null;
   #stopped = true;
   #attempt = 0;
@@ -236,6 +237,7 @@ export class HubClient extends EventEmitter {
         cert: id.certPem,
         // Pinned LAN link: the hub's self-signed cert is checked by device id below, not by a CA.
         rejectUnauthorized: !t.pinned,
+        minVersion: 'TLSv1.3',
         maxPayload: MAX_FRAME_BYTES,
         handshakeTimeout: HANDSHAKE_TIMEOUT_MS,
       });
@@ -314,7 +316,14 @@ export class HubClient extends EventEmitter {
   #online(ws: WebSocket): void {
     this.#ws = ws;
     this.#state = 'online';
+    this.#lastRx = Date.now();
     this.#ping = setInterval(() => {
+      // Nothing from the hub (not even a pong) for two ping periods: the link is dead (half-open
+      // after a network change); drop it so we relink instead of believing we are online.
+      if (Date.now() - this.#lastRx > 2 * this.#pingMs) {
+        ws.terminate();
+        return;
+      }
       if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ t: 'ping' }));
     }, this.#pingMs);
     this.#ping.unref();
@@ -391,6 +400,7 @@ export class HubClient extends EventEmitter {
   // ---- messages -----------------------------------------------------------------------------
 
   #onMessage(ws: WebSocket, data: RawData, isBinary: boolean): void {
+    this.#lastRx = Date.now();
     if (isBinary) {
       void this.#onFrame(ws, Buffer.isBuffer(data) ? data : Buffer.from(data as ArrayBuffer));
       return;

@@ -60,7 +60,7 @@ export class LanTransport implements Transport {
   }
 }
 
-const HUB_ERRORS = new Set([400, 503, 504, 507]);
+const HUB_ERRORS = new Set([400, 500, 503, 504, 507]);
 
 /**
  * Requests as signed envelopes through the hub link. In 'held' mode the offer carries `holdBytes`,
