@@ -77,10 +77,18 @@ interface Session {
   /** Lines in progress.log, and records a compacted log would hold (compaction trigger). */
   logLines: number;
   live: number;
+  /**
+   * Incoming top-level folder name -> local name, for folders whose name an existing non-directory
+   * in the inbox already uses (decided once, at begin(), and kept in state.json for resume).
+   */
+  tops: Record<string, string>;
 }
 type LogRecord = { c: [number, number] } | { p: [number, string] } | { d: [number, string] } | { x: number };
 
 const code = (e: unknown): string | undefined => (e as NodeJS.ErrnoException)?.code;
+
+const isTops = (x: unknown): x is Record<string, string> =>
+  typeof x === 'object' && x !== null && !Array.isArray(x) && Object.values(x).every((v) => typeof v === 'string');
 
 /** safeRelPath plus inbox-specific rules: non-empty, and never inside the partial area. */
 function inboxRelParts(p: string): string[] {
@@ -226,10 +234,11 @@ export class Inbox {
     return p;
   }
 
-  private newSession(manifest: Manifest, ctxExport: string): Session {
+  private newSession(manifest: Manifest, ctxExport: string, tops: Record<string, string> = {}): Session {
     return {
       manifest,
       ctxExport,
+      tops,
       files: new Map(manifest.files.map((f) => [f.fileId, f])),
       have: new Map(),
       done: new Map(),
@@ -241,9 +250,9 @@ export class Inbox {
 
   private async loadSession(sessionId: string): Promise<Session | null> {
     const dir = this.sessionDir(sessionId);
-    const st = (await this.readJson(`${dir}/state.json`)) as { manifest: Manifest; ctxExport: string } | null;
+    const st = (await this.readJson(`${dir}/state.json`)) as { manifest: Manifest; ctxExport: string; tops?: Record<string, string> } | null;
     if (!st) return null;
-    const s = this.newSession(st.manifest, st.ctxExport);
+    const s = this.newSession(st.manifest, st.ctxExport, isTops(st.tops) ? st.tops : {});
     const text = await this.readText(`${dir}/${LOG}`);
     if (text === null) return s;
     // Malformed lines (only ever a torn last line, since the log is compacted before anything is
@@ -297,6 +306,45 @@ export class Inbox {
     return cur;
   }
 
+  /**
+   * Top-level folders of `m` whose name is taken in the inbox by something that is not a directory
+   * (a file, a symlink): each gets a free name such as "Photos (1)" for this whole session.
+   * An existing directory of that name is merged into as usual.
+   */
+  private async mapTops(m: Manifest): Promise<Record<string, string>> {
+    const folders = new Set<string>();
+    for (const f of m.files) {
+      const parts = inboxRelParts(f.path);
+      if (parts.length > 1) folders.add(parts[0]!);
+    }
+    for (const d of m.dirs) folders.add(inboxRelParts(d.path)[0]!);
+    const tops: Record<string, string> = {};
+    for (const name of folders) {
+      const st = await this.statOrNullL(`${this.root}/${name}`);
+      if (st && !st.isDirectory()) {
+        await this.fs.mkdir(this.root, { recursive: true });
+        tops[name] = await uniqueName(this.root, name, this.fs);
+      }
+    }
+    return tops;
+  }
+
+  private async statOrNullL(p: string): Promise<Awaited<ReturnType<typeof nodeFs.lstat>> | null> {
+    try {
+      return await this.fs.lstat(p);
+    } catch (e) {
+      if (code(e) === 'ENOENT') return null;
+      throw e;
+    }
+  }
+
+  /** The inbox-relative parts for `p` in session `s` (its top-level folder mapped, if needed). */
+  private destParts(s: Session, p: string, isDir: boolean): string[] {
+    const parts = inboxRelParts(p);
+    if ((parts.length > 1 || isDir) && s.tops[parts[0]!] !== undefined) parts[0] = s.tops[parts[0]!]!;
+    return parts;
+  }
+
   // ---- public API ------------------------------------------------------------------------------
 
   async begin(sessionId: string, manifest: Manifest, ctxExport: string): Promise<void> {
@@ -306,8 +354,8 @@ export class Inbox {
     await this.lock(sessionId, async () => {
       const existing = await this.getSession(sessionId);
       if (existing && serializeManifest(existing.manifest) === serializeManifest(manifest)) {
-        // Same manifest: keep the progress (compacted), refresh the stored context.
-        await this.writeAtomic(`${dir}/state.json`, JSON.stringify({ manifest, ctxExport }));
+        // Same manifest: keep the progress (compacted) and folder mapping, refresh the stored context.
+        await this.writeAtomic(`${dir}/state.json`, JSON.stringify({ manifest, ctxExport, tops: existing.tops }));
         existing.ctxExport = ctxExport;
         await this.compact(sessionId, existing);
         return;
@@ -317,8 +365,9 @@ export class Inbox {
       this.sessions.delete(sessionId);
       await this.fs.rm(dir, { recursive: true, force: true });
       await this.fs.mkdir(dir, { recursive: true, mode: 0o700 });
-      await this.writeAtomic(`${dir}/state.json`, JSON.stringify({ manifest, ctxExport }));
-      this.sessions.set(sessionId, Promise.resolve(this.newSession(manifest, ctxExport)));
+      const tops = await this.mapTops(manifest);
+      await this.writeAtomic(`${dir}/state.json`, JSON.stringify({ manifest, ctxExport, tops }));
+      this.sessions.set(sessionId, Promise.resolve(this.newSession(manifest, ctxExport, tops)));
     });
   }
 
@@ -471,7 +520,7 @@ export class Inbox {
         throw new IntegrityError(`sha256 mismatch for file ${fileId}`);
       }
 
-      const parts = inboxRelParts(file.path);
+      const parts = this.destParts(s, file.path, false);
       const base = parts.pop()!;
       const destDir = await this.ensureDir(parts);
       for (;;) {
@@ -518,7 +567,7 @@ export class Inbox {
 
   async finalizeDirs(sessionId: string): Promise<void> {
     const s = await this.requireSession(sessionId);
-    for (const d of s.manifest.dirs) await this.ensureDir(inboxRelParts(d.path));
+    for (const d of s.manifest.dirs) await this.ensureDir(this.destParts(s, d.path, true));
   }
 
   /** fileIds already finalized into their final path (idempotent `finalize` returns the path). */

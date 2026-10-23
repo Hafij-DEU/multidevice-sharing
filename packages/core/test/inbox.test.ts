@@ -304,6 +304,22 @@ describe('Inbox', () => {
     const inbox = new Inbox(root);
     await inbox.begin(sid, manifest(sid, [{ path: 'link/x.txt', data: d }], ['link/newdir']), 'c');
     await inbox.writeChunk(sid, 0, 0, d);
+    // A symlink already there when the session starts is treated like a file of that name: the
+    // folder gets its own name and nothing goes through the link.
+    expect(await inbox.finalize(sid, 0)).toBe(join(root, 'link (1)', 'x.txt'));
+    await inbox.finalizeDirs(sid);
+    expect(readdirSync(outside)).toEqual([]);
+  });
+
+  it('refuses a symlink that appears in the destination after the session started', async () => {
+    const root = tmpRoot();
+    const outside = tmpRoot();
+    const sid = newSessionId();
+    const d = Buffer.from('evil');
+    const inbox = new Inbox(root);
+    await inbox.begin(sid, manifest(sid, [{ path: 'late/x.txt', data: d }], ['late/newdir']), 'c');
+    symlinkSync(outside, join(root, 'late'));
+    await inbox.writeChunk(sid, 0, 0, d);
     await expect(inbox.finalize(sid, 0)).rejects.toBeInstanceOf(UnsafePathError);
     await expect(inbox.finalizeDirs(sid)).rejects.toBeInstanceOf(UnsafePathError);
     expect(readdirSync(outside)).toEqual([]);
@@ -557,5 +573,52 @@ describe('Inbox', () => {
     await inbox.markFinished(sid2, { from: 'f'.repeat(64), files: [] });
     expect(await inbox.finished(sid)).toBeNull(); // pruned
     expect(await inbox.finished(sid2)).not.toBeNull();
+  });
+});
+
+describe('Inbox: an incoming folder vs an existing file of the same name', () => {
+  it('lands the folder under a unique name and leaves the file alone', async () => {
+    const root = tmpRoot();
+    writeFileSync(join(root, 'Photos'), 'i am a file');
+    const inbox = new Inbox(root);
+    const sid = newSessionId();
+    const data = Buffer.from('jpeg');
+    await inbox.begin(sid, manifest(sid, [{ path: 'Photos/a.jpg', data }], ['Photos/empty']), 'ctx');
+    await inbox.writeChunk(sid, 0, 0, data);
+    expect(await inbox.finalize(sid, 0)).toBe(join(root, 'Photos (1)', 'a.jpg'));
+    await inbox.finalizeDirs(sid);
+    expect(statSync(join(root, 'Photos (1)', 'empty')).isDirectory()).toBe(true);
+    expect(readFileSync(join(root, 'Photos'), 'utf8')).toBe('i am a file');
+  });
+
+  it('keeps the same folder after a restart', async () => {
+    const root = tmpRoot();
+    writeFileSync(join(root, 'Photos'), 'file');
+    const sid = newSessionId();
+    const a = Buffer.from('one');
+    const b = Buffer.from('two');
+    const m = manifest(sid, [{ path: 'Photos/a.jpg', data: a }, { path: 'Photos/b.jpg', data: b }]);
+    const first = new Inbox(root);
+    await first.begin(sid, m, 'ctx');
+    await first.writeChunk(sid, 0, 0, a);
+    await first.finalize(sid, 0);
+    writeFileSync(join(root, 'Photos (1)x'), 'noise'); // unrelated
+    const again = new Inbox(root);
+    await again.begin(sid, m, 'ctx');
+    await again.writeChunk(sid, 1, 0, b);
+    expect(await again.finalize(sid, 1)).toBe(join(root, 'Photos (1)', 'b.jpg'));
+  });
+
+  it('merges into an existing directory of that name', async () => {
+    const root = tmpRoot();
+    await fsp.mkdir(join(root, 'Photos'));
+    writeFileSync(join(root, 'Photos', 'old.jpg'), 'old');
+    const inbox = new Inbox(root);
+    const sid = newSessionId();
+    const data = Buffer.from('new');
+    await inbox.begin(sid, manifest(sid, [{ path: 'Photos/new.jpg', data }]), 'ctx');
+    await inbox.writeChunk(sid, 0, 0, data);
+    expect(await inbox.finalize(sid, 0)).toBe(join(root, 'Photos', 'new.jpg'));
+    expect(readFileSync(join(root, 'Photos', 'old.jpg'), 'utf8')).toBe('old');
   });
 });
