@@ -26,6 +26,38 @@ describe('safeRelPath', () => {
   });
 });
 
+describe('safeRelPath length limits', () => {
+  const bl = (s: string) => Buffer.byteLength(s, 'utf8');
+  it('truncates a long segment to <= 240 bytes, keeping a short extension', () => {
+    const out = safeRelPath('a/' + 'x'.repeat(300) + '.txt');
+    const seg = out.split('/')[1]!;
+    expect(bl(seg)).toBe(240);
+    expect(seg.endsWith('.txt')).toBe(true);
+    expect(seg.startsWith('x'.repeat(236))).toBe(true);
+  });
+  it('truncates the whole segment when the extension is long or absent', () => {
+    expect(bl(safeRelPath('y'.repeat(304)))).toBe(240);
+    const out = safeRelPath('z'.repeat(250) + '.' + 'e'.repeat(20));
+    expect(bl(out)).toBe(240);
+  });
+  it('never splits multi-byte characters or surrogate pairs; lone surrogates are replaced', () => {
+    for (const ch of ['\u00e9', '\u20ac', '\u{1F600}']) {
+      const out = safeRelPath(ch.repeat(200) + '.jpg');
+      expect(bl(out)).toBeLessThanOrEqual(240);
+      expect(out.endsWith('.jpg')).toBe(true);
+      expect(Buffer.from(out, 'utf8').toString('utf8')).toBe(out);
+      expect(out).not.toContain('\ufffd');
+    }
+    const lone = safeRelPath('a\ud800b');
+    expect(lone).toBe('a_b');
+  });
+  it('rejects a relative path over 3072 bytes', () => {
+    const seg = 'p'.repeat(240);
+    expect(() => safeRelPath(Array(13).fill(seg).join('/'))).toThrow(UnsafePathError); // 13*240+12 = 3132
+    expect(safeRelPath(Array(12).fill(seg).join('/')).length).toBe(12 * 240 + 11); // 2891, fine
+  });
+});
+
 describe('uniqueName', () => {
   const dirs: string[] = [];
   afterEach(() => { for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true }); });

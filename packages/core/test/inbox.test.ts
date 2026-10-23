@@ -265,4 +265,36 @@ describe('Inbox', () => {
     await expect(inbox.finalize(sid, 0)).rejects.toBeInstanceOf(IncompleteFileError);
     await expect(inbox.finalize(sid, 5)).rejects.toBeInstanceOf(ChunkRangeError);
   });
+
+  it('over-long names are truncated up front: finalize works, collisions do not hit ENAMETOOLONG', async () => {
+    const root = tmpRoot();
+    const sid = newSessionId();
+    const a = Buffer.from('aaa'), b = Buffer.from('bbb'), c = Buffer.from('ccc');
+    const long = 'n'.repeat(304) + '.txt';
+    const inbox = new Inbox(root);
+    await inbox.begin(sid, manifest(sid, [{ path: long, data: a }, { path: long, data: b }, { path: '\u00e9'.repeat(200) + '.md', data: c }]), 'c');
+    for (const [i, d] of [a, b, c].entries()) await inbox.writeChunk(sid, i, 0, d);
+    const p1 = await inbox.finalize(sid, 0);
+    const p2 = await inbox.finalize(sid, 1);
+    const p3 = await inbox.finalize(sid, 2);
+    const base1 = p1.slice(root.length + 1);
+    expect(Buffer.byteLength(base1)).toBe(240);
+    expect(base1.endsWith('.txt')).toBe(true);
+    expect(p2).toBe(join(root, base1.replace(/\.txt$/, ' (1).txt')));
+    expect(readFileSync(p1, 'utf8')).toBe('aaa');
+    expect(readFileSync(p2, 'utf8')).toBe('bbb');
+    expect(Buffer.byteLength(p3.slice(root.length + 1))).toBeLessThanOrEqual(240);
+    expect(readFileSync(p3, 'utf8')).toBe('ccc');
+  });
+
+  it('begin rejects a total path over 3072 bytes', async () => {
+    const root = tmpRoot();
+    const sid = newSessionId();
+    const d = Buffer.from('x');
+    const tooLong = Array(13).fill('p'.repeat(240)).join('/');
+    const inbox = new Inbox(root);
+    await expect(inbox.begin(sid, manifest(sid, [{ path: tooLong, data: d }]), 'c')).rejects.toBeInstanceOf(UnsafePathError);
+    await expect(inbox.begin(sid, manifest(sid, [], [tooLong]), 'c')).rejects.toBeInstanceOf(UnsafePathError);
+    expect(existsSync(partialDir(root, sid))).toBe(false);
+  });
 });
