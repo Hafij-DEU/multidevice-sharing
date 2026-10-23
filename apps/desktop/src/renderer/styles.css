@@ -88,3 +88,8 @@ button.danger { background: var(--bad); color: #fff; border-color: var(--bad); }
 .modal-backdrop { position: fixed; inset: 0; background: rgb(0 0 0 / 0.4); display: flex; align-items: center; justify-content: center; }
 .modal { background: var(--panel); border-radius: var(--radius); padding: 18px 20px; max-width: 440px; box-shadow: 0 8px 30px rgb(0 0 0 / 0.3); }
 .modal h2 { margin-top: 0; }
+.settings .field { display: flex; flex-direction: column; gap: 4px; margin: 10px 0; max-width: 560px; }
+.settings .field > span:first-child { font-weight: 600; }
+.picker { padding: 14px 16px; }
+.picker h1 { font-size: 17px; }
+.picker .list > li { padding: 6px 10px; }

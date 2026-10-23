@@ -5,6 +5,7 @@ import { errorText } from './format.ts';
 import { Devices } from './pages/Devices.tsx';
 import { Inbox } from './pages/Inbox.tsx';
 import { Mesh } from './pages/Mesh.tsx';
+import { Settings } from './pages/Settings.tsx';
 import { Transfers } from './pages/Transfers.tsx';
 
 const PAGES = ['Devices', 'Transfers', 'Inbox', 'Mesh', 'Settings'] as const;
@@ -79,7 +80,9 @@ export function App() {
           <Inbox state={state} run={run} />
         ) : page === 'Mesh' ? (
           <Mesh state={state} run={run} />
-        ) : null}
+        ) : (
+          <Settings key={JSON.stringify(state.settings)} state={state} run={run} />
+        )}
       </main>
       <Toasts items={toasts} onClose={(id) => setToasts((t) => t.filter((x) => x.id !== id))} />
     </div>

@@ -1,27 +1,41 @@
-// Electron entry: one window over the app controller. Security: isolated, sandboxed renderer that
-// can only call the DesktopApi (every argument type-checked here); no navigation, no new windows.
-import { app, BrowserWindow, clipboard, dialog, ipcMain, Notification, shell, type IpcMainInvokeEvent } from 'electron';
+// Electron entry: the main window, the clipboard picker and the tray over one app controller.
+// Security: isolated, sandboxed renderers that can only call the DesktopApi (every argument
+// type-checked here); no navigation, no new windows.
+import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeImage, Notification, shell, Tray, type IpcMainInvokeEvent } from 'electron';
+import { execFile } from 'node:child_process';
 import { join } from 'node:path';
+import { promisify } from 'node:util';
 import { configDir } from '@meshdrop/core/src/paths.ts';
 import type { AppState, ReceivedRecord, SendItemInput, Settings } from '../shared/api.ts';
 import { AppController, type Platform } from './controller.ts';
+import { autostartDir, gnomeShortcutCommands, parseStrList, READ_KEYBINDINGS, setAutostart, validBinding } from './desktop.ts';
 import { HistoryStore } from './history.ts';
 import { SettingsStore, defaultSettings } from './settings.ts';
 
+const execFileP = promisify(execFile);
 const TEST = process.env.MESHDROP_TEST === '1';
+const HOME = process.env.MESHDROP_HOME ?? configDir();
+const ICONS = join(__dirname, '../icons');
+
 let win: BrowserWindow | null = null;
+let picker: BrowserWindow | null = null;
+let tray: Tray | null = null;
 let controller: AppController | null = null;
+let settings: SettingsStore | null = null;
+let quitting = false;
 /** MESHDROP_TEST only: what the next file picker returns (set by e2e through app.evaluate). */
 let picked: string[] | null = null;
 
-function createWindow(): BrowserWindow {
+/** The command that starts this app (autostart, keyboard shortcut). */
+function launchCommand(): string | string[] {
+  return app.isPackaged ? process.execPath : [process.execPath, app.getAppPath()];
+}
+
+function makeWindow(opts: Electron.BrowserWindowConstructorOptions, hash?: string): BrowserWindow {
   const w = new BrowserWindow({
-    width: 980,
-    height: 680,
-    minWidth: 720,
-    minHeight: 520,
-    title: 'MeshDrop',
-    show: !TEST,
+    ...opts,
+    show: false,
+    icon: join(ICONS, 'icon.png'),
     autoHideMenuBar: true,
     webPreferences: {
       preload: join(__dirname, 'preload.cjs'),
@@ -36,14 +50,81 @@ function createWindow(): BrowserWindow {
     return { action: 'deny' };
   });
   w.webContents.on('will-navigate', (e) => e.preventDefault());
-  void w.loadFile(join(__dirname, '../renderer/index.html'));
+  if (!TEST) w.once('ready-to-show', () => w.show());
+  void w.loadFile(join(__dirname, '../renderer/index.html'), hash ? { hash } : {});
   return w;
+}
+
+function showMain(): void {
+  if (win && !win.isDestroyed()) {
+    if (!TEST) win.show();
+    win.focus();
+    return;
+  }
+  win = makeWindow({ width: 980, height: 680, minWidth: 720, minHeight: 520, title: 'MeshDrop' });
+  win.on('close', (e) => {
+    // Closed to the tray: the window hides and MeshDrop keeps receiving.
+    if (!quitting && tray && settings?.get().closeToTray) {
+      e.preventDefault();
+      win?.hide();
+    }
+  });
+  win.on('closed', () => {
+    win = null;
+  });
+}
+
+/** The small always-on-top clipboard sender (GNOME/Wayland lets only a focused window read the clipboard). */
+function showPicker(): void {
+  if (picker && !picker.isDestroyed()) {
+    if (!TEST) picker.show();
+    picker.focus();
+    return;
+  }
+  picker = makeWindow({ width: 380, height: 460, title: 'Send clipboard', alwaysOnTop: true, resizable: false, minimizable: false, maximizable: false, skipTaskbar: true }, 'picker');
+  picker.on('closed', () => {
+    picker = null;
+  });
+}
+
+function quit(): void {
+  quitting = true;
+  app.quit();
+}
+
+function rebuildTray(): void {
+  if (!tray) return;
+  const receiving = controller?.receiving ?? true;
+  tray.setContextMenu(
+    Menu.buildFromTemplate([
+      { label: 'Open MeshDrop', click: showMain },
+      { label: 'Send clipboard…', click: showPicker },
+      { type: 'separator' },
+      {
+        label: receiving ? 'Pause receiving' : 'Resume receiving',
+        click: () => void controller?.setReceiving(!receiving).finally(rebuildTray),
+      },
+      { type: 'separator' },
+      { label: 'Quit', click: quit },
+    ]),
+  );
+}
+
+function createTray(): void {
+  try {
+    tray = new Tray(nativeImage.createFromPath(join(ICONS, 'tray.png')));
+    tray.setToolTip('MeshDrop');
+    tray.on('click', showMain);
+    rebuildTray();
+  } catch {
+    tray = null; // no tray on this desktop: closing the window quits
+  }
 }
 
 const platform: Platform = {
   notify(title, body, onClick) {
     if (!Notification.isSupported()) return;
-    const n = new Notification({ title, body });
+    const n = new Notification({ title, body, icon: join(ICONS, 'icon.png') });
     if (onClick) n.on('click', onClick);
     n.show();
   },
@@ -101,70 +182,79 @@ function ctl(): AppController {
   return controller;
 }
 
+/** The window an IPC call came from (dialogs attach to it). */
+const owner = (e: IpcMainInvokeEvent): BrowserWindow => BrowserWindow.fromWebContents(e.sender)!;
+
 function wireIpc(): void {
-  const handle = (name: string, fn: (...args: unknown[]) => unknown) => {
+  const handle = (name: string, fn: (e: IpcMainInvokeEvent, ...args: unknown[]) => unknown) => {
     ipcMain.handle(`meshdrop:${name}`, (e: IpcMainInvokeEvent, ...args: unknown[]) => {
-      if (!win || e.sender !== win.webContents) throw new Error('unknown sender');
-      return fn(...args);
+      const ours = [win, picker].some((w) => w && !w.isDestroyed() && e.sender === w.webContents);
+      if (!ours) throw new Error('unknown sender');
+      return fn(e, ...args);
     });
   };
-  handle('getState', () => ctl().state());
-  handle('pickFiles', async () => {
+  handle('getState', (_e) => ctl().state());
+  handle('pickFiles', async (e) => {
     if (TEST && picked) {
       const p = picked;
       picked = null;
       return p;
     }
-    const r = await dialog.showOpenDialog(win!, { properties: ['openFile', 'multiSelections'] });
+    const r = await dialog.showOpenDialog(owner(e), { properties: ['openFile', 'multiSelections'] });
     return r.canceled ? [] : r.filePaths;
   });
-  handle('pickFolder', async () => {
-    const r = await dialog.showOpenDialog(win!, { properties: ['openDirectory'] });
+  handle('pickFolder', async (e) => {
+    const r = await dialog.showOpenDialog(owner(e), { properties: ['openDirectory'] });
     return r.canceled ? null : (r.filePaths[0] ?? null);
   });
-  handle('pickSavePath', async (name) => {
-    const r = await dialog.showSaveDialog(win!, { defaultPath: str(name, 255) });
+  handle('pickSavePath', async (e, name) => {
+    const r = await dialog.showSaveDialog(owner(e), { defaultPath: str(name, 255) });
     return r.canceled ? null : (r.filePath ?? null);
   });
-  handle('pickOpenPath', async () => {
-    const r = await dialog.showOpenDialog(win!, { properties: ['openFile'] });
+  handle('pickOpenPath', async (e) => {
+    const r = await dialog.showOpenDialog(owner(e), { properties: ['openFile'] });
     return r.canceled ? null : (r.filePaths[0] ?? null);
   });
-  handle('send', (t, i) => ctl().send(targets(t), items(i)));
-  handle('sendClipboard', (t) => ctl().sendClipboard(targets(t)));
-  handle('resumeOutbox', () => ctl().resumeOutbox());
-  handle('removeOutbox', (id) => ctl().removeOutbox(str(id, 128)));
-  handle('addByAddress', (h, p, a) => ctl().addByAddress(str(h, 255), int(p), str(a, 64)));
-  handle('scanSubnet', () => ctl().scanSubnet());
-  handle('hubInit', (u) => ctl().hubInit(strs(u, 16)));
-  handle('setHubUrls', (u) => ctl().setHubUrls(strs(u, 16)));
-  handle('createInvite', async () => {
+  handle('send', (_e, t, i) => ctl().send(targets(t), items(i)));
+  handle('sendClipboard', (_e, t) => ctl().sendClipboard(targets(t)));
+  handle('resumeOutbox', (_e) => ctl().resumeOutbox());
+  handle('removeOutbox', (_e, id) => ctl().removeOutbox(str(id, 128)));
+  handle('addByAddress', (_e, h, p, a) => ctl().addByAddress(str(h, 255), int(p), str(a, 64)));
+  handle('scanSubnet', (_e) => ctl().scanSubnet());
+  handle('hubInit', (_e, u) => ctl().hubInit(strs(u, 16)));
+  handle('setHubUrls', (_e, u) => ctl().setHubUrls(strs(u, 16)));
+  handle('createInvite', async (_e) => {
     const r = await ctl().createInvite();
     // MESHDROP_TEST only: a short countdown so e2e can watch an invite expire (the core invite keeps its 5 min).
     const ttl = TEST ? Number(process.env.MESHDROP_TEST_INVITE_TTL_MS) : NaN;
     return Number.isFinite(ttl) && ttl > 0 ? { ...r, expiresAt: Date.now() + ttl } : r;
   });
-  handle('join', (u) => ctl().join(str(u)));
-  handle('revoke', (id) => ctl().revoke(str(id, 64)));
-  handle('exportRecovery', (p, pw) => ctl().exportRecovery(str(p), str(pw, 1024)));
-  handle('importRecovery', (p, pw) => ctl().importRecovery(str(p), str(pw, 1024)));
-  handle('setSettings', (p) => ctl().setSettings(settingsPatch(p)));
-  handle('openInbox', () => ctl().openInbox());
-  handle('reveal', (p) => ctl().reveal(str(p)));
-  handle('registerClipboardShortcut', () => {
-    throw new Error('not available yet');
+  handle('join', (_e, u) => ctl().join(str(u)));
+  handle('revoke', (_e, id) => ctl().revoke(str(id, 64)));
+  handle('exportRecovery', (_e, p, pw) => ctl().exportRecovery(str(p), str(pw, 1024)));
+  handle('importRecovery', (_e, p, pw) => ctl().importRecovery(str(p), str(pw, 1024)));
+  handle('setSettings', async (_e, p) => {
+    const before = ctl().state().settings;
+    const s = await ctl().setSettings(settingsPatch(p));
+    if (s.autostart !== before.autostart) setAutostart(s.autostart, launchCommand(), TEST ? join(HOME, 'autostart') : autostartDir());
+    rebuildTray();
+    return s;
   });
-  handle('openConfigFolder', () => ctl().openConfigFolder());
+  handle('openInbox', (_e) => ctl().openInbox());
+  handle('reveal', (_e, p) => ctl().reveal(str(p)));
+  handle('registerClipboardShortcut', async (_e, b) => {
+    const binding = str(b, 64);
+    if (!validBinding(binding)) throw new Error('That is not a valid shortcut (example: <Primary><Alt>c).');
+    if (TEST) throw new Error('not in tests');
+    const { stdout } = await execFileP(READ_KEYBINDINGS[0]!, READ_KEYBINDINGS.slice(1));
+    for (const [cmd, ...args] of gnomeShortcutCommands(binding, launchCommand(), parseStrList(stdout))) await execFileP(cmd!, args);
+  });
+  handle('openConfigFolder', (_e) => ctl().openConfigFolder());
 }
 
 async function startController(): Promise<void> {
-  const home = process.env.MESHDROP_HOME ?? configDir();
-  const over: Partial<Settings> = {};
-  if (process.env.MESHDROP_INBOX) over.inbox = process.env.MESHDROP_INBOX;
-  const settings = new SettingsStore(join(home, 'desktop-settings.json'), defaultSettings(over));
-  if (process.env.MESHDROP_PORT !== undefined) settings.set({ port: Number(process.env.MESHDROP_PORT) });
-  const history = new HistoryStore(join(home, 'desktop-history.json'));
-  controller = new AppController({ home, settings, history, platform });
+  const history = new HistoryStore(join(HOME, 'desktop-history.json'));
+  controller = new AppController({ home: HOME, settings: settings!, history, platform });
   if (TEST) {
     // Test-only hooks, reachable from Playwright's app.evaluate (main process), never from the page.
     (globalThis as { __meshdropTest?: unknown }).__meshdropTest = {
@@ -177,27 +267,56 @@ async function startController(): Promise<void> {
       },
     };
   }
-  controller.on('state', (s: AppState) => win?.webContents.send('meshdrop:state', s));
+  controller.on('state', (s: AppState) => {
+    for (const w of [win, picker]) if (w && !w.isDestroyed()) w.webContents.send('meshdrop:state', s);
+  });
   await controller.start();
 }
 
-void app.whenReady().then(async () => {
-  wireIpc();
-  win = createWindow();
-  try {
-    await startController();
-  } catch (x) {
-    const msg = x instanceof Error ? x.message : String(x);
-    console.error(`MeshDrop could not start: ${x instanceof Error ? (x.stack ?? msg) : msg}`);
-    if (!TEST) dialog.showErrorBox('MeshDrop could not start', msg);
-  }
-});
-app.on('window-all-closed', () => app.quit());
-app.on('will-quit', (e) => {
-  if (!controller) return;
-  e.preventDefault();
-  const c = controller;
-  controller = null;
-  // A second app.quit() after preventDefault() here is ignored by Electron: exit once stopped.
-  void c.stop().finally(() => app.exit(0));
-});
+// One MeshDrop per config home: the Chromium profile lives beside it, and so does the instance lock.
+app.setPath('userData', join(HOME, 'electron'));
+if (!app.requestSingleInstanceLock()) {
+  app.exit(0); // the running instance got our argv through 'second-instance'
+} else {
+  app.on('second-instance', (_e, argv) => {
+    if (argv.includes('--send-clipboard')) showPicker();
+    else showMain();
+  });
+
+  void app.whenReady().then(async () => {
+    const over: Partial<Settings> = {};
+    if (process.env.MESHDROP_INBOX) over.inbox = process.env.MESHDROP_INBOX;
+    settings = new SettingsStore(join(HOME, 'desktop-settings.json'), defaultSettings(over));
+    if (process.env.MESHDROP_PORT !== undefined) settings.set({ port: Number(process.env.MESHDROP_PORT) });
+    wireIpc();
+    createTray();
+    const clip = process.argv.includes('--send-clipboard');
+    const hidden = process.argv.includes('--hidden') || settings.get().startHidden;
+    if (!clip && (!hidden || !tray)) showMain();
+    try {
+      await startController();
+    } catch (x) {
+      const msg = x instanceof Error ? x.message : String(x);
+      console.error(`MeshDrop could not start: ${x instanceof Error ? (x.stack ?? msg) : msg}`);
+      if (!TEST) dialog.showErrorBox('MeshDrop could not start', msg);
+    }
+    rebuildTray();
+    if (clip) showPicker();
+  });
+
+  app.on('window-all-closed', () => {
+    if (!tray || !settings?.get().closeToTray) quit();
+  });
+  app.on('before-quit', () => {
+    quitting = true;
+  });
+  app.on('will-quit', (e) => {
+    if (!controller) return;
+    e.preventDefault();
+    const c = controller;
+    controller = null;
+    // Sends in flight end 'cancelled' and stay in the outbox (auto-resumed next time). A second
+    // app.quit() after preventDefault() here is ignored by Electron: exit once stopped.
+    void c.stop().finally(() => app.exit(0));
+  });
+}

@@ -103,6 +103,7 @@ export class AppController extends EventEmitter {
   #timer: NodeJS.Timeout | null = null;
   #lastEmit = 0;
   #stopped = false;
+  #paused = false;
 
   constructor(opts: ControllerOptions) {
     super();
@@ -133,7 +134,7 @@ export class AppController extends EventEmitter {
       inbox: s.inbox,
       port: s.port,
       alias: s.alias,
-      serve: this.#mode === 'serving',
+      serve: this.#mode === 'serving' && !this.#paused,
       autoResume: true,
       ...(s.discovery ? {} : { discovery: false as const }),
       ...this.#engineOptions,
@@ -148,7 +149,7 @@ export class AppController extends EventEmitter {
       throw x;
     }
     this.#engine = e;
-    if (this.#mode === 'serving') {
+    if (this.#mode === 'serving' && !this.#paused) {
       writeFileSync(join(this.#home, 'listen.pid'), JSON.stringify({ pid: process.pid, port: e.port }), { mode: 0o600 });
       this.#ownsPid = true;
     }
@@ -203,6 +204,17 @@ export class AppController extends EventEmitter {
     };
   }
 
+  get receiving(): boolean {
+    return !this.#paused;
+  }
+
+  /** Pause receiving: the engine keeps sending but stops serving (and frees the port). */
+  async setReceiving(on: boolean): Promise<void> {
+    if (this.#paused === !on) return;
+    this.#paused = !on;
+    await this.#restart();
+  }
+
   /** Pushes a fresh state to the UI (after something outside the controller changed it). */
   refresh(): void {
     this.#changed();
@@ -254,8 +266,17 @@ export class AppController extends EventEmitter {
   #onEvent(ev: EngineEvent): void {
     if (ev.source === 'sender') this.#onSender(ev);
     else if (ev.source === 'receiver') this.#onReceiver(ev);
-    if (ev.source === 'mesh' && ev.type === 'held-delivered') void this.#refreshOutbox();
+    if (ev.source === 'mesh') this.#onMesh(ev);
     this.#changed();
+  }
+
+  #onMesh(ev: Extract<EngineEvent, { source: 'mesh' }>): void {
+    if (ev.type === 'held-delivered' || ev.type === 'held-failed') void this.#refreshOutbox();
+    if (!this.#settings.get().notifications) return;
+    const to = ev.to !== undefined ? this.#aliasOf(ev.to) : 'a device';
+    if (ev.type === 'held-delivered') this.#platform.notify('Delivered', `The hub delivered your files to ${to}.`);
+    else if (ev.type === 'held-failed') this.#platform.notify('Delivery failed', `The hub could not deliver your files to ${to}${ev.error ? ` (${ev.error})` : ''}.`);
+    else if (ev.type === 'revoked') this.#platform.notify('Removed from the mesh', 'The hub removed this device from the mesh.');
   }
 
   /** The outgoing transfer an event for `deviceId` belongs to (created for resumes the UI did not start). */
@@ -340,9 +361,11 @@ export class AppController extends EventEmitter {
     if (ev.clipboard && ev.text !== undefined && s.clipboardReceive) this.#platform.writeClipboard(ev.text);
     if (!s.notifications) return;
     const n = ev.files.length;
-    const body = ev.clipboard
-      ? s.clipboardReceive ? 'Clipboard received' : 'Clipboard text received (see Inbox)'
-      : n > 0 ? `${n} file${n === 1 ? '' : 's'} received` : 'Text received';
+    if (ev.clipboard) {
+      this.#platform.notify('Clipboard', s.clipboardReceive ? `Copied text from ${alias}` : `Text from ${alias} (see Inbox)`);
+      return;
+    }
+    const body = n > 0 ? `${n} file${n === 1 ? '' : 's'} received${ev.text !== undefined ? ' with a message' : ''}` : `Text: ${(ev.text ?? "").slice(0, 120)}`;
     const first = ev.files[0];
     this.#platform.notify(`From ${alias}`, body, first !== undefined ? () => this.#platform.revealPath(first) : undefined);
   }

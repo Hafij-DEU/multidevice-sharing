@@ -9,7 +9,7 @@
   "type": "module",
   "main": "dist/main/main.cjs",
   "scripts": {
-    "build": "vite build -c vite.main.config.ts && vite build -c vite.renderer.config.ts",
+    "build": "vite build -c vite.main.config.ts && vite build -c vite.renderer.config.ts && mkdir -p dist/icons && cp build/icon.png build/tray.png dist/icons/",
     "test": "vitest run",
     "e2e": "playwright test",
     "typecheck": "tsc -p . --noEmit",
