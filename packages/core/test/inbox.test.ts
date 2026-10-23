@@ -35,6 +35,60 @@ function manifest(
 }
 const partialDir = (root: string, sid: string) => join(root, '.meshdrop-partial', sid);
 
+type FsHooks = {
+  /** Called with the data of every write to a progress file (state kept by the inbox per session). */
+  progressWrite?: (path: string, data: string) => void;
+  link?: (src: string, dst: string) => void;
+  unlink?: (path: string) => void;
+  /** Bytes added to progress files, measured as file growth between open and close. */
+  progressBytes?: { n: number; writes: number };
+  /** Skip fsync (keeps the 2 000-file test fast; durability is not what it measures). */
+  noSync?: boolean;
+};
+const isProgress = (p: string) => /\/progress[^/]*$/.test(p);
+const sizeOf = async (p: string) => (await fsp.stat(p).catch(() => null))?.size ?? 0;
+function hookedFs(h: FsHooks): typeof fsp {
+  return {
+    ...fsp,
+    open: async (path: string, flags?: string | number, mode?: number) => {
+      const p = String(path);
+      const before = isProgress(p) && !(typeof flags === 'string' && flags.startsWith('w')) ? await sizeOf(p) : 0;
+      const fh = await fsp.open(path, flags, mode);
+      const any = fh as unknown as Record<string, (...a: unknown[]) => Promise<unknown>>;
+      if (h.noSync) any.sync = async () => {};
+      if (isProgress(p)) {
+        for (const m of ['write', 'writeFile', 'appendFile']) {
+          const orig = any[m]!.bind(fh);
+          any[m] = async (data: unknown, ...rest: unknown[]) => {
+            if (h.progressBytes) h.progressBytes.writes++;
+            h.progressWrite?.(p, typeof data === 'string' ? data : Buffer.from(data as Uint8Array).toString('utf8'));
+            return orig(data, ...rest);
+          };
+        }
+        if (h.progressBytes) {
+          const close = any.close!.bind(fh);
+          any.close = async () => {
+            await close();
+            h.progressBytes!.n += Math.max(0, (await sizeOf(p)) - before);
+          };
+        }
+      }
+      return fh;
+    },
+    link: async (a: string, b: string) => {
+      h.link?.(String(a), String(b));
+      return fsp.link(a, b);
+    },
+    unlink: async (a: string) => {
+      h.unlink?.(String(a));
+      return fsp.unlink(a);
+    },
+  } as unknown as typeof fsp;
+}
+const crash = () => Object.assign(new Error('EIO: simulated crash'), { code: 'EIO' });
+/** Files the user sees in the inbox root (no partial area). */
+const visible = (root: string) => readdirSync(root).filter((n) => n !== '.meshdrop-partial').sort();
+
 describe('Inbox', () => {
   it('stores a small file, finalizes with verified hash, cleans up partial', async () => {
     const root = tmpRoot();
@@ -296,6 +350,146 @@ describe('Inbox', () => {
     await expect(inbox.begin(sid, manifest(sid, [{ path: tooLong, data: d }]), 'c')).rejects.toBeInstanceOf(UnsafePathError);
     await expect(inbox.begin(sid, manifest(sid, [], [tooLong]), 'c')).rejects.toBeInstanceOf(UnsafePathError);
     expect(existsSync(partialDir(root, sid))).toBe(false);
+  });
+
+  it('2 000 one-chunk files: progress bytes written stay O(n) and the session survives a reload', async () => {
+    const root = tmpRoot();
+    const sid = newSessionId();
+    const N = 2000;
+    const files = Array.from({ length: N }, (_, i) => ({ path: `d${i % 7}/file-${i}.txt`, data: Buffer.from(`content ${i}`) }));
+    const progressBytes = { n: 0, writes: 0 };
+    const inbox = new Inbox(root, { fs: hookedFs({ progressBytes, noSync: true }) });
+    await inbox.begin(sid, manifest(sid, files), 'c');
+    for (const [i, f] of files.entries()) {
+      await inbox.writeChunk(sid, i, 0, f.data);
+      await inbox.finalize(sid, i);
+    }
+    await inbox.finalizeDirs(sid);
+    expect(await inbox.completed(sid)).toHaveLength(N);
+    // O(n): a few dozen bytes per chunk/done record (plus amortized compaction), never the whole
+    // state per event (that was ~O(n^2): hundreds of MB for this session).
+    expect(progressBytes.n).toBeLessThan(N * 200);
+    // one record per chunk, per "about to link" and per "done", plus a handful of compactions
+    expect(progressBytes.writes).toBeLessThanOrEqual(N * 3 + 20);
+    const reloaded = new Inbox(root);
+    expect(await reloaded.completed(sid)).toHaveLength(N);
+    expect(await reloaded.finalize(sid, 1234)).toBe(join(root, 'd2/file-1234.txt'));
+    expect(readFileSync(join(root, 'd2/file-1234.txt'), 'utf8')).toBe('content 1234');
+  }, 60_000);
+
+  it('the progress log is compacted once it is mostly dead records', async () => {
+    const root = tmpRoot();
+    const sid = newSessionId();
+    const good = Buffer.from('good'), bad = Buffer.from('evil');
+    const inbox = new Inbox(root, { fs: hookedFs({ noSync: true }) });
+    await inbox.begin(sid, manifest(sid, [{ path: 'keep.txt', data: good }, { path: 'f.txt', data: good }]), 'c');
+    await inbox.writeChunk(sid, 0, 0, good);
+    // every corrupt upload of file 1 appends a chunk record and a reset record, live state stays tiny
+    for (let i = 0; i < 700; i++) {
+      await inbox.writeChunk(sid, 1, 0, bad);
+      await expect(inbox.finalize(sid, 1)).rejects.toBeInstanceOf(IntegrityError);
+    }
+    const log = join(partialDir(root, sid), 'progress.log');
+    expect(readFileSync(log, 'utf8').split('\n').filter(Boolean).length).toBeLessThan(1100);
+    expect(await new Inbox(root).have(sid)).toEqual({ 0: [0] });
+    await inbox.writeChunk(sid, 1, 0, good);
+    expect(await new Inbox(root).finalize(sid, 1)).toBe(join(root, 'f.txt'));
+  });
+
+  it('a torn last progress line (crash mid-append) is ignored on load', async () => {
+    const root = tmpRoot();
+    const sid = newSessionId();
+    const data = Buffer.alloc(2 * CHUNK_SIZE, 5);
+    const inbox = new Inbox(root);
+    await inbox.begin(sid, manifest(sid, [{ path: 'big.bin', data }]), 'c');
+    await inbox.writeChunk(sid, 0, 0, data.subarray(0, CHUNK_SIZE));
+    const dir = partialDir(root, sid);
+    const log = readdirSync(dir).find((n) => n.startsWith('progress'))!;
+    await fsp.appendFile(join(dir, log), '{"c":[0,');
+    const again = new Inbox(root);
+    expect(await again.have(sid)).toEqual({ 0: [0] });
+    await again.writeChunk(sid, 0, 1, data.subarray(CHUNK_SIZE));
+    expect(await new Inbox(root).have(sid)).toEqual({ 0: [0, 1] });
+    expect(readFileSync(await new Inbox(root).finalize(sid, 0)).equals(data)).toBe(true);
+  });
+
+  describe('finalize crash windows (fresh Inbox afterwards: finalized exactly once, no duplicate)', () => {
+    async function crashed(hooks: (state: { armed: boolean }) => FsHooks) {
+      const root = tmpRoot();
+      const sid = newSessionId();
+      const data = Buffer.from('precious bytes');
+      const state = { armed: true };
+      const inbox = new Inbox(root, { fs: hookedFs(hooks(state)) });
+      await inbox.begin(sid, manifest(sid, [{ path: 'sub/a.txt', data }]), 'c');
+      await inbox.writeChunk(sid, 0, 0, data);
+      await expect(inbox.finalize(sid, 0)).rejects.toMatchObject({ code: 'EIO' });
+      return { root, sid, data };
+    }
+    const DONE_RECORD = /"d(?:one)?":[[{]"?0/;
+
+    it('crash after link, before "done" is recorded', async () => {
+      const { root, sid, data } = await crashed((st) => ({
+        progressWrite: (_p, d) => {
+          if (st.armed && DONE_RECORD.test(d)) {
+            st.armed = false;
+            throw crash();
+          }
+        },
+      }));
+      const fresh = new Inbox(root);
+      const p = await fresh.finalize(sid, 0);
+      expect(p).toBe(join(root, 'sub/a.txt'));
+      expect(readFileSync(p).equals(data)).toBe(true);
+      expect(readdirSync(join(root, 'sub'))).toEqual(['a.txt']);
+      expect(await new Inbox(root).finalize(sid, 0)).toBe(p);
+      expect(await new Inbox(root).completed(sid)).toEqual([0]);
+    });
+
+    it('crash after "done" is recorded, before the part is unlinked', async () => {
+      const { root, sid } = await crashed((st) => ({
+        unlink: (p) => {
+          if (st.armed && p.endsWith('.part')) {
+            st.armed = false;
+            throw crash();
+          }
+        },
+      }));
+      const p = await new Inbox(root).finalize(sid, 0);
+      expect(p).toBe(join(root, 'sub/a.txt'));
+      expect(readdirSync(join(root, 'sub'))).toEqual(['a.txt']);
+    });
+
+    it('no hardlinks (rename fallback): crash after rename, before "done" is recorded', async () => {
+      const noLink = { link: () => { throw Object.assign(new Error('EXDEV'), { code: 'EXDEV' }); } };
+      const { root, sid, data } = await crashed((st) => ({
+        ...noLink,
+        progressWrite: (_p, d) => {
+          if (st.armed && DONE_RECORD.test(d)) {
+            st.armed = false;
+            throw crash();
+          }
+        },
+      }));
+      const fresh = new Inbox(root, { fs: hookedFs(noLink) });
+      const p = await fresh.finalize(sid, 0);
+      expect(p).toBe(join(root, 'sub/a.txt'));
+      expect(readFileSync(p).equals(data)).toBe(true);
+      expect(readdirSync(join(root, 'sub'))).toEqual(['a.txt']);
+      expect(await new Inbox(root).completed(sid)).toEqual([0]);
+    });
+
+    it('lost partial data is reported as incomplete (409), not as a permanent 500', async () => {
+      const root = tmpRoot();
+      const sid = newSessionId();
+      const data = Buffer.from('gone');
+      const inbox = new Inbox(root);
+      await inbox.begin(sid, manifest(sid, [{ path: 'g.txt', data }]), 'c');
+      await inbox.writeChunk(sid, 0, 0, data);
+      rmSync(join(partialDir(root, sid), '0.part'));
+      await expect(new Inbox(root).finalize(sid, 0)).rejects.toBeInstanceOf(IncompleteFileError);
+      expect(await new Inbox(root).have(sid)).toEqual({}); // the sender will resend it
+      expect(visible(root)).toEqual([]);
+    });
   });
 
   it('completed() lists finalized fileIds; markFinished/finished tombstone persists and prunes after 7 days', async () => {

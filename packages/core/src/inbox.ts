@@ -1,16 +1,24 @@
 // Inbox: receives files from remote devices into <root>, with resumable partial state.
 //
-// Layout: <root>/.meshdrop-partial/<sessionId>/{state.json, progress.json, <fileId>.part}
-//   state.json     manifest + ctxExport (key material -> mode 0600), written once by begin().
-//   progress.json  chunk indices durably on disk per file + finalized files; rewritten atomically.
-//                  (Kept apart from state.json so a 100k-file manifest is not rewritten per chunk.)
-// A chunk is recorded in progress.json only after its bytes were fsynced. Manifests are untrusted:
-// begin() validates every path up front; finalize()/finalizeDirs() re-sanitize and never follow
-// symlinks, so nothing is written outside <root>.
+// Layout: <root>/.meshdrop-partial/<sessionId>/{state.json, progress.log, <fileId>.part}
+//   state.json    manifest + ctxExport (key material -> mode 0600), written by begin().
+//   progress.log  append-only, one fsynced JSON line per event (mode 0600):
+//                   {"c":[fileId,index]}  chunk `index` is durably in <fileId>.part
+//                   {"p":[fileId,"rel"]}  finalize is about to link/rename the part to <root>/rel
+//                   {"d":[fileId,"rel"]}  file finalized at <root>/rel (rel: '/'-separated, inbox-relative)
+//                   {"x":fileId}          file reset (hash mismatch / lost part): forget its chunks
+//                 Rewritten compactly (atomic rename) on load and on a repeated begin(), and whenever it
+//                 has grown to several times its live content, so the bytes written stay O(chunks + files)
+//                 per session. A torn last line (crash mid-append) is ignored on load.
+// A chunk is recorded only after its bytes were fsynced. Finalizing a file is crash-safe: record "p"
+// (the chosen name), link (or rename) the part there, record "d", then unlink the part; a finalize that
+// finds a "p" without a "d" adopts the earlier link/rename instead of creating "name (1)". Manifests are
+// untrusted: begin() validates every path up front; finalize()/finalizeDirs() re-sanitize and never
+// follow symlinks, so nothing is written outside <root>.
 import { createHash } from 'node:crypto';
 import { constants } from 'node:fs';
 import * as nodeFs from 'node:fs/promises';
-import { CHUNK_SIZE, chunkCount, serializeManifest, type HaveMap, type Manifest } from './chunk.ts';
+import { CHUNK_SIZE, chunkCount, serializeManifest, type FileEntry, type HaveMap, type Manifest } from './chunk.ts';
 import { safeRelPath, uniqueName, UnsafePathError } from './sanitize.ts';
 
 export { UnsafePathError };
@@ -46,6 +54,12 @@ export const PARTIAL_DIR = '.meshdrop-partial';
 /** Tombstones of finished sessions live in <root>/.meshdrop-partial/.finished/<sessionId>.json. */
 const FINISHED_DIR = '.finished';
 export const FINISHED_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+/** Partial sessions not touched for this long are removed by prune() (default). */
+export const PARTIAL_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+const LOG = 'progress.log';
+/** Compact the log once it holds more than LOG_SLACK x its live records (+ LOG_MIN_LINES). */
+const LOG_SLACK = 4;
+const LOG_MIN_LINES = 1024;
 const SESSION_ID_RE = /^[A-Za-z0-9_-]{22}$/;
 const HASH_BUF = 1024 * 1024;
 const NO_HARDLINK = new Set(['EPERM', 'ENOTSUP', 'EOPNOTSUPP', 'ENOSYS', 'EXDEV', 'EMLINK', 'EACCES']);
@@ -53,10 +67,18 @@ const NO_HARDLINK = new Set(['EPERM', 'ENOTSUP', 'EOPNOTSUPP', 'ENOSYS', 'EXDEV'
 interface Session {
   manifest: Manifest;
   ctxExport: string;
+  files: Map<number, FileEntry>;
+  /** Chunks on disk per not-yet-finalized file. */
   have: Map<number, Set<number>>;
-  done: Map<number, string>; // finalized fileId -> final path
+  /** Finalized fileId -> inbox-relative final path. */
+  done: Map<number, string>;
+  /** fileId -> inbox-relative path a finalize was about to link/rename to (no "d" yet). */
+  pending: Map<number, string>;
+  /** Lines in progress.log, and records a compacted log would hold (compaction trigger). */
+  logLines: number;
+  live: number;
 }
-interface ProgressFile { have: { [fileId: string]: number[] }; done: { [fileId: string]: string } }
+type LogRecord = { c: [number, number] } | { p: [number, string] } | { d: [number, string] } | { x: number };
 
 const code = (e: unknown): string | undefined => (e as NodeJS.ErrnoException)?.code;
 
@@ -108,43 +130,140 @@ export class Inbox {
     await this.fs.rename(tmp, path);
   }
 
-  private async persistProgress(sessionId: string, s: Session): Promise<void> {
-    const pf: ProgressFile = { have: {}, done: {} };
-    for (const [id, set] of s.have) if (set.size) pf.have[id] = [...set].sort((a, b) => a - b);
-    for (const [id, p] of s.done) pf.done[id] = p;
-    await this.writeAtomic(`${this.sessionDir(sessionId)}/progress.json`, JSON.stringify(pf));
+  /** Applies one log record to the in-memory state; false if the record is malformed. */
+  private apply(s: Session, r: unknown): boolean {
+    if (typeof r !== 'object' || r === null) return false;
+    const o = r as Record<string, unknown>;
+    const isId = (v: unknown): v is number => Number.isInteger(v) && s.files.has(v as number);
+    if (Array.isArray(o.c) && isId(o.c[0]) && Number.isInteger(o.c[1])) {
+      const [id, i] = o.c as [number, number];
+      if (s.done.has(id)) return true;
+      let set = s.have.get(id);
+      if (!set) s.have.set(id, (set = new Set()));
+      if (!set.has(i)) {
+        set.add(i);
+        s.live++;
+      }
+      return true;
+    }
+    if (Array.isArray(o.p) && isId(o.p[0]) && typeof o.p[1] === 'string') {
+      if (s.done.has(o.p[0])) return true;
+      if (!s.pending.has(o.p[0])) s.live++;
+      s.pending.set(o.p[0], o.p[1]);
+      return true;
+    }
+    if (Array.isArray(o.d) && isId(o.d[0]) && typeof o.d[1] === 'string') {
+      const id = o.d[0];
+      this.forget(s, id);
+      if (!s.done.has(id)) s.live++;
+      s.done.set(id, o.d[1]);
+      return true;
+    }
+    if (isId(o.x)) {
+      this.forget(s, o.x);
+      return true;
+    }
+    return false;
   }
 
-  private async readJson(path: string): Promise<unknown | null> {
-    let text: string;
+  /** Drops a file's chunk set and pending name from the in-memory state. */
+  private forget(s: Session, id: number): void {
+    s.live -= (s.have.get(id)?.size ?? 0) + (s.pending.has(id) ? 1 : 0);
+    s.have.delete(id);
+    s.pending.delete(id);
+  }
+
+  /** Rewrites progress.log with exactly the live records (atomic). */
+  private async compact(sessionId: string, s: Session): Promise<void> {
+    const lines: string[] = [];
+    for (const [id, set] of s.have) for (const i of [...set].sort((a, b) => a - b)) lines.push(JSON.stringify({ c: [id, i] }));
+    for (const [id, rel] of s.pending) lines.push(JSON.stringify({ p: [id, rel] }));
+    for (const [id, rel] of s.done) lines.push(JSON.stringify({ d: [id, rel] }));
+    await this.writeAtomic(`${this.sessionDir(sessionId)}/${LOG}`, lines.length ? lines.join('\n') + '\n' : '');
+    s.logLines = s.live = lines.length;
+  }
+
+  /** Durably appends one record (call under lock(sessionId)), then applies it in memory. */
+  private async append(sessionId: string, s: Session, r: LogRecord): Promise<void> {
+    const h = await this.fs.open(`${this.sessionDir(sessionId)}/${LOG}`, 'a', 0o600);
     try {
-      text = await this.fs.readFile(path, 'utf8');
+      await h.write(JSON.stringify(r) + '\n');
+      await h.sync();
+    } finally {
+      await h.close();
+    }
+    this.apply(s, r);
+    s.logLines++;
+    if (s.logLines > LOG_SLACK * s.live + LOG_MIN_LINES) await this.compact(sessionId, s);
+  }
+
+  private record(sessionId: string, s: Session, r: LogRecord): Promise<void> {
+    return this.lock(sessionId, () => this.append(sessionId, s, r));
+  }
+
+  private async readText(path: string): Promise<string | null> {
+    try {
+      return await this.fs.readFile(path, 'utf8');
     } catch (e) {
       if (code(e) === 'ENOENT') return null;
       throw e;
     }
-    return JSON.parse(text);
+  }
+
+  private async readJson(path: string): Promise<unknown | null> {
+    const text = await this.readText(path);
+    return text === null ? null : JSON.parse(text);
   }
 
   // Cached as a promise so concurrent callers share one Session object (and one in-memory chunk set).
   private getSession(sessionId: string): Promise<Session | null> {
     const cached = this.sessions.get(sessionId);
     if (cached) return cached;
-    const dir = this.sessionDir(sessionId);
-    const p = this.loadSession(dir);
+    const p = this.loadSession(sessionId);
     this.sessions.set(sessionId, p);
     p.then((s) => { if (!s && this.sessions.get(sessionId) === p) this.sessions.delete(sessionId); },
       () => { if (this.sessions.get(sessionId) === p) this.sessions.delete(sessionId); });
     return p;
   }
 
-  private async loadSession(dir: string): Promise<Session | null> {
+  private newSession(manifest: Manifest, ctxExport: string): Session {
+    return {
+      manifest,
+      ctxExport,
+      files: new Map(manifest.files.map((f) => [f.fileId, f])),
+      have: new Map(),
+      done: new Map(),
+      pending: new Map(),
+      logLines: 0,
+      live: 0,
+    };
+  }
+
+  private async loadSession(sessionId: string): Promise<Session | null> {
+    const dir = this.sessionDir(sessionId);
     const st = (await this.readJson(`${dir}/state.json`)) as { manifest: Manifest; ctxExport: string } | null;
     if (!st) return null;
-    const pf = ((await this.readJson(`${dir}/progress.json`)) as ProgressFile | null) ?? { have: {}, done: {} };
-    const s: Session = { manifest: st.manifest, ctxExport: st.ctxExport, have: new Map(), done: new Map() };
-    for (const [id, arr] of Object.entries(pf.have)) s.have.set(Number(id), new Set(arr));
-    for (const [id, p] of Object.entries(pf.done)) s.done.set(Number(id), p);
+    const s = this.newSession(st.manifest, st.ctxExport);
+    const text = await this.readText(`${dir}/${LOG}`);
+    if (text === null) return s;
+    // Malformed lines (only ever a torn last line, since the log is compacted before anything is
+    // appended to it again) are skipped: a lost "c" just means that chunk is requested again.
+    let lines = 0;
+    let bad = 0;
+    for (const line of text.split('\n')) {
+      if (line === '') continue;
+      lines++;
+      let r: unknown;
+      try {
+        r = JSON.parse(line);
+      } catch {
+        bad++;
+        continue;
+      }
+      if (!this.apply(s, r)) bad++;
+    }
+    s.logLines = lines;
+    if (bad > 0 || !text.endsWith('\n') || lines > s.live) await this.compact(sessionId, s);
     return s;
   }
 
@@ -186,14 +305,20 @@ export class Inbox {
     for (const d of manifest.dirs) inboxRelParts(d.path);
     await this.lock(sessionId, async () => {
       const existing = await this.getSession(sessionId);
-      // A different manifest under the same sessionId invalidates any earlier progress.
-      if (existing && serializeManifest(existing.manifest) !== serializeManifest(manifest)) {
-        await this.fs.rm(dir, { recursive: true, force: true });
-        this.sessions.delete(sessionId);
+      if (existing && serializeManifest(existing.manifest) === serializeManifest(manifest)) {
+        // Same manifest: keep the progress (compacted), refresh the stored context.
+        await this.writeAtomic(`${dir}/state.json`, JSON.stringify({ manifest, ctxExport }));
+        existing.ctxExport = ctxExport;
+        await this.compact(sessionId, existing);
+        return;
       }
+      // A different manifest under the same sessionId invalidates any earlier progress.
+      // (Also clears leftovers of a begin() that crashed before state.json was written.)
+      this.sessions.delete(sessionId);
+      await this.fs.rm(dir, { recursive: true, force: true });
       await this.fs.mkdir(dir, { recursive: true, mode: 0o700 });
       await this.writeAtomic(`${dir}/state.json`, JSON.stringify({ manifest, ctxExport }));
-      this.sessions.delete(sessionId); // re-read lazily; keeps progress.json if the manifest matched
+      this.sessions.set(sessionId, Promise.resolve(this.newSession(manifest, ctxExport)));
     });
   }
 
@@ -202,17 +327,42 @@ export class Inbox {
     return s ? { manifest: s.manifest, ctxExport: s.ctxExport } : null;
   }
 
+  /** Chunk indices on disk per file (a finalized file reports all of its chunks). */
   async have(sessionId: string): Promise<HaveMap> {
     const s = await this.getSession(sessionId);
     const out: HaveMap = {};
     if (!s) return out;
     for (const [id, set] of s.have) if (set.size) out[id] = [...set].sort((a, b) => a - b);
+    for (const id of s.done.keys()) {
+      const n = chunkCount(s.files.get(id)!.size);
+      if (n > 0) out[id] = Array.from({ length: n }, (_, i) => i);
+    }
     return out;
+  }
+
+  /** How many chunks of `fileId` are on disk (all of them once finalized); 0 for an unknown session. */
+  async haveCount(sessionId: string, fileId: number): Promise<number> {
+    const s = await this.getSession(sessionId);
+    if (!s) return 0;
+    const f = s.files.get(fileId);
+    if (f && s.done.has(fileId)) return chunkCount(f.size);
+    return s.have.get(fileId)?.size ?? 0;
+  }
+
+  /** Whether `fileId` has been finalized. */
+  async isDone(sessionId: string, fileId: number): Promise<boolean> {
+    const s = await this.requireSession(sessionId);
+    return s.done.has(fileId);
+  }
+
+  /** `abs` relative to the inbox root ('/'-separated), as returned to peers on the wire. */
+  relative(abs: string): string {
+    return abs.startsWith(`${this.root}/`) ? abs.slice(this.root.length + 1) : abs;
   }
 
   async writeChunk(sessionId: string, fileId: number, index: number, pt: Buffer): Promise<void> {
     const s = await this.requireSession(sessionId);
-    const file = s.manifest.files.find((f) => f.fileId === fileId);
+    const file = s.files.get(fileId);
     if (!file) throw new ChunkRangeError(`unknown fileId ${fileId}`);
     const count = chunkCount(file.size);
     if (!Number.isInteger(index) || index < 0 || index >= count) throw new ChunkRangeError(`chunk index ${index} out of range`);
@@ -233,68 +383,116 @@ export class Inbox {
       await h.close();
     }
     await this.lock(sessionId, async () => {
-      let set = s.have.get(fileId);
-      if (!set) s.have.set(fileId, (set = new Set()));
-      if (set.has(index)) return;
-      set.add(index);
-      try {
-        await this.persistProgress(sessionId, s);
-      } catch (e) {
-        set.delete(index);
-        throw e;
-      }
+      if (s.done.has(fileId) || s.have.get(fileId)?.has(index)) return;
+      await this.append(sessionId, s, { c: [fileId, index] });
     });
+  }
+
+  /** Forget a file's chunks (recorded first, then its part is removed) so the sender resends it. */
+  private async resetFile(sessionId: string, s: Session, fileId: number): Promise<void> {
+    await this.record(sessionId, s, { x: fileId });
+    await this.fs.rm(`${this.sessionDir(sessionId)}/${fileId}.part`, { force: true });
+  }
+
+  private async statOrNull(path: string) {
+    try {
+      return await this.fs.lstat(path);
+    } catch (e) {
+      if (code(e) === 'ENOENT') return null;
+      throw e;
+    }
+  }
+
+  /**
+   * A previous finalize recorded "p" (about to link/rename to `rel`) but not "d". If that step
+   * happened, adopt it: the part and `rel` are the same inode (crash after link), or the part is
+   * gone and `rel` holds a file with the manifest's size and hash (crash after rename).
+   */
+  private async recover(sessionId: string, s: Session, file: FileEntry, rel: string): Promise<string | null> {
+    const relParts = inboxRelParts(rel);
+    if (relParts.join('/') !== rel) return null; // not something finalize() wrote
+    await this.ensureDir(relParts.slice(0, -1)); // refuses symlinked parents
+    const finalPath = `${this.root}/${rel}`;
+    const part = `${this.sessionDir(sessionId)}/${file.fileId}.part`;
+    const fst = await this.statOrNull(finalPath);
+    if (!fst?.isFile()) return null;
+    const pst = await this.statOrNull(part);
+    if (pst) {
+      if (pst.ino !== fst.ino || pst.dev !== fst.dev) return null; // someone else's file took the name
+      await this.record(sessionId, s, { d: [file.fileId, rel] });
+      await this.unlinkPart(part);
+      return finalPath;
+    }
+    if (fst.size !== file.size || (await this.hashFile(finalPath, file.size)) !== file.sha256) return null;
+    await this.record(sessionId, s, { d: [file.fileId, rel] });
+    return finalPath;
+  }
+
+  private async unlinkPart(part: string): Promise<void> {
+    try {
+      await this.fs.unlink(part);
+    } catch (e) {
+      if (code(e) !== 'ENOENT') throw e;
+    }
   }
 
   async finalize(sessionId: string, fileId: number): Promise<string> {
     return this.lock(`${sessionId}/${fileId}`, async () => {
       const s = await this.requireSession(sessionId);
-      const file = s.manifest.files.find((f) => f.fileId === fileId);
+      const file = s.files.get(fileId);
       if (!file) throw new ChunkRangeError(`unknown fileId ${fileId}`);
       const doneAt = s.done.get(fileId);
-      if (doneAt !== undefined) return doneAt;
+      if (doneAt !== undefined) return `${this.root}/${doneAt}`;
 
-      const dir = this.sessionDir(sessionId);
-      const part = `${dir}/${fileId}.part`;
+      const pendingRel = s.pending.get(fileId);
+      if (pendingRel !== undefined) {
+        const recovered = await this.recover(sessionId, s, file, pendingRel);
+        if (recovered !== null) return recovered;
+      }
+
+      const part = `${this.sessionDir(sessionId)}/${fileId}.part`;
       const count = chunkCount(file.size);
       const have = s.have.get(fileId) ?? new Set<number>();
       for (let i = 0; i < count; i++) if (!have.has(i)) throw new IncompleteFileError(`file ${fileId} is missing chunk ${i}`);
       if (file.size === 0) await (await this.fs.open(part, constants.O_RDWR | constants.O_CREAT, 0o666)).close();
 
-      const actual = await this.hashFile(part, file.size);
+      let actual: string;
+      try {
+        actual = await this.hashFile(part, file.size);
+      } catch (e) {
+        if (code(e) !== 'ENOENT') throw e;
+        // The recorded chunks are gone (deleted behind our back): start this file over.
+        await this.resetFile(sessionId, s, fileId);
+        throw new IncompleteFileError(`file ${fileId}: partial data is missing`);
+      }
       if (actual !== file.sha256) {
         // Corrupt data on disk: discard it so the sender restarts this file from scratch.
-        await this.fs.rm(part, { force: true });
-        await this.lock(sessionId, async () => {
-          s.have.delete(fileId);
-          await this.persistProgress(sessionId, s);
-        });
+        await this.resetFile(sessionId, s, fileId);
         throw new IntegrityError(`sha256 mismatch for file ${fileId}`);
       }
 
       const parts = inboxRelParts(file.path);
       const base = parts.pop()!;
       const destDir = await this.ensureDir(parts);
-      let finalPath = '';
       for (;;) {
-        finalPath = `${destDir}/${await uniqueName(destDir, base, this.fs)}`;
+        const name = await uniqueName(destDir, base, this.fs);
+        const rel = [...parts, name].join('/');
+        const finalPath = `${destDir}/${name}`;
+        await this.record(sessionId, s, { p: [fileId, rel] });
+        let linked = true;
         try {
           await this.fs.link(part, finalPath); // atomic, never overwrites
-          await this.fs.unlink(part);
-          break;
         } catch (e) {
           if (code(e) === 'EEXIST') continue; // lost a race for this name; pick the next
           if (!NO_HARDLINK.has(code(e) ?? '')) throw e;
           // Filesystem without hardlinks: plain rename (tiny overwrite window, name was just checked free).
           await this.fs.rename(part, finalPath);
-          break;
+          linked = false;
         }
+        await this.record(sessionId, s, { d: [fileId, rel] });
+        if (linked) await this.unlinkPart(part);
+        return finalPath;
       }
-      await this.lock(sessionId, async () => {
-        s.done.set(fileId, finalPath);
-        await this.persistProgress(sessionId, s);
-      });
-      return finalPath;
     });
   }
 

@@ -15,6 +15,7 @@ import {
   exportCtx,
   importCtx,
   openChunk,
+  type FileEntry,
   type Manifest,
   type Offer,
 } from '../chunk.ts';
@@ -86,8 +87,12 @@ class ClientGone extends Error {
 
 interface LiveSession {
   manifest: Manifest;
+  files: Map<number, FileEntry>;
   ctx: HpkeContext;
 }
+
+const liveSession = (manifest: Manifest, ctx: HpkeContext): LiveSession =>
+  ({ manifest, files: new Map(manifest.files.map((f) => [f.fileId, f])), ctx });
 
 const code = (e: unknown): string | undefined => (e as NodeJS.ErrnoException)?.code;
 
@@ -197,7 +202,7 @@ export function createMeshServer(opts: MeshServerOptions): Server {
     if (!st) return null;
     const racing = live.get(sessionId);
     if (racing) return racing;
-    const s: LiveSession = { manifest: st.manifest, ctx: importCtx(st.ctxExport) };
+    const s = liveSession(st.manifest, importCtx(st.ctxExport));
     live.set(sessionId, s);
     return s;
   }
@@ -252,7 +257,7 @@ export function createMeshServer(opts: MeshServerOptions): Server {
         return;
       }
       await inbox.begin(sessionId, accepted.manifest, exportCtx(accepted.ctx));
-      live.set(sessionId, { manifest: accepted.manifest, ctx: accepted.ctx });
+      live.set(sessionId, liveSession(accepted.manifest, accepted.ctx));
       emit({ type: 'offer', sessionId, from: peer, manifest: accepted.manifest });
       send(res, 200, { have: await inbox.have(sessionId) });
     });
@@ -263,7 +268,7 @@ export function createMeshServer(opts: MeshServerOptions): Server {
     const fileId = parseUint(seg[2]);
     const index = parseUint(seg[3]);
     const s = await requireOwned(sessionId, peer);
-    const file = s.manifest.files.find((f) => f.fileId === fileId);
+    const file = s.files.get(fileId);
     if (!file || index >= chunkCount(file.size) || fileId > U32_MAX || index > U32_MAX) {
       throw new HttpError(409, 'range');
     }
@@ -276,8 +281,8 @@ export function createMeshServer(opts: MeshServerOptions): Server {
       throw e;
     }
     await inbox.writeChunk(sessionId, fileId, index, pt);
-    const have = (await inbox.have(sessionId))[fileId] ?? [];
-    emit({ type: 'progress', sessionId, from: peer, fileId, chunks: have.length, total: chunkCount(file.size) });
+    const chunks = await inbox.haveCount(sessionId, fileId);
+    emit({ type: 'progress', sessionId, from: peer, fileId, chunks, total: chunkCount(file.size) });
     send(res, 204);
   }
 
@@ -285,7 +290,7 @@ export function createMeshServer(opts: MeshServerOptions): Server {
     const sessionId = sessionIdParam(seg[1]);
     const fileId = parseUint(seg[2]);
     await requireOwned(sessionId, peer);
-    const wasDone = (await inbox.completed(sessionId)).includes(fileId);
+    const wasDone = await inbox.isDone(sessionId, fileId);
     let path: string;
     try {
       path = await inbox.finalize(sessionId, fileId);
