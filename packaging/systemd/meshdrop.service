@@ -5,7 +5,8 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=%h/.local/bin/meshdrop listen --device-type headless
+# /usr/bin/meshdrop comes with the .deb; from a source checkout use %h/.local/bin/meshdrop (docs/protocol.md).
+ExecStart=/usr/bin/meshdrop listen --device-type headless
 Restart=on-failure
 RestartSec=5
 

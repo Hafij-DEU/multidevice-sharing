@@ -503,16 +503,25 @@ a higher version.
 
 ### Running the hub
 
-On the hub PC: `meshdrop hub init [--url wss://<tunnel>/mesh/v1/hub]`, then run `meshdrop listen` permanently,
-e.g. as a systemd user service:
+The simplest hub is the desktop app: Mesh → "Create a mesh on this PC", with "Start MeshDrop when I log in"
+and "Keep running in the tray" on (Settings). It serves the mesh while you are logged in.
+
+To keep the hub up without a session, run the CLI instead. On the hub PC: `meshdrop hub init [--url
+wss://<tunnel>/mesh/v1/hub]`, then run `meshdrop listen` permanently as a systemd user service:
 
     install -Dm644 packaging/systemd/meshdrop.service ~/.config/systemd/user/meshdrop.service
     systemctl --user daemon-reload
     systemctl --user enable --now meshdrop.service
     loginctl enable-linger "$USER"     # keep it running when you are logged out
 
-Add devices with `meshdrop invite` (QR) and `meshdrop join <uri>` on the new device; list them with `meshdrop
-members`. Export the recovery file once and keep it offline.
+The unit runs `/usr/bin/meshdrop` from the .deb. From a source checkout, put a `meshdrop` launcher in
+`~/.local/bin` (e.g. `exec node /path/to/meshdrop/packages/core/src/cli.ts "$@"`) and change `ExecStart` to
+`%h/.local/bin/meshdrop listen --device-type headless`. When the service and the desktop app share a config
+home, the app sees the service's `listen.pid` and runs client-only: it sends, while the service receives and
+serves the hub.
+
+Add devices with `meshdrop invite` (QR) and `meshdrop join <uri>` on the new device (or the Mesh page); list
+them with `meshdrop members`. Export the recovery file once and keep it offline.
 
 ## Notes for other engines (M4 Android)
 

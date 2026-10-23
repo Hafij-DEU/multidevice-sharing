@@ -30,7 +30,7 @@ export function autostartFile(execPath: Exec): string {
     'Name=MeshDrop',
     'Comment=Send files between your devices',
     `Exec=${execLine(execPath)} --hidden`,
-    'Icon=meshdrop',
+    'Icon=meshdrop-desktop',
     'Terminal=false',
     'X-GNOME-Autostart-enabled=true',
     '',

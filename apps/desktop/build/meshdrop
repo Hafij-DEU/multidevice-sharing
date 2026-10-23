@@ -1,0 +1,3 @@
+#!/bin/sh
+# meshdrop command line, run by the bundled Electron in Node mode (installed as /usr/bin/meshdrop).
+ELECTRON_RUN_AS_NODE=1 exec /opt/MeshDrop/meshdrop-desktop /opt/MeshDrop/resources/cli.cjs "$@"

@@ -1,0 +1,40 @@
+# .deb for Ubuntu. Build with scripts/build-deb.sh (it runs the Vite builds first and keeps the
+# electron-builder output out of the repository).
+appId: io.github.hafijbge.meshdrop
+productName: MeshDrop
+copyright: Copyright © 2026 Hafij-BGE
+directories:
+  buildResources: build
+files:
+  - dist/main/**/*
+  - dist/renderer/**/*
+  - dist/icons/**/*
+  - "!**/*.map"
+  - package.json
+extraResources:
+  - from: dist/cli/cli.cjs
+    to: cli.cjs
+  - from: build/meshdrop
+    to: meshdrop
+linux:
+  target: deb
+  category: Network;FileTransfer
+  executableName: meshdrop-desktop
+  icon: build/icons
+  maintainer: Hafij-BGE <mdhafijur.rahman@ogr.deu.edu.tr>
+  synopsis: Send files between your devices, on the LAN or through your own hub
+  description: >-
+    MeshDrop sends files, folders, text and clipboard between your PC and phones, end-to-end
+    encrypted, over the local network or through a hub on your own PC. Includes the meshdrop
+    command line.
+  syncDesktopName: true
+  desktop:
+    entry:
+      Comment: Send files between your devices
+      StartupWMClass: meshdrop
+      Keywords: share;send;transfer;files;clipboard;
+deb:
+  packageName: meshdrop
+  artifactName: meshdrop_${version}_amd64.deb
+  afterInstall: build/after-install.tpl
+  afterRemove: build/after-remove.tpl

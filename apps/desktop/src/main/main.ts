@@ -307,6 +307,8 @@ if (!app.requestSingleInstanceLock()) {
   app.on('window-all-closed', () => {
     if (!tray || !settings?.get().closeToTray) quit();
   });
+  // systemd/session logout: stop like Quit does (sends kept for auto-resume, listen.pid removed).
+  for (const sig of ['SIGTERM', 'SIGINT'] as const) process.on(sig, quit);
   app.on('before-quit', () => {
     quitting = true;
   });

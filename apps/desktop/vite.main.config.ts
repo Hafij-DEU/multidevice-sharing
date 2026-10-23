@@ -1,4 +1,5 @@
 // Electron main + preload, bundled to CommonJS (Electron loads plain JS; the core is TS source).
+// Everything but electron and Node built-ins is inlined, so the package ships no node_modules.
 import { builtinModules } from 'node:module';
 import { defineConfig } from 'vite';
 
@@ -15,8 +16,9 @@ export default defineConfig({
     rollupOptions: {
       input: { main: 'src/main/main.ts', preload: 'src/main/preload.ts' },
       output: { format: 'cjs', entryFileNames: '[name].cjs' },
-      external: ['electron', 'ws', 'qrcode', ...builtins],
+      // ws's optional native helpers: required inside try/catch, absent is fine.
+      external: ['electron', 'bufferutil', 'utf-8-validate', ...builtins],
     },
   },
-  ssr: { noExternal: ['@meshdrop/core'] },
+  ssr: { noExternal: true },
 });
