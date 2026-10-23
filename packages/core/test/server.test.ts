@@ -156,17 +156,23 @@ describe('receiver API', () => {
     }
     const c = await call(h, B, 'POST', `complete/${sid}/0`);
     expect(c.status).toBe(200);
+    // the wire carries inbox-relative paths ('/'-separated); local events carry absolute ones
     const path = (c.json as { path: string }).path;
-    expect(path).toBe(join(h.root, 'sub/big.bin'));
-    expect(readFileSync(path).equals(data)).toBe(true);
+    expect(path).toBe('sub/big.bin');
+    const abs = join(h.root, 'sub/big.bin');
+    expect(readFileSync(abs).equals(data)).toBe(true);
 
     const f = await call(h, B, 'POST', `finish/${sid}`);
     expect(f.status).toBe(200);
     expect(h.events.map((e) => e.type)).toEqual(['offer', 'progress', 'progress', 'file', 'received']);
     expect(h.events[1]).toMatchObject({ type: 'progress', sessionId: sid, from: B.deviceId, fileId: 0, chunks: 1, total: 2 });
     expect(h.events[2]).toMatchObject({ type: 'progress', fileId: 0, chunks: 2, total: 2 });
-    expect(h.events[3]).toMatchObject({ type: 'file', fileId: 0, path });
-    expect(h.events[4]).toMatchObject({ type: 'received', sessionId: sid, from: B.deviceId, files: [path] });
+    expect(f.json).toEqual({ files: ['sub/big.bin'] });
+    expect(h.events[3]).toMatchObject({ type: 'file', fileId: 0, path: abs });
+    expect(h.events[4]).toMatchObject({ type: 'received', sessionId: sid, from: B.deviceId, files: [abs] });
+    // the tombstone records relative paths too
+    const tomb = JSON.parse(readFileSync(join(h.root, '.meshdrop-partial', '.finished', `${sid}.json`), 'utf8'));
+    expect(tomb.files).toEqual(['sub/big.bin']);
     // partial state is gone after finish
     expect(existsSync(join(h.root, '.meshdrop-partial', sid))).toBe(false);
     // retried finish (lost 200): same files, no second 'received'
@@ -227,9 +233,12 @@ describe('receiver API', () => {
     await putChunk(h, sid, 0, 0, sealChunk(ctx, sid, 0, 0, data));
     const path = ((await call(h, B, 'POST', `complete/${sid}/0`)).json as { path: string }).path;
 
+    expect(path).toBe('p.txt');
     const h2 = await startServer({ root: h.root, trust: h.trust });
-    expect((await call(h2, B, 'POST', `finish/${sid}`)).status).toBe(200);
-    expect(h2.events).toEqual([expect.objectContaining({ type: 'received', files: [path], text: 't' })]);
+    const fin = await call(h2, B, 'POST', `finish/${sid}`);
+    expect(fin.status).toBe(200);
+    expect(fin.json).toEqual({ files: ['p.txt'] });
+    expect(h2.events).toEqual([expect.objectContaining({ type: 'received', files: [join(h.root, 'p.txt')], text: 't' })]);
   });
 
   it('re-offer after finish is done:true, creates no session or files; tombstone survives restart', async () => {

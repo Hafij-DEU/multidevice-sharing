@@ -35,6 +35,7 @@ import type { TrustStore } from '../trust.ts';
 export type ReceiverEvent =
   | { type: 'offer'; sessionId: string; from: string; manifest: Manifest }
   | { type: 'progress'; sessionId: string; from: string; fileId: number; chunks: number; total: number }
+  /** `path` / `files` are absolute local paths (the wire carries them relative to the inbox root). */
   | { type: 'file'; sessionId: string; from: string; fileId: number; path: string }
   | { type: 'received'; sessionId: string; from: string; files: string[]; text?: string }
   | { type: 'error'; sessionId: string; from: string; code: string }
@@ -299,7 +300,7 @@ export function createMeshServer(opts: MeshServerOptions): Server {
       throw e;
     }
     if (!wasDone) emit({ type: 'file', sessionId, from: peer, fileId, path });
-    send(res, 200, { path });
+    send(res, 200, { path: inbox.relative(path) }); // peers never learn our directory layout
   }
 
   async function handleFinish(res: ServerResponse, peer: string, seg: string[]): Promise<void> {
@@ -314,14 +315,15 @@ export function createMeshServer(opts: MeshServerOptions): Server {
     }
     const s = await requireOwned(sessionId, peer);
     const done = new Set(await inbox.completed(sessionId));
-    const files: string[] = [];
+    const abs: string[] = [];
     for (const f of s.manifest.files) {
       if (!done.has(f.fileId)) throw new HttpError(409, 'incomplete');
-      files.push(await inbox.finalize(sessionId, f.fileId)); // already done: returns the stored path
+      abs.push(await inbox.finalize(sessionId, f.fileId)); // already done: returns the stored path
     }
+    const files = abs.map((p) => inbox.relative(p)); // the wire and the tombstone: inbox-relative
     await inbox.finalizeDirs(sessionId);
     await inbox.markFinished(sessionId, { from: peer, files });
-    const ev: ReceiverEvent = { type: 'received', sessionId, from: peer, files };
+    const ev: ReceiverEvent = { type: 'received', sessionId, from: peer, files: abs };
     if (s.manifest.text !== undefined) ev.text = s.manifest.text;
     emit(ev);
     live.delete(sessionId);

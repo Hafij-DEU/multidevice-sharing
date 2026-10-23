@@ -529,7 +529,8 @@ export class Inbox {
 
   /**
    * Leaves a tombstone so a retried `finish` / re-offer of a delivered session can be answered
-   * without re-receiving it. Written atomically (0600); tombstones older than 7 days are pruned.
+   * without re-receiving it (`files`: the inbox-relative paths sent on the wire). Written
+   * atomically (0600); tombstones older than 7 days are pruned.
    */
   async markFinished(sessionId: string, info: { from: string; files: string[] }): Promise<void> {
     this.sessionDir(sessionId); // validates the id
