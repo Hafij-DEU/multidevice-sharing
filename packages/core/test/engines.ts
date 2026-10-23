@@ -22,6 +22,8 @@ export interface Engine {
   server: Server;
   port: number;
   events: ReceiverEvent[];
+  /** Every chunk the receiver's inbox stored (successful writeChunk calls), in order. */
+  writes: { sessionId: string; fileId: number; index: number }[];
   /** Extra listeners, called synchronously for every receiver event. */
   listeners: ((e: ReceiverEvent, eng: Engine) => void)[];
   target(): Target;
@@ -63,9 +65,14 @@ export async function makeEngines(n: number, opts: { fs?: typeof fsp } = {}): Pr
       });
     });
     const inboxRoot = join(home, 'inbox');
-    const eng = { home, id, trust, inboxRoot, outboxDir: join(home, 'outbox'), events: [], listeners: [] } as unknown as Engine;
+    const eng = { home, id, trust, inboxRoot, outboxDir: join(home, 'outbox'), events: [], writes: [], listeners: [] } as unknown as Engine;
     const start = async (fs?: typeof fsp) => {
       eng.inbox = new Inbox(inboxRoot, fs ? { fs } : {});
+      const write = eng.inbox.writeChunk.bind(eng.inbox);
+      eng.inbox.writeChunk = async (sessionId, fileId, index, pt) => {
+        await write(sessionId, fileId, index, pt);
+        eng.writes.push({ sessionId, fileId, index });
+      };
       eng.server = createMeshServer({
         id,
         trust,
@@ -101,3 +108,5 @@ export function cleanupEngines(): void {
 
 export const progressOf = (e: Engine, sessionId: string) =>
   e.events.filter((ev): ev is Extract<ReceiverEvent, { type: 'progress' }> => ev.type === 'progress' && ev.sessionId === sessionId);
+
+export const writesOf = (e: Engine, sessionId: string) => e.writes.filter((w) => w.sessionId === sessionId);

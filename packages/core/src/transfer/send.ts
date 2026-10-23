@@ -73,6 +73,8 @@ const HASH_BUF = 1024 * 1024;
 const SESSION_ID_RE = /^[A-Za-z0-9_-]{22}$/;
 const DEVICE_ID_RE = /^[0-9a-f]{64}$/;
 const PREFIX = '/mesh/v1/';
+/** pinnedRequest's messages for a reply body we cannot use (bad JSON, oversized). */
+const MALFORMED_REPLY = /^(invalid JSON in application\/json response|response body exceeds )/;
 
 // ---- errors ------------------------------------------------------------------------------------
 
@@ -154,27 +156,43 @@ export interface PreparedItems {
   text?: string;
   sources: Map<number, string>;
   stats: Map<number, SourceStat>;
+  /** Per-chunk plaintext SHA-256 (hex) for every fileId. */
+  chunkHashes: Map<number, string[]>;
 }
 
-/** Hashes an open file with positional reads; fails if it changes while being read. */
-async function hashFile(path: string, followSymlink: boolean): Promise<{ sha256: string; stat: SourceStat }> {
+/**
+ * Hashes a file with positional reads: the whole-file SHA-256 (for the manifest) plus one SHA-256
+ * per CHUNK_SIZE chunk (kept by the sender only, to prove on resume that a chunk's plaintext is
+ * unchanged before it is sealed again). Fails if the file changes while being read.
+ */
+async function hashFile(path: string, followSymlink: boolean): Promise<{ sha256: string; chunks: string[]; stat: SourceStat }> {
   const flags = constants.O_RDONLY | (followSymlink ? 0 : (constants.O_NOFOLLOW ?? 0));
   const h = await fsp.open(path, flags);
   try {
     const st = await h.stat();
     if (!st.isFile()) throw new Error(`not a regular file: ${path}`);
     const hash = createHash('sha256');
+    const chunks: string[] = [];
+    let chunkHash = createHash('sha256');
     const buf = Buffer.allocUnsafe(Math.min(HASH_BUF, Math.max(st.size, 1)));
     let pos = 0;
     while (pos < st.size) {
-      const { bytesRead } = await h.read(buf, 0, Math.min(buf.length, st.size - pos), pos);
+      // never let one read straddle a chunk boundary, so chunk hashes stay aligned
+      const want = Math.min(buf.length, st.size - pos, CHUNK_SIZE - (pos % CHUNK_SIZE));
+      const { bytesRead } = await h.read(buf, 0, want, pos);
       if (bytesRead === 0) throw new SourceChangedError(path);
-      hash.update(buf.subarray(0, bytesRead));
+      const piece = buf.subarray(0, bytesRead);
+      hash.update(piece);
+      chunkHash.update(piece);
       pos += bytesRead;
+      if (pos % CHUNK_SIZE === 0 || pos === st.size) {
+        chunks.push(chunkHash.digest('hex'));
+        chunkHash = createHash('sha256');
+      }
     }
     const st2 = await h.stat();
     if (st2.size !== st.size || st2.mtimeMs !== st.mtimeMs) throw new SourceChangedError(path);
-    return { sha256: hash.digest('hex'), stat: { size: st.size, mtimeMs: st.mtimeMs } };
+    return { sha256: hash.digest('hex'), chunks, stat: { size: st.size, mtimeMs: st.mtimeMs } };
   } finally {
     await h.close();
   }
@@ -196,14 +214,16 @@ export async function prepareItems(items: SendItem[]): Promise<PreparedItems> {
   const dirs: DirEntry[] = [];
   const sources = new Map<number, string>();
   const stats = new Map<number, SourceStat>();
+  const chunkHashes = new Map<number, string[]>();
   let text: string | undefined;
 
   const addFile = async (abs: string, rel: string, follow: boolean) => {
-    const { sha256, stat } = await hashFile(abs, follow);
+    const { sha256, chunks, stat } = await hashFile(abs, follow);
     const fileId = files.length;
     files.push({ fileId, path: rel, size: stat.size, mime: mimeOf(rel), sha256 });
     sources.set(fileId, abs);
     stats.set(fileId, stat);
+    chunkHashes.set(fileId, chunks);
   };
   const walk = async (abs: string, rel: string): Promise<void> => {
     const ents = await fsp.readdir(abs, { withFileTypes: true });
@@ -247,7 +267,7 @@ export async function prepareItems(items: SendItem[]): Promise<PreparedItems> {
   const itemsKey = createHash('sha256')
     .update(JSON.stringify(items.map((i) => [i.kind, i.srcPath === undefined ? null : resolve(i.srcPath), i.text ?? null])))
     .digest('hex');
-  const out: PreparedItems = { itemsKey, files, dirs, sources, stats };
+  const out: PreparedItems = { itemsKey, files, dirs, sources, stats, chunkHashes };
   if (text !== undefined) out.text = text;
   return out;
 }
@@ -277,7 +297,14 @@ export async function buildManifest(
 
 // ---- outbox ------------------------------------------------------------------------------------
 
-export interface OutboxSource { fileId: number; path: string; size: number; mtimeMs: number }
+export interface OutboxSource {
+  fileId: number;
+  path: string;
+  size: number;
+  mtimeMs: number;
+  /** SHA-256 (hex) of each CHUNK_SIZE plaintext chunk, checked before any chunk is sealed. */
+  chunks: string[];
+}
 export interface OutboxEntry {
   v: 1;
   sessionId: string;
@@ -303,6 +330,8 @@ function validEntry(x: unknown, sessionId: string): OutboxEntry | null {
   if (!Array.isArray(x.manifest.files) || !Array.isArray(x.sources)) return null;
   for (const s of x.sources) {
     if (!isObj(s) || typeof s.fileId !== 'number' || typeof s.path !== 'string' || typeof s.size !== 'number' || typeof s.mtimeMs !== 'number') return null;
+    if (!Number.isSafeInteger(s.size) || s.size < 0 || !Array.isArray(s.chunks) || s.chunks.length !== chunkCount(s.size)) return null;
+    if (!s.chunks.every((c) => typeof c === 'string' && /^[0-9a-f]{64}$/.test(c))) return null;
   }
   return x as unknown as OutboxEntry;
 }
@@ -478,7 +507,12 @@ export async function sendPrepared(id: Identity, t: Target, p: PreparedItems, op
         itemsKey: p.itemsKey,
         offer,
         manifest,
-        sources: p.files.map((f) => ({ fileId: f.fileId, path: p.sources.get(f.fileId)!, ...p.stats.get(f.fileId)! })),
+        sources: p.files.map((f) => ({
+          fileId: f.fileId,
+          path: p.sources.get(f.fileId)!,
+          ...p.stats.get(f.fileId)!,
+          chunks: p.chunkHashes.get(f.fileId)!,
+        })),
         ctxExport: exportCtx(ctx),
       };
       if (opts.outbox) await opts.outbox.save(entry);
@@ -557,7 +591,11 @@ async function checkSources(sources: OutboxSource[]): Promise<void> {
   }
 }
 
-/** Positional read of one chunk; re-checks the source's size/mtime on the open handle first. */
+/**
+ * Positional read of one chunk. Re-checks size/mtime on the open handle, then verifies the chunk's
+ * SHA-256 against the one recorded at manifest time, so changed plaintext is never sealed under a
+ * seq that may already have been used (size+mtime alone miss `cp -p`, `touch -r`, coarse clocks).
+ */
 async function readChunk(src: OutboxSource, index: number): Promise<Buffer> {
   const h = await fsp.open(src.path, 'r');
   try {
@@ -572,6 +610,7 @@ async function readChunk(src: OutboxSource, index: number): Promise<Buffer> {
       if (bytesRead === 0) throw new SourceChangedError(src.path);
       off += bytesRead;
     }
+    if (createHash('sha256').update(buf).digest('hex') !== src.chunks[index]) throw new SourceChangedError(src.path);
     return buf;
   } finally {
     await h.close();
@@ -606,7 +645,14 @@ async function transfer(
       if (signal.aborted) throw abortError();
       try {
         const sock = await connectPinned(t.host, t.port, id, t.deviceId, { timeoutMs: connectTimeoutMs });
-        const res = await pinnedRequest(sock, method, PREFIX + path, body, headers, { timeoutMs: reqTimeout, signal });
+        let res: PinnedResponse;
+        try {
+          res = await pinnedRequest(sock, method, PREFIX + path, body, headers, { timeoutMs: reqTimeout, signal });
+        } catch (e) {
+          // tls.ts reports unusable reply bodies as plain Errors; they are not transient.
+          if (e instanceof Error && MALFORMED_REPLY.test(e.message)) throw new ProtocolError(e.message);
+          throw e;
+        }
         if (res.status >= 200 && res.status < 300) return res;
         throw new HttpStatusError(res.status, remoteCode(res.json));
       } catch (e) {
@@ -659,7 +705,16 @@ async function transfer(
   }
 
   const complete = async (f: FileEntry) => {
-    await call('POST', `complete/${sessionId}/${f.fileId}`, undefined, {}, finalizeTimeoutMs);
+    try {
+      await call('POST', `complete/${sessionId}/${f.fileId}`, undefined, {}, finalizeTimeoutMs);
+    } catch (e) {
+      // The receiver's whole-file hash disagrees with the manifest (it has discarded the file):
+      // the data we sent no longer matches what was hashed. Terminal; resending would reseal seqs.
+      if (e instanceof HttpStatusError && e.status === 422 && e.code === 'integrity') {
+        throw new SourceChangedError(srcById.get(f.fileId)?.path ?? `file ${f.fileId}`);
+      }
+      throw e;
+    }
   };
 
   let next = 0;

@@ -1,5 +1,5 @@
 import { createHash, randomBytes } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
+import { closeSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, statSync, symlinkSync, utimesSync, writeFileSync, writeSync } from 'node:fs';
 import * as fsp from 'node:fs/promises';
 import { createServer } from 'node:https';
 import { join } from 'node:path';
@@ -8,7 +8,7 @@ import { CHUNK_SIZE, chunkCount } from '../src/chunk.ts';
 import { loadOrCreateIdentity } from '../src/identity.ts';
 import { serverTlsOptions } from '../src/tls.ts';
 import { DEFAULT_RETRY_DELAYS_MS, Outbox, buildManifest, sendTo } from '../src/transfer/send.ts';
-import { cleanupEngines, makeEngines, progressOf, tmpDir } from './engines.ts';
+import { cleanupEngines, makeEngines, progressOf, tmpDir, writesOf } from './engines.ts';
 
 const sha = (b: Buffer) => createHash('sha256').update(b).digest('hex');
 const FAST = [5, 5, 5];
@@ -124,15 +124,17 @@ describe('sendTo', () => {
   });
 
   describe('against a fake receiver', () => {
-    async function fake(status: number) {
+    /** HTTPS server presenting a throwaway identity; `reply` picks the status and JSON body per request. */
+    async function fakeWith(reply: (method: string, url: string) => [number, string]) {
       const fid = await loadOrCreateIdentity(tmpDir());
-      let hits = 0;
+      const seen: string[] = [];
       const server = createServer(serverTlsOptions(fid), (req, res) => {
-        hits++;
+        seen.push(`${req.method} ${req.url}`);
         req.resume();
         req.on('end', () => {
+          const [status, body] = reply(req.method ?? '', req.url ?? '');
           res.writeHead(status, { 'content-type': 'application/json' });
-          res.end(JSON.stringify({ error: 'nope' }));
+          res.end(body);
         });
       });
       await new Promise<void>((r) => server.listen(0, '127.0.0.1', () => r()));
@@ -141,8 +143,24 @@ describe('sendTo', () => {
         server.close();
       });
       const target = { deviceId: fid.deviceId, host: '127.0.0.1', port: (server.address() as { port: number }).port, publicKey: fid.publicKey };
-      return { target, hits: () => hits };
+      return { target, seen, hits: () => seen.length };
     }
+    const fake = (status: number, body = JSON.stringify({ error: 'nope' })) => fakeWith(() => [status, body]);
+
+    it('422 integrity from complete is terminal source-changed (not retried)', async () => {
+      const [a] = await makeEngines(1);
+      const f = await fakeWith((method, url) => {
+        if (url.endsWith('/offer')) return [200, JSON.stringify({ have: {} })];
+        if (url.includes('/chunk/')) return [204, ''];
+        if (url.includes('/complete/')) return [422, JSON.stringify({ error: 'integrity' })];
+        return [500, '{}'];
+      });
+      const file = join(tmpDir(), 'x.bin');
+      writeFileSync(file, 'x');
+      const r = await sendTo(a!.id, f.target, [{ kind: 'file', srcPath: file }], { retryDelaysMs: FAST });
+      expect(r).toMatchObject({ status: 'failed', error: 'source-changed' });
+      expect(f.seen.map((x) => x.split(' ')[1]!.split('/')[3])).toEqual(['offer', 'chunk', 'complete']);
+    });
 
     it('5xx is retried 3 times, then the session fails and the outbox entry is kept', async () => {
       const [a] = await makeEngines(1);
@@ -155,6 +173,16 @@ describe('sendTo', () => {
       expect(r.error).toBe('http-503 nope');
       expect(f.hits()).toBe(4);
       expect(existsSync(join(a!.outboxDir, `${r.sessionId}.json`))).toBe(true);
+    });
+
+    it('a 2xx reply with invalid JSON is a protocol error and is not retried', async () => {
+      const [a] = await makeEngines(1);
+      const f = await fake(200, '{not json');
+      const file = join(tmpDir(), 'x.bin');
+      writeFileSync(file, 'x');
+      const r = await sendTo(a!.id, f.target, [{ kind: 'file', srcPath: file }], { retryDelaysMs: FAST });
+      expect(r).toMatchObject({ status: 'failed', error: 'bad-response' });
+      expect(f.hits()).toBe(1);
     });
 
     it.each([403, 404, 409, 413, 422])('%i is not retried', async (status) => {
@@ -211,6 +239,56 @@ describe('sendTo', () => {
     expect(r2.status).toBe('done');
     expect(r2.sessionId).not.toBe(r.sessionId);
     expect(readdirSync(a!.outboxDir).filter((n) => n.endsWith('.json'))).toEqual([]);
+  });
+
+  describe('same-size rewrite with the mtime restored (cp -p, rsync -t, coarse timestamps)', () => {
+    const T = 1_700_000_000; // whole seconds, so utimes restores mtimeMs exactly
+    async function pausedAfterFirstChunk() {
+      const [a, b] = await makeEngines(2);
+      const file = join(tmpDir(), 'same-size.bin');
+      writeFileSync(file, randomBytes(3 * CHUNK_SIZE));
+      utimesSync(file, T, T);
+      const mtimeMs = statSync(file).mtimeMs;
+      const outbox = new Outbox(a!.outboxDir);
+      const ac = new AbortController();
+      b!.listeners.push((e) => { if (e.type === 'progress') ac.abort(); });
+      // one chunk in flight, so exactly chunk 0 is stored when the abort lands
+      const r = await sendTo(a!.id, b!.target(), [{ kind: 'file', srcPath: file }], { outbox, signal: ac.signal, concurrency: 1 });
+      expect(r.status).toBe('cancelled');
+      b!.listeners.length = 0;
+      expect(writesOf(b!, r.sessionId).map((w) => w.index)).toEqual([0]);
+      const rewrite = (offset: number, len: number) => {
+        const fd = openSync(file, 'r+');
+        writeSync(fd, randomBytes(len), 0, len, offset);
+        closeSync(fd);
+        utimesSync(file, T, T);
+        expect(statSync(file).mtimeMs).toBe(mtimeMs); // size + mtime cannot see the change
+      };
+      return { a: a!, b: b!, file, r, outbox, rewrite };
+    }
+
+    it('missing chunks rewritten: every resume fails source-changed before sealing anything', async () => {
+      const { a, b, r, rewrite } = await pausedAfterFirstChunk();
+      rewrite(CHUNK_SIZE, 2 * CHUNK_SIZE);
+      const ob = new Outbox(a.outboxDir);
+      for (let i = 0; i < 2; i++) {
+        const res = await ob.resumeAll(a.id, () => b.target());
+        expect(res).toEqual([{ deviceId: b.id.deviceId, status: 'failed', sessionId: r.sessionId, error: 'source-changed' }]);
+        expect(writesOf(b, r.sessionId).map((w) => w.index)).toEqual([0]); // nothing resealed
+      }
+      expect(existsSync(join(a.outboxDir, `${r.sessionId}.json`))).toBe(true);
+    });
+
+    it('only an already-delivered chunk rewritten: the receiver keeps the original snapshot', async () => {
+      const { a, b, file, r, rewrite } = await pausedAfterFirstChunk();
+      const original = readFileSync(file);
+      rewrite(0, CHUNK_SIZE);
+      const res = await new Outbox(a.outboxDir).resumeAll(a.id, () => b.target());
+      expect(res).toEqual([{ deviceId: b.id.deviceId, status: 'done', sessionId: r.sessionId }]);
+      // chunks 1 and 2 go up concurrently (any order); chunk 0 is never resent
+      expect(writesOf(b, r.sessionId).map((w) => w.index).sort()).toEqual([0, 1, 2]);
+      expect(sha(readFileSync(join(b.inboxRoot, 'same-size.bin')))).toBe(sha(original));
+    });
   });
 
   it('resumeAll: unresolvable targets are reported failed target-unresolved and kept', async () => {

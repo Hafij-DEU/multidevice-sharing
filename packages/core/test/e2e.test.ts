@@ -3,12 +3,11 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { setTimeout as sleep } from 'node:timers/promises';
 import { afterEach, describe, expect, it } from 'vitest';
 import { CHUNK_SIZE, chunkCount } from '../src/chunk.ts';
 import { multiSend } from '../src/transfer/multisend.ts';
 import { Outbox, sendTo } from '../src/transfer/send.ts';
-import { cleanupEngines, makeEngines, progressOf, tmpDir, type Engine } from './engines.ts';
+import { cleanupEngines, makeEngines, progressOf, tmpDir, writesOf, type Engine } from './engines.ts';
 
 const sha = (b: Buffer) => createHash('sha256').update(b).digest('hex');
 afterEach(() => cleanupEngines());
@@ -60,21 +59,22 @@ describe('e2e', () => {
     const outbox = new Outbox(a.outboxDir);
     const ac = new AbortController();
     abortAfterChunks(b, 2, ac);
-    const r1 = await sendTo(a.id, b.target(), [{ kind: 'file', srcPath: file }], { outbox, signal: ac.signal });
+    // One chunk in flight: when the 2nd chunk's progress event aborts the send, no other chunk
+    // can still be on its way to the receiver, so the test needs no sleep to settle.
+    const r1 = await sendTo(a.id, b.target(), [{ kind: 'file', srcPath: file }], { outbox, signal: ac.signal, concurrency: 1 });
     expect(r1.status).toBe('cancelled');
     b.listeners.length = 0;
-    await sleep(150); // let any chunk that was already fully uploaded settle on the receiver
-
-    const before = (await b.inbox.have(r1.sessionId))[0] ?? [];
-    expect(before.length).toBeGreaterThanOrEqual(2);
     const total = chunkCount(SIZE_20MB);
-    expect(before.length).toBeLessThan(total);
-    const firstRun = progressOf(b, r1.sessionId).length;
+    const firstRun = writesOf(b, r1.sessionId).length;
+    expect(firstRun).toBe(2);
 
     const r2 = await sendTo(a.id, b.target(), [{ kind: 'file', srcPath: file }], { outbox });
     expect(r2).toEqual({ deviceId: b.id.deviceId, status: 'done', sessionId: r1.sessionId });
-    const secondRun = progressOf(b, r1.sessionId).length - firstRun;
-    expect(secondRun).toBe(total - before.length);
+    // across both runs every chunk index was stored exactly once: nothing was PUT twice
+    const indices = writesOf(b, r1.sessionId).map((w) => w.index);
+    expect(indices).toHaveLength(total);
+    expect([...indices].sort((x, y) => x - y)).toEqual([...Array(total).keys()]);
+    expect(progressOf(b, r1.sessionId)).toHaveLength(total);
     expect(sha(readFileSync(join(b.inboxRoot, 'twenty.bin')))).toBe(sha(data));
     expect(existsSync(join(a.outboxDir, `${r1.sessionId}.json`))).toBe(false);
   });
