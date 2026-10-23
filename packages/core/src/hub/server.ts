@@ -21,6 +21,7 @@ import { deviceIdOf, type Identity } from '../identity.ts';
 import { signDomain, verifyDomain } from '../mesh/canonical.ts';
 import { decodeFrame, encodeFrame, openEnvelope, sealEnvelope, type Envelope } from '../mesh/envelope.ts';
 import { heldSessionOf, type HeldSession, type HeldStore } from './held.ts';
+import type { InviteBook } from '../mesh/invite.ts';
 import type { MembershipStore } from '../mesh/members.ts';
 import { signList, type Member, type MembershipList, type SignedMembership } from '../mesh/membership.ts';
 import { peerDeviceId } from '../tls.ts';
@@ -54,6 +55,8 @@ export interface HubServerOptions {
   hubLan?: () => LanAddr[];
   /** A relayed request the target does not answer within this is failed with 504 (default 600 000 ms). */
   relayTimeoutMs?: number;
+  /** Invites this hub enforces (its own and those members registered); without it joins over the hub fail. */
+  invites?: InviteBook;
   /** Store for sessions sent to offline devices; without it they get 503 offline. */
   held?: HeldStore;
   /** Observes every frame the hub forwards (tests, diagnostics). */
@@ -74,6 +77,11 @@ interface Conn {
 
 const DEVICE_ID_RE = /^[0-9a-f]{64}$/;
 const B64_RE = /^[A-Za-z0-9+/]+={0,2}$/;
+
+/** A device alias as stored in the membership list: 1–64 chars, no control characters. */
+export function isAlias(v: unknown): v is string {
+  return typeof v === 'string' && v.length >= 1 && v.length <= 64 && !/[\u0000-\u001f\u007f-\u009f]/.test(v);
+}
 
 function parseLan(v: unknown): LanAddr[] | null {
   if (!Array.isArray(v) || v.length > MAX_LAN_ADDRS) return null;
@@ -379,6 +387,15 @@ export class HubServer extends EventEmitter {
   // ---- membership authority ----------------------------------------------------------------
 
   async addMember(m: Omit<Member, 'role' | 'addedAt'>): Promise<SignedMembership> {
+    return this.#addMemberSync(m);
+  }
+
+  /** The mesh root public key as SPKI PEM (what a joining device pins). */
+  get anchorPem(): string {
+    return createPublicKey(this.#opts.rootKey).export({ type: 'spki', format: 'pem' }) as string;
+  }
+
+  #addMemberSync(m: Omit<Member, 'role' | 'addedAt'>): SignedMembership {
     const list = this.#opts.members.list();
     if (list.revoked.some((r) => r.deviceId === m.deviceId)) throw new Error('device was revoked and cannot rejoin');
     const pem = canonicalSpki(m.publicKeyPem);
@@ -481,15 +498,20 @@ export class HubServer extends EventEmitter {
     } catch {
       return fail();
     }
-    if (typeof m !== 'object' || m === null || m.t !== 'auth') return fail();
-    const { deviceId, cert, nonce, sig, mv } = m;
+    if (typeof m !== 'object' || m === null || (m.t !== 'auth' && m.t !== 'join')) return fail();
+    const joining = m.t === 'join';
+    const { deviceId, cert, nonce, sig } = m;
+    const mv = joining ? 0 : m.mv;
     if (typeof deviceId !== 'string' || !DEVICE_ID_RE.test(deviceId)) return fail();
     if (typeof cert !== 'string' || !B64_RE.test(cert) || cert.length > 8192) return fail();
     if (typeof nonce !== 'string' || Buffer.from(nonce, 'base64').length !== 32) return fail();
     if (typeof sig !== 'string') return fail();
     if (!Number.isSafeInteger(mv) || (mv as number) < 0) return fail();
-    const lan = parseLan(m.lan);
+    const lan = parseLan(m.lan ?? []);
     if (lan === null) return fail();
+    if (joining && (!isAlias(m.alias) || typeof m.proof !== 'string' || m.proof.length > 128 || typeof m.inviter !== 'string' || !DEVICE_ID_RE.test(m.inviter))) {
+      return fail();
+    }
     const der = Buffer.from(cert, 'base64');
     if (deviceIdOf(der) !== deviceId) return fail();
     if (tlsPeer !== null && tlsPeer !== deviceId) return fail();
@@ -503,6 +525,23 @@ export class HubServer extends EventEmitter {
     if (!verifyDomain(HUB_AUTH_DOMAIN, `${hub}\0${deviceId}\0${hubNonce}`, sig, pub)) return fail();
 
     const members = this.#opts.members;
+    if (joining && !members.isTrusted(deviceId)) {
+      // A QR invite redeemed over the internet: the invite must be one this hub enforces.
+      const inviter = m.inviter as string;
+      const res = this.#opts.invites && members.isTrusted(inviter) ? this.#opts.invites.consume(deviceId, inviter, m.proof as string) : 'unknown';
+      if (res !== 'ok' || members.isRevoked(deviceId)) {
+        c.ws.send(JSON.stringify({ t: 'join-failed', error: res === 'ok' ? 'revoked' : res }));
+        c.ws.close(CLOSE_REVOKED);
+        return;
+      }
+      try {
+        this.#addMemberSync({ deviceId, alias: m.alias as string, publicKeyPem: pub.export({ type: 'spki', format: 'pem' }) as string });
+      } catch {
+        c.ws.send(JSON.stringify({ t: 'join-failed', error: 'refused' }));
+        c.ws.close(CLOSE_REVOKED);
+        return;
+      }
+    }
     const known = members.get(deviceId);
     if (!members.isTrusted(deviceId) || !known) return this.#reject(c, CLOSE_REVOKED);
     // The member entry pins the key: a cert for another key never authenticates as this device.
@@ -521,6 +560,7 @@ export class HubServer extends EventEmitter {
     };
     const current = members.current();
     if ((mv as number) < current.list.version) welcome.membership = current;
+    if (joining) welcome.anchorPem = this.anchorPem;
     c.ws.send(JSON.stringify(welcome));
     this.emit('online', deviceId);
     this.#pushDirectory(deviceId);
@@ -548,7 +588,40 @@ export class HubServer extends EventEmitter {
       c.ws.send(JSON.stringify({ t: 'pong' }));
       return;
     }
+    if (m.t === 'invite') return this.#onInvite(deviceId, m);
+    if (m.t === 'join') return this.#onMemberJoin(c, deviceId, m);
     this.emit('message', deviceId, m);
+  }
+
+  /** A member registers an invite it created, so the invited device can redeem it over the hub. */
+  #onInvite(inviter: string, m: Record<string, unknown>): void {
+    const invites = this.#opts.invites;
+    if (!invites || typeof m.secret !== 'string') return;
+    const secret = Buffer.from(m.secret, 'base64url');
+    if (secret.length !== 16) return;
+    const mesh = this.#opts.members.list().mesh;
+    invites.register({ secret, inviter, mesh, lan: [], hubUrls: [], expiresAt: 0 });
+  }
+
+  /**
+   * A member adds a device it has already admitted with a QR invite over the LAN (it checked the
+   * proof). Any member may add a device; the hub signs it in and answers {t:'join-result'}.
+   */
+  #onMemberJoin(c: Conn, inviter: string, m: Record<string, unknown>): void {
+    const reqId = typeof m.reqId === 'string' && /^[A-Za-z0-9_-]{1,32}$/.test(m.reqId) ? m.reqId : null;
+    if (reqId === null) return;
+    const nm = m.newMember as Record<string, unknown> | undefined;
+    const answer = (o: Record<string, unknown>) => c.ws.send(JSON.stringify({ t: 'join-result', reqId, ...o }));
+    if (!nm || typeof nm.deviceId !== 'string' || !DEVICE_ID_RE.test(nm.deviceId) || !isAlias(nm.alias) || typeof nm.publicKeyPem !== 'string') {
+      return answer({ ok: false, error: 'bad-request' });
+    }
+    if (nm.deviceId === inviter) return answer({ ok: false, error: 'bad-request' });
+    try {
+      const s = this.#addMemberSync({ deviceId: nm.deviceId, alias: nm.alias as string, publicKeyPem: nm.publicKeyPem });
+      answer({ ok: true, membership: s });
+    } catch (e) {
+      answer({ ok: false, error: e instanceof Error && /revoked/.test(e.message) ? 'revoked' : 'refused' });
+    }
   }
 
   #reject(c: Conn, code: number): void {

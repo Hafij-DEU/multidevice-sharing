@@ -13,6 +13,7 @@ import { signDomain, verifyDomain } from '../mesh/canonical.ts';
 import { ReplayGuard, decodeFrame, encodeFrame, openEnvelope, sealEnvelope, type Envelope } from '../mesh/envelope.ts';
 import type { MembershipStore } from '../mesh/members.ts';
 import type { SignedMembership } from '../mesh/membership.ts';
+import type { Invite } from '../mesh/invite.ts';
 import { CLOSE_REVOKED, HUB_AUTH_DOMAIN, HUB_PATH, MAX_FRAME_BYTES, type DirectoryEntry, type LanAddr } from './server.ts';
 
 export const DEFAULT_BACKOFF_MS: readonly number[] = Object.freeze([1000, 2000, 5000, 10000, 30000, 60000]);
@@ -127,6 +128,40 @@ export class HubClient extends EventEmitter {
       signal?.addEventListener('abort', onAbort, { once: true });
       this.#pending.set(id, { resolve, reject, timer, cleanup });
       ws.send(encodeFrame(e), (err) => { if (err) this.#settle(id)?.reject(new HubOfflineError()); });
+    });
+  }
+
+  /** Lets the hub enforce an invite this device created, so it can be redeemed over the hub. */
+  registerInvite(i: Invite): boolean {
+    return this.sendControl({ t: 'invite', secret: i.secret.toString('base64url') });
+  }
+
+  /**
+   * Asks the hub to sign `newMember` into the mesh (this device already admitted it with a QR
+   * invite). Resolves with the new list; rejects if the hub refuses or does not answer in time.
+   */
+  requestJoin(newMember: { deviceId: string; alias: string; publicKeyPem: string }, timeoutMs = 10_000): Promise<SignedMembership> {
+    const reqId = randomBytes(9).toString('base64url');
+    return new Promise((resolve, reject) => {
+      const onControl = (m: Record<string, unknown>) => {
+        if (m.t !== 'join-result' || m.reqId !== reqId) return;
+        done();
+        if (m.ok === true) {
+          const s = m.membership as SignedMembership;
+          this.#applyMembership(s);
+          resolve(s);
+        } else reject(new Error(typeof m.error === 'string' ? m.error : 'join refused'));
+      };
+      const timer = setTimeout(() => { done(); reject(new HubOfflineError()); }, timeoutMs);
+      const done = () => {
+        clearTimeout(timer);
+        this.off('control', onControl);
+      };
+      this.on('control', onControl);
+      if (!this.sendControl({ t: 'join', reqId, newMember })) {
+        done();
+        reject(new HubOfflineError());
+      }
     });
   }
 

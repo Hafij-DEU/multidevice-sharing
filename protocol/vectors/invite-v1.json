@@ -1,0 +1,21 @@
+{
+  "description": "Invite URI v1 and join proof. proof = base64(HMAC-SHA256(secret, utf8(\"meshdrop-join-v1\") || 0x00 || utf8(newDeviceId) || 0x00 || utf8(inviter))). e = expiresAt in epoch seconds (informational; only the inviter or hub enforces expiry).",
+  "invite": {
+    "secretHex": "000102030405060708090a0b0c0d0e0f",
+    "inviter": "1111111111111111111111111111111111111111111111111111111111111111",
+    "mesh": "2222222222222222222222222222222222222222222222222222222222222222",
+    "lan": [
+      {
+        "host": "192.168.1.20",
+        "port": 53318
+      }
+    ],
+    "hubUrls": [
+      "wss://hub.example.ts.net/mesh/v1/hub"
+    ],
+    "expiresAt": 1790000000000
+  },
+  "uri": "meshdrop://join?v=1&s=AAECAwQFBgcICQoLDA0ODw&i=1111111111111111111111111111111111111111111111111111111111111111&r=2222222222222222222222222222222222222222222222222222222222222222&l=192.168.1.20%3A53318&h=wss%3A%2F%2Fhub.example.ts.net%2Fmesh%2Fv1%2Fhub&e=1790000000",
+  "newDeviceId": "3333333333333333333333333333333333333333333333333333333333333333",
+  "proofB64": "UYNc4QjRQCesRwsJmAcXEZMmIhJH62oTr+ed9VdwiFQ="
+}

@@ -51,7 +51,17 @@ export interface MeshServerOptions {
   alias?: string;
   /** Shown by GET info (default: 'desktop'). */
   deviceType?: string;
+  /**
+   * Serves `POST /mesh/v1/join` (QR invite redeemed over the LAN). Open to any TLS-identified peer,
+   * trusted or not; without it the route is 404.
+   */
+  onJoin?: (peer: string, body: unknown) => Promise<{ status: number; body: object }>;
+  /** The signed membership list served to trusted peers by `GET /mesh/v1/membership` (null: none). */
+  membership?: () => unknown | null;
 }
+
+/** Max body of a join request (device id, alias, certificate, proof). */
+export const MAX_JOIN_BODY = 64 * 1024;
 
 export interface MeshRequest {
   /** Authenticated caller, or null when the transport could not identify one. */
@@ -388,11 +398,31 @@ export function createMeshHandler(opts: MeshServerOptions): MeshHandler {
 
     if (method === 'GET' && seg.length === 1 && seg[0] === 'info') return reply(200, info());
 
+    if (method === 'POST' && seg.length === 1 && seg[0] === 'join') {
+      // A joining device is not trusted yet; it is identified by its TLS certificate only.
+      if (!opts.onJoin) throw new HttpError(404, 'not-found');
+      if (req.peer === null) throw new HttpError(403, 'untrusted');
+      const raw = await readBody(req, MAX_JOIN_BODY);
+      let body: unknown;
+      try {
+        body = JSON.parse(raw.toString('utf8'));
+      } catch {
+        throw new HttpError(400, 'bad-json');
+      }
+      const r = await opts.onJoin(req.peer, body);
+      return reply(r.status, r.body);
+    }
+
     const peer = req.peer;
     if (peer === null || !trust.isTrusted(peer)) throw new HttpError(403, 'untrusted');
     who.peer = peer;
     if (seg.length > 1 && seg[1] !== undefined && SESSION_ID_RE.test(seg[1])) who.sessionId = seg[1];
 
+    if (method === 'GET' && seg.length === 1 && seg[0] === 'membership') {
+      const s = opts.membership?.() ?? null;
+      if (s === null) throw new HttpError(404, 'not-found');
+      return reply(200, s);
+    }
     if (method === 'POST' && seg.length === 1 && seg[0] === 'offer') return handleOffer(req, peer, who);
     if (method === 'PUT' && seg.length === 4 && seg[0] === 'chunk') return handleChunk(req, peer, seg);
     if (method === 'POST' && seg.length === 3 && seg[0] === 'complete') return handleComplete(peer, seg);
