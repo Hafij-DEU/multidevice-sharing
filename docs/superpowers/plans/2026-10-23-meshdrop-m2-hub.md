@@ -461,7 +461,7 @@ export interface Transport { readonly kind: 'lan' | 'relay' | 'held';
   - The inviter consumes the proof from its `InviteBook`.
   - If the inviter is the hub, or its `HubClient` is online, the hub signs the new list. The inviter sends `{t:'join', newMember, inviteSecret}` over the link for a non-hub inviter. The reply is `200 {status:'member', anchorPem, membership}`.
   - Otherwise the reply is `200 {status:'provisional', anchorPem, inviterKeyPem}`. The inviter records a provisional manual trust in its M1 TrustStore and queues the join, which it sends on its next hub connection.
-- **Join over the internet:** the first message on `/mesh/v1/hub` is `{t:'join', deviceId, cert, alias, proof, inviter, nonce, sig}` instead of `auth`. The hub consumes the invite registered by the inviter, adds the member, and replies `welcome` with `membership` and `anchorPem`.
+- **Join over the internet:** the first message on `/mesh/v1/hub` is `{t:'join', deviceId, cert, alias, proof, inviter, nonce, sig}` instead of `auth`. `sig` uses the same payload and domain as `auth`, proving possession of `cert`'s key. The hub consumes the invite registered by the inviter, adds the member, and replies `welcome` with `membership` and `anchorPem`.
 - **Joining device:** it checks `spkiSha256(anchor) === invite.mesh`, then `verifySigned`, then that it is listed in the members, then `MembershipStore.init`. If the anchor check fails, nothing is stored.
 - [ ] **Step 1: Write the failing tests.**
   - URI round trip; each malformed field throws.
