@@ -3,6 +3,12 @@ import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { canonicalJson, spkiSha256 } from '../src/mesh/canonical.ts';
 import { MembershipError, signList, type Member, type MembershipList, type SignedMembership } from '../src/mesh/membership.ts';
+
+interface Kdf {
+  N: number;
+  r: number;
+  p: number;
+}
 import {
   MIN_PASSPHRASE_CHARS,
   RecoveryError,
@@ -70,6 +76,17 @@ function craft(plaintext: string, passphrase: string, kdf: { N: number; r: numbe
   });
 }
 
+/** Fast export/import for tests that are not about the production KDF cost. */
+function weakExport(root: KeyObject, signed: SignedMembership, pass: string): string {
+  return __exportRecoveryForTest(root, signed, pass, { scrypt: WEAK });
+}
+function weakImport(text: string, pass: string) {
+  return __importRecoveryForTest(text, pass, { allowWeakKdf: true });
+}
+
+// Tests that run the production scrypt (N=131072, ~0.3-1 s each) get an explicit generous timeout.
+const SLOW = 30_000;
+
 function expectRecoveryError(fn: () => unknown, code?: string): RecoveryError {
   let err: unknown;
   try {
@@ -91,7 +108,7 @@ describe('recovery file: round trip and format', () => {
     expect(spkiSha256(createPublicKey(out.rootKey))).toBe(spkiSha256(createPublicKey(root)));
     expect(out.rootKey.export({ type: 'pkcs8', format: 'pem' })).toBe(root.export({ type: 'pkcs8', format: 'pem' }));
     expect(out.membership).toEqual(signed);
-  });
+  }, SLOW);
 
   it('always writes the production KDF parameters, a 16-byte salt and a 12-byte nonce', () => {
     const { root, signed } = fixture();
@@ -100,7 +117,7 @@ describe('recovery file: round trip and format', () => {
     expect(f).toMatchObject({ v: 1, kdf: 'scrypt', N: 131072, r: 8, p: 1 });
     expect(Buffer.from(f.salt as string, 'base64')).toHaveLength(16);
     expect(Buffer.from(f.nonce as string, 'base64')).toHaveLength(12);
-  });
+  }, SLOW);
 
   it('uses a fresh salt and nonce every time', () => {
     const { root, signed } = fixture();
@@ -108,7 +125,7 @@ describe('recovery file: round trip and format', () => {
     const b = JSON.parse(exportRecovery(root, signed, PASS)) as { salt: string; nonce: string };
     expect(a.salt).not.toBe(b.salt);
     expect(a.nonce).not.toBe(b.nonce);
-  });
+  }, SLOW);
 
   it('does not contain the key or the passphrase in the clear', () => {
     const { root, signed } = fixture();
@@ -116,7 +133,7 @@ describe('recovery file: round trip and format', () => {
     expect(text).not.toContain('PRIVATE KEY');
     expect(text).not.toContain(PASS);
     expect(text).not.toContain('Phone');
-  });
+  }, SLOW);
 });
 
 describe('recovery file: passphrase', () => {
@@ -136,26 +153,65 @@ describe('recovery file: passphrase', () => {
 
   it('a wrong passphrase throws RecoveryError(bad-passphrase-or-corrupt)', () => {
     const { root, signed } = fixture();
-    const text = exportRecovery(root, signed, PASS);
-    const e = expectRecoveryError(() => importRecovery(text, PASS + 'x'), 'bad-passphrase-or-corrupt');
+    const text = weakExport(root, signed, PASS);
+    const e = expectRecoveryError(() => weakImport(text, PASS + 'x'), 'bad-passphrase-or-corrupt');
     expect(e.message).toBe('bad-passphrase-or-corrupt');
   });
 
   it('error messages never contain the passphrase or key material', () => {
     const { root, signed } = fixture();
     const secret = 'sup3r-s3cret-pass-phrase!';
-    const text = exportRecovery(root, signed, secret);
+    const text = weakExport(root, signed, secret);
     const pem = (root.export({ type: 'pkcs8', format: 'pem' }) as string).split('\n')[1]!;
     const errs: RecoveryError[] = [
-      expectRecoveryError(() => importRecovery(text, secret + '1')),
+      expectRecoveryError(() => weakImport(text, secret + '1')),
       expectRecoveryError(() => exportRecovery(root, signed, 'short')),
-      expectRecoveryError(() => importRecovery(craft('{}', secret, WEAK), secret)),
+      expectRecoveryError(() => weakImport(craft('{}', secret, WEAK), secret)),
     ];
     for (const e of errs) {
       expect(e.message).not.toContain(secret);
       expect(e.message).not.toContain(pem);
       expect(String(e.stack)).not.toContain(secret);
     }
+  });
+});
+
+describe('recovery file: passphrase normalization', () => {
+  const NFC = 'caf\u00e9 passphrase'; // precomposed e-acute
+  const NFD = 'cafe\u0301 passphrase'; // e + combining acute
+
+  it('the two forms differ as strings but unlock the same file, in both directions', () => {
+    expect(NFC).not.toBe(NFD);
+    expect(NFC.normalize('NFC')).toBe(NFD.normalize('NFC'));
+    const { root, signed } = fixture();
+    const a = weakExport(root, signed, NFC);
+    expect(weakImport(a, NFD).membership).toEqual(signed);
+    expect(weakImport(a, NFC).membership).toEqual(signed);
+    const b = weakExport(root, signed, NFD);
+    expect(weakImport(b, NFC).membership).toEqual(signed);
+    expect(weakImport(b, NFD).membership).toEqual(signed);
+  });
+
+  it('the key is derived from the UTF-8 of the NFC form (checked independently of the module)', () => {
+    const { root, signed } = fixture();
+    const crafted = craft(canonicalJson({ rootKeyPem: root.export({ type: 'pkcs8', format: 'pem' }), membership: signed }), NFC.normalize('NFC'), WEAK);
+    expect(weakImport(crafted, NFD).membership).toEqual(signed);
+    expect(weakImport(crafted, NFC).membership).toEqual(signed);
+  });
+
+  it('MIN_PASSPHRASE_CHARS is counted in code points after NFC', () => {
+    const { root, signed } = fixture();
+    const nfd9 = 'e\u0301'.repeat(9); // 18 code points raw, 9 after NFC
+    expectRecoveryError(() => weakExport(root, signed, nfd9), 'passphrase-too-short');
+    expect(() => weakExport(root, signed, 'e\u0301'.repeat(10))).not.toThrow();
+  });
+
+  it('refuses a passphrase that is not well-formed Unicode', () => {
+    const { root, signed } = fixture();
+    expectRecoveryError(() => weakExport(root, signed, 'abcdefghij\ud800'), 'bad-passphrase-format');
+    expectRecoveryError(() => weakExport(root, signed, '\udc00abcdefghij'), 'bad-passphrase-format');
+    const text = weakExport(root, signed, PASS);
+    expectRecoveryError(() => weakImport(text, PASS + '\ud800'), 'bad-passphrase-or-corrupt');
   });
 });
 
@@ -168,43 +224,44 @@ describe('recovery file: tampering', () => {
 
   it('one flipped ct byte throws', () => {
     const { root, signed } = fixture();
-    const text = exportRecovery(root, signed, PASS);
+    const text = weakExport(root, signed, PASS);
     const flipAt = (i: number) =>
       mutate(text, (o) => {
         const ct = Buffer.from(o.ct as string, 'base64');
         ct[i] = ct[i]! ^ 0x01;
         o.ct = ct.toString('base64');
       });
-    expectRecoveryError(() => importRecovery(flipAt(0), PASS), 'bad-passphrase-or-corrupt');
+    expectRecoveryError(() => weakImport(flipAt(0), PASS), 'bad-passphrase-or-corrupt');
     const len = Buffer.from((JSON.parse(text) as { ct: string }).ct, 'base64').length;
-    expectRecoveryError(() => importRecovery(flipAt(len - 1), PASS), 'bad-passphrase-or-corrupt'); // inside the GCM tag
+    expectRecoveryError(() => weakImport(flipAt(len - 1), PASS), 'bad-passphrase-or-corrupt'); // inside the GCM tag
+    expect(weakImport(text, PASS).membership).toEqual(signed); // control: untouched file imports
   });
 
   it('a flipped nonce or salt byte throws', () => {
     const { root, signed } = fixture();
-    const text = exportRecovery(root, signed, PASS);
+    const text = weakExport(root, signed, PASS);
     for (const field of ['nonce', 'salt']) {
       const bad = mutate(text, (o) => {
         const b = Buffer.from(o[field] as string, 'base64');
         b[0] = b[0]! ^ 0x80;
         o[field] = b.toString('base64');
       });
-      expectRecoveryError(() => importRecovery(bad, PASS), 'bad-passphrase-or-corrupt');
+      expectRecoveryError(() => weakImport(bad, PASS), 'bad-passphrase-or-corrupt');
     }
   });
 
   it('a truncated ct throws', () => {
     const { root, signed } = fixture();
-    const text = exportRecovery(root, signed, PASS);
+    const text = weakExport(root, signed, PASS);
     for (const n of [0, 5, 15]) {
       const bad = mutate(text, (o) => void (o.ct = Buffer.from(o.ct as string, 'base64').subarray(0, n).toString('base64')));
-      expectRecoveryError(() => importRecovery(bad, PASS), 'bad-passphrase-or-corrupt');
+      expectRecoveryError(() => weakImport(bad, PASS), 'bad-passphrase-or-corrupt');
     }
   });
 
   it('structurally malformed files throw RecoveryError', () => {
     const { root, signed } = fixture();
-    const text = exportRecovery(root, signed, PASS);
+    const text = weakExport(root, signed, PASS);
     const bads: unknown[] = [
       'not json',
       '',
@@ -224,43 +281,53 @@ describe('recovery file: tampering', () => {
       undefined,
       42,
     ];
-    for (const b of bads) expectRecoveryError(() => importRecovery(b as string, PASS));
+    for (const b of bads) {
+      expectRecoveryError(() => weakImport(b as string, PASS));
+      expectRecoveryError(() => importRecovery(b as string, PASS));
+    }
   });
 });
 
 describe('recovery file: KDF parameter floor and cap', () => {
   const plain = canonicalJson({ rootKeyPem: 'x', membership: {} });
 
-  it('refuses attacker-chosen weak parameters in the production import, before running scrypt', () => {
+  // The hostile files below carry a ct that was produced with different parameters. If the reader ever ran
+  // scrypt it would answer 'bad-passphrase-or-corrupt', so 'bad-kdf-params' proves the check came first
+  // (deterministic, no timing assumptions).
+  const hostile = (kdf: Kdf) => JSON.stringify({ ...(JSON.parse(craft(plain, PASS, WEAK)) as Record<string, unknown>), ...kdf });
+
+  it('refuses attacker-chosen weak or oversized parameters in the production import, before running scrypt', () => {
     for (const kdf of [
       { N: 1024, r: 8, p: 1 },
       { N: 65536, r: 8, p: 1 },
       { N: 131072, r: 4, p: 1 },
       { N: 131072, r: 8, p: 0 },
+      { N: 131072, r: 9, p: 1 },
+      { N: 131072, r: 8, p: 5 },
     ]) {
-      const t0 = Date.now();
-      expectRecoveryError(() => importRecovery(craft(plain, PASS, kdf), PASS), 'bad-kdf-params');
-      expect(Date.now() - t0).toBeLessThan(2000);
+      expectRecoveryError(() => importRecovery(hostile(kdf), PASS), 'bad-kdf-params');
     }
   });
 
+  it('control: the edge of the accepted range (N=131072, r=8, p=4) does reach the KDF', () => {
+    expectRecoveryError(() => importRecovery(hostile({ N: 131072, r: 8, p: 4 }), PASS), 'bad-passphrase-or-corrupt');
+  }, SLOW);
+
   it('refuses parameters above the cap and anything exceeding the memory budget, without allocating', () => {
-    const base = JSON.parse(craft(plain, PASS, WEAK)) as Record<string, unknown>;
     for (const kdf of [
       { N: 2 ** 21, r: 8, p: 1 }, // above 2^20
       { N: 2 ** 20, r: 8, p: 1 }, // 1 GiB > 256 MiB budget
       { N: 2 ** 18, r: 8, p: 1 }, // over the memory budget
       { N: 131072, r: 16, p: 1 }, // over the memory budget
+      { N: 131072, r: 8, p: 5 }, // CPU DoS (p > 4)
       { N: 131072, r: 8, p: 1000 }, // CPU DoS
       { N: 131073, r: 8, p: 1 }, // not a power of two
       { N: 131072.5, r: 8, p: 1 },
       { N: -131072, r: 8, p: 1 },
     ]) {
-      const t0 = Date.now();
-      const file = JSON.stringify({ ...base, ...kdf });
+      const file = hostile(kdf);
       expectRecoveryError(() => importRecovery(file, PASS), 'bad-kdf-params');
       expectRecoveryError(() => __importRecoveryForTest(file, PASS, { allowWeakKdf: true }), 'bad-kdf-params');
-      expect(Date.now() - t0).toBeLessThan(2000);
     }
   });
 
@@ -325,21 +392,24 @@ describe('recovery file: contents are verified', () => {
 const VECTOR_URL = new URL('../../../protocol/vectors/recovery-v1.json', import.meta.url);
 const MEMBERSHIP_VECTOR_URL = new URL('../../../protocol/vectors/membership-v1.json', import.meta.url);
 
-const VEC_PASSPHRASE = 'meshdrop recovery vector passphrase ✓';
+// Precomposed e-acute (U+00E9) in the NFC form; the NFD form uses e + U+0301. Both unlock the file.
+const VEC_PASSPHRASE_NFC = 'meshdrop recovery vector caf\u00e9 \u2713';
+const VEC_PASSPHRASE_NFD = 'meshdrop recovery vector cafe\u0301 \u2713';
 const VEC_SALT = Buffer.from('000102030405060708090a0b0c0d0e0f', 'hex');
 const VEC_NONCE = Buffer.from('a0a1a2a3a4a5a6a7a8a9aaab', 'hex');
 
 const NOTES = [
   'Frozen MeshDrop recovery-file vector (v1). A second engine must decrypt `file` with `passphrase` to exactly `plaintext`, and must reproduce `file` byte-for-byte from the fixed `salt`/`nonce` (salt and nonce are random in real files).',
   'file = JSON {v:1,kdf:"scrypt",N,r,p,salt,nonce,ct}, keys in that order, no whitespace, base64 (standard, padded) for salt/nonce/ct. N=131072, r=8, p=1 (readers refuse N<131072, r<8, p<1, N>2^20 and anything over 256 MiB scrypt memory).',
-  'key = scrypt(passphrase as UTF-8, salt, dkLen 32, N, r, p, maxmem 256 MiB). ct = AES-256-GCM(key, nonce 12 bytes, AAD = UTF-8("meshdrop-recovery-v1"), plaintext as UTF-8) as ciphertext || 16-byte tag.',
+  'key = scrypt(UTF-8 of the NFC-normalized passphrase, salt, dkLen 32, N, r, p, maxmem 256 MiB). ct = AES-256-GCM(key, nonce 12 bytes, AAD = UTF-8("meshdrop-recovery-v1"), plaintext as UTF-8) as ciphertext || 16-byte tag.',
   'plaintext = canonical JSON (see canonical-v1.json) of {rootKeyPem, membership}: rootKeyPem is the PKCS#8 PEM of the P-256 mesh root private key; membership is the SignedMembership ({list, sig}) which must verify against the public key derived from rootKeyPem.',
-  'Minimum passphrase length when writing: 10 characters (Unicode code points).',
+  'Passphrase: Unicode NFC-normalized (both when writing and when reading) before UTF-8 encoding, so the NFC and NFD forms below unlock the same file. A passphrase that is not well-formed Unicode (lone surrogate) is refused. Minimum length when writing: 10 code points after NFC.',
 ];
 
 interface RecoveryVector {
   description: string[];
-  passphrase: string;
+  passphraseNfc: string;
+  passphraseNfd: string;
   saltHex: string;
   nonceHex: string;
   rootPrivateKeyScalarHex: string;
@@ -363,10 +433,11 @@ function computeVector(): RecoveryVector {
   const membership: SignedMembership = { list: m.list, sig: m.signatureB64 };
   const rootKeyPem = root.export({ type: 'pkcs8', format: 'pem' }) as string;
   const plaintext = canonicalJson({ rootKeyPem, membership });
-  const file = __exportRecoveryForTest(root, membership, VEC_PASSPHRASE, { salt: VEC_SALT, nonce: VEC_NONCE });
+  const file = __exportRecoveryForTest(root, membership, VEC_PASSPHRASE_NFC, { salt: VEC_SALT, nonce: VEC_NONCE });
   return {
     description: NOTES,
-    passphrase: VEC_PASSPHRASE,
+    passphraseNfc: VEC_PASSPHRASE_NFC,
+    passphraseNfd: VEC_PASSPHRASE_NFD,
     saltHex: VEC_SALT.toString('hex'),
     nonceHex: VEC_NONCE.toString('hex'),
     rootPrivateKeyScalarHex: m.rootPrivateKeyScalarHex,
@@ -374,7 +445,7 @@ function computeVector(): RecoveryVector {
     membership,
     plaintext,
     plaintextHex: Buffer.from(plaintext, 'utf8').toString('hex'),
-    scryptKeyHex: scryptSync(VEC_PASSPHRASE, VEC_SALT, 32, { N: 131072, r: 8, p: 1, maxmem: 256 * 1024 ** 2 }).toString('hex'),
+    scryptKeyHex: scryptSync(VEC_PASSPHRASE_NFC, VEC_SALT, 32, { N: 131072, r: 8, p: 1, maxmem: 256 * 1024 ** 2 }).toString('hex'),
     file,
   };
 }
@@ -391,23 +462,30 @@ describe('frozen vector (recovery-v1.json)', () => {
 
   it('decrypts to the expected plaintext (production parameters, public importRecovery)', () => {
     const v = vec();
-    const out = importRecovery(v.file, v.passphrase);
+    expect(v.passphraseNfc).not.toBe(v.passphraseNfd);
+    expect(v.passphraseNfd.normalize('NFC')).toBe(v.passphraseNfc);
+    const out = importRecovery(v.file, v.passphraseNfc);
     expect(out.rootKey.export({ type: 'pkcs8', format: 'pem' })).toBe(v.rootKeyPem);
     expect(out.membership).toEqual(v.membership);
     expect(canonicalJson({ rootKeyPem: v.rootKeyPem, membership: v.membership })).toBe(v.plaintext);
     expect(Buffer.from(v.plaintext, 'utf8').toString('hex')).toBe(v.plaintextHex);
-  });
+  }, SLOW);
+
+  it('the NFD form of the passphrase unlocks the same vector file', () => {
+    const v = vec();
+    expect(importRecovery(v.file, v.passphraseNfd).membership).toEqual(v.membership);
+  }, SLOW);
 
   it('is reproduced byte-for-byte from the fixed salt and nonce, and the key matches', () => {
     const v = vec();
     const root = privFromScalar(v.rootPrivateKeyScalarHex);
-    expect(__exportRecoveryForTest(root, v.membership, v.passphrase, { salt: Buffer.from(v.saltHex, 'hex'), nonce: Buffer.from(v.nonceHex, 'hex') })).toBe(v.file);
-    expect(scryptSync(v.passphrase, Buffer.from(v.saltHex, 'hex'), 32, { N: 131072, r: 8, p: 1, maxmem: 256 * 1024 ** 2 }).toString('hex')).toBe(v.scryptKeyHex);
+    expect(__exportRecoveryForTest(root, v.membership, v.passphraseNfc, { salt: Buffer.from(v.saltHex, 'hex'), nonce: Buffer.from(v.nonceHex, 'hex') })).toBe(v.file);
+    expect(scryptSync(v.passphraseNfc, Buffer.from(v.saltHex, 'hex'), 32, { N: 131072, r: 8, p: 1, maxmem: 256 * 1024 ** 2 }).toString('hex')).toBe(v.scryptKeyHex);
     expect(JSON.parse(v.file)).toMatchObject({ v: 1, kdf: 'scrypt', N: 131072, r: 8, p: 1 });
-  });
+  }, SLOW);
 
   it('wrong passphrase against the vector fails', () => {
     const v = vec();
-    expectRecoveryError(() => importRecovery(v.file, v.passphrase + '!'), 'bad-passphrase-or-corrupt');
-  });
+    expectRecoveryError(() => importRecovery(v.file, v.passphraseNfc + '!'), 'bad-passphrase-or-corrupt');
+  }, SLOW);
 });
