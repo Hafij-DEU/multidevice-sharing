@@ -169,7 +169,13 @@ describe('receiver API', () => {
     expect(h.events[4]).toMatchObject({ type: 'received', sessionId: sid, from: B.deviceId, files: [path] });
     // partial state is gone after finish
     expect(existsSync(join(h.root, '.meshdrop-partial', sid))).toBe(false);
-    expect((await call(h, B, 'POST', `finish/${sid}`)).status).toBe(404);
+    // retried finish (lost 200): same files, no second 'received'
+    const again = await call(h, B, 'POST', `finish/${sid}`);
+    expect(again.status).toBe(200);
+    expect(again.json).toEqual({ files: [path] });
+    expect(h.events.filter((e) => e.type === 'received')).toHaveLength(1);
+    // only the owner may ask
+    expect((await call(h, D, 'POST', `finish/${sid}`)).status).toBe(403);
   });
 
   it('resume via re-offer returns the have map; conflicting re-offer is 409 and wipes nothing', async () => {
@@ -224,6 +230,35 @@ describe('receiver API', () => {
     const h2 = await startServer({ root: h.root, trust: h.trust });
     expect((await call(h2, B, 'POST', `finish/${sid}`)).status).toBe(200);
     expect(h2.events).toEqual([expect.objectContaining({ type: 'received', files: [path], text: 't' })]);
+  });
+
+  it('re-offer after finish is done:true, creates no session or files; tombstone survives restart', async () => {
+    const h = await startServer();
+    const data = Buffer.from('delivered once');
+    const sid = newSessionId();
+    const { offer, ctx } = mkOffer(mk(sid, [{ path: 'once.txt', data }]));
+    await call(h, B, 'POST', 'offer', offer);
+    await putChunk(h, sid, 0, 0, sealChunk(ctx, sid, 0, 0, data));
+    const path = ((await call(h, B, 'POST', `complete/${sid}/0`)).json as { path: string }).path;
+    expect((await call(h, B, 'POST', `finish/${sid}`)).status).toBe(200);
+
+    for (const hh of [h, await startServer({ root: h.root, trust: h.trust })]) {
+      const before = hh.events.length;
+      const r = await call(hh, B, 'POST', 'offer', offer);
+      expect(r.status).toBe(200);
+      expect(r.json).toEqual({ done: true, files: [path] });
+      expect(await hh.inbox.load(sid)).toBeNull();
+      expect(existsSync(join(h.root, '.meshdrop-partial', sid))).toBe(false);
+      expect(readdirSync(h.root).filter((x) => !x.startsWith('.'))).toEqual(['once.txt']);
+      const fin = await call(hh, B, 'POST', `finish/${sid}`);
+      expect(fin.json).toEqual({ files: [path] });
+      expect(hh.events.length).toBe(before);
+      // an uploaded chunk for a delivered session is still an unknown session
+      expect((await putChunk(hh, sid, 0, 0, sealChunk(ctx, sid, 0, 0, data))).status).toBe(404);
+    }
+    // another peer cannot learn the file list
+    const evilOffer = mkOffer({ ...mk(sid, [{ path: 'once.txt', data }]), from: D.deviceId }, D).offer;
+    expect((await call(h, D, 'POST', 'offer', evilOffer)).status).toBe(403);
   });
 
   it('bad chunk: tampered ciphertext is 422 decrypt and is not recorded', async () => {
@@ -436,7 +471,39 @@ describe('receiver API', () => {
     expect(r.status).toBe(500);
     expect(r.json).toEqual({ error: 'internal' });
     expect(r.body.toString()).not.toMatch(/secret|EIO|\//);
-    expect(h.events.some((e) => e.type === 'error')).toBe(false);
+    expect(h.events.at(-1)).toMatchObject({ type: 'error', sessionId: sid, from: B.deviceId, code: 'EIO' });
+  });
+
+  it('EACCES on a write: generic 500, error event with the errno, partial kept, nothing under the final name', async () => {
+    const root = tmpDir();
+    let partWrites = 0;
+    const failing = {
+      ...fsp,
+      open: async (path: string, ...rest: unknown[]) => {
+        const h = await (fsp.open as (...a: unknown[]) => Promise<fsp.FileHandle>)(path, ...rest);
+        if (String(path).endsWith('.part')) {
+          const w = h.write.bind(h) as (...a: unknown[]) => Promise<unknown>;
+          (h as unknown as { write: unknown }).write = async (...a: unknown[]) => {
+            if (++partWrites === 2) throw Object.assign(new Error('EACCES: permission denied /secret'), { code: 'EACCES' });
+            return w(...a);
+          };
+        }
+        return h;
+      },
+    } as unknown as typeof fsp;
+    const h = await startServer({ root, fs: failing });
+    const data = randomBytes(2 * CHUNK_SIZE);
+    const sid = newSessionId();
+    const { offer, ctx } = mkOffer(mk(sid, [{ path: 'denied.bin', data }]));
+    await call(h, B, 'POST', 'offer', offer);
+    expect((await putChunk(h, sid, 0, 0, sealChunk(ctx, sid, 0, 0, data.subarray(0, CHUNK_SIZE)))).status).toBe(204);
+    const r = await putChunk(h, sid, 0, 1, sealChunk(ctx, sid, 0, 1, data.subarray(CHUNK_SIZE)));
+    expect(r.status).toBe(500);
+    expect(r.json).toEqual({ error: 'internal' });
+    expect(h.events.at(-1)).toMatchObject({ type: 'error', sessionId: sid, from: B.deviceId, code: 'EACCES' });
+    expect(await h.inbox.have(sid)).toEqual({ 0: [0] });
+    expect(existsSync(join(root, '.meshdrop-partial', sid, '0.part'))).toBe(true);
+    expect(existsSync(join(root, 'denied.bin'))).toBe(false);
   });
 
   it('a client that dies mid-handshake does not crash the server', async () => {

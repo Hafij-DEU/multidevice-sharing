@@ -43,6 +43,9 @@ export class IncompleteFileError extends Error {
 
 export interface InboxOptions { fs?: typeof nodeFs }
 export const PARTIAL_DIR = '.meshdrop-partial';
+/** Tombstones of finished sessions live in <root>/.meshdrop-partial/.finished/<sessionId>.json. */
+const FINISHED_DIR = '.finished';
+export const FINISHED_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const SESSION_ID_RE = /^[A-Za-z0-9_-]{22}$/;
 const HASH_BUF = 1024 * 1024;
 const NO_HARDLINK = new Set(['EPERM', 'ENOTSUP', 'EOPNOTSUPP', 'ENOSYS', 'EXDEV', 'EMLINK', 'EACCES']);
@@ -318,6 +321,45 @@ export class Inbox {
   async finalizeDirs(sessionId: string): Promise<void> {
     const s = await this.requireSession(sessionId);
     for (const d of s.manifest.dirs) await this.ensureDir(inboxRelParts(d.path));
+  }
+
+  /** fileIds already finalized into their final path (idempotent `finalize` returns the path). */
+  async completed(sessionId: string): Promise<number[]> {
+    const s = await this.requireSession(sessionId);
+    return [...s.done.keys()].sort((a, b) => a - b);
+  }
+
+  /**
+   * Leaves a tombstone so a retried `finish` / re-offer of a delivered session can be answered
+   * without re-receiving it. Written atomically (0600); tombstones older than 7 days are pruned.
+   */
+  async markFinished(sessionId: string, info: { from: string; files: string[] }): Promise<void> {
+    this.sessionDir(sessionId); // validates the id
+    const dir = `${this.root}/${PARTIAL_DIR}/${FINISHED_DIR}`;
+    await this.fs.mkdir(dir, { recursive: true, mode: 0o700 });
+    await this.writeAtomic(`${dir}/${sessionId}.json`, JSON.stringify({ from: info.from, files: info.files }));
+    try {
+      const cutoff = Date.now() - FINISHED_TTL_MS;
+      for (const name of await this.fs.readdir(dir)) {
+        if (!name.endsWith('.json')) continue;
+        try {
+          if ((await this.fs.stat(`${dir}/${name}`)).mtimeMs < cutoff) await this.fs.rm(`${dir}/${name}`, { force: true });
+        } catch {
+          /* raced with another prune */
+        }
+      }
+    } catch {
+      /* pruning is best effort */
+    }
+  }
+
+  async finished(sessionId: string): Promise<{ from: string; files: string[] } | null> {
+    this.sessionDir(sessionId);
+    const v = (await this.readJson(`${this.root}/${PARTIAL_DIR}/${FINISHED_DIR}/${sessionId}.json`)) as
+      { from?: unknown; files?: unknown } | null;
+    if (!v) return null;
+    if (typeof v.from !== 'string' || !Array.isArray(v.files) || !v.files.every((f) => typeof f === 'string')) return null;
+    return { from: v.from, files: v.files as string[] };
   }
 
   async drop(sessionId: string): Promise<void> {

@@ -297,4 +297,34 @@ describe('Inbox', () => {
     await expect(inbox.begin(sid, manifest(sid, [], [tooLong]), 'c')).rejects.toBeInstanceOf(UnsafePathError);
     expect(existsSync(partialDir(root, sid))).toBe(false);
   });
+
+  it('completed() lists finalized fileIds; markFinished/finished tombstone persists and prunes after 7 days', async () => {
+    const root = tmpRoot();
+    const sid = newSessionId();
+    const a = Buffer.from('aaa');
+    const b = Buffer.from('bbb');
+    const inbox = new Inbox(root);
+    await inbox.begin(sid, manifest(sid, [{ path: 'a.txt', data: a }, { path: 'b.txt', data: b }]), 'c');
+    expect(await inbox.completed(sid)).toEqual([]);
+    await inbox.writeChunk(sid, 1, 0, b);
+    await inbox.finalize(sid, 1);
+    expect(await inbox.completed(sid)).toEqual([1]);
+    expect(await new Inbox(root).completed(sid)).toEqual([1]);
+    await expect(inbox.completed(newSessionId())).rejects.toBeInstanceOf(UnknownSessionError);
+
+    expect(await inbox.finished(sid)).toBeNull();
+    await inbox.markFinished(sid, { from: 'f'.repeat(64), files: ['/x/a.txt'] });
+    await inbox.drop(sid); // tombstone outlives the partial state
+    expect(await new Inbox(root).finished(sid)).toEqual({ from: 'f'.repeat(64), files: ['/x/a.txt'] });
+    expect(statSync(join(root, '.meshdrop-partial', '.finished', sid + '.json')).mode & 0o777).toBe(0o600);
+    expect(await inbox.load(sid)).toBeNull();
+
+    const old = join(root, '.meshdrop-partial', '.finished', sid + '.json');
+    const eight = new Date(Date.now() - 8 * 24 * 3600 * 1000);
+    await fsp.utimes(old, eight, eight);
+    const sid2 = newSessionId();
+    await inbox.markFinished(sid2, { from: 'f'.repeat(64), files: [] });
+    expect(await inbox.finished(sid)).toBeNull(); // pruned
+    expect(await inbox.finished(sid2)).not.toBeNull();
+  });
 });

@@ -4,7 +4,6 @@
 // requires peerDeviceId(socket) to be in the TrustStore (else 403 {"error":"untrusted"}).
 // A session belongs to the peer named in its manifest (`from`); no other peer may touch it.
 import { createPublicKey } from 'node:crypto';
-import { readFile } from 'node:fs/promises';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { createServer, type Server } from 'node:https';
 import { hostname } from 'node:os';
@@ -26,7 +25,6 @@ import {
   IncompleteFileError,
   Inbox,
   IntegrityError,
-  PARTIAL_DIR,
   UnknownSessionError,
   UnsafePathError,
 } from '../inbox.ts';
@@ -89,8 +87,6 @@ class ClientGone extends Error {
 interface LiveSession {
   manifest: Manifest;
   ctx: HpkeContext;
-  /** fileId -> final path, for files completed through this server instance. */
-  done: Map<number, string>;
 }
 
 const code = (e: unknown): string | undefined => (e as NodeJS.ErrnoException)?.code;
@@ -201,7 +197,7 @@ export function createMeshServer(opts: MeshServerOptions): Server {
     if (!st) return null;
     const racing = live.get(sessionId);
     if (racing) return racing;
-    const s: LiveSession = { manifest: st.manifest, ctx: importCtx(st.ctxExport), done: new Map() };
+    const s: LiveSession = { manifest: st.manifest, ctx: importCtx(st.ctxExport) };
     live.set(sessionId, s);
     return s;
   }
@@ -211,21 +207,6 @@ export function createMeshServer(opts: MeshServerOptions): Server {
     if (!s) throw new HttpError(404, 'unknown-session');
     if (s.manifest.from !== peer) throw new HttpError(403, 'forbidden');
     return s;
-  }
-
-  /** Completed files of a session: this instance's memory, plus what the inbox persisted earlier. */
-  async function completedFiles(sessionId: string, s: LiveSession): Promise<Map<number, string>> {
-    const out = new Map(s.done);
-    if (out.size < s.manifest.files.length) {
-      try {
-        const raw = await readFile(`${inbox.root}/${PARTIAL_DIR}/${sessionId}/progress.json`, 'utf8');
-        const pf = JSON.parse(raw) as { done?: Record<string, string> };
-        for (const [k, v] of Object.entries(pf.done ?? {})) if (typeof v === 'string' && !out.has(Number(k))) out.set(Number(k), v);
-      } catch {
-        /* no progress file yet */
-      }
-    }
-    return out;
   }
 
   // ---- routes ----------------------------------------------------------------------------------
@@ -249,13 +230,20 @@ export function createMeshServer(opts: MeshServerOptions): Server {
     const senderPub = createPublicKey(device.publicKeyPem);
 
     await withOfferLock(sessionId, async () => {
-      const existing = await getLive(sessionId);
       let accepted;
       try {
         accepted = acceptOffer(id, senderPub, o);
       } catch {
         throw new HttpError(422, 'bad-offer');
       }
+      const tomb = await inbox.finished(sessionId);
+      if (tomb) {
+        // Already delivered: never re-create the session (that would duplicate every file).
+        if (tomb.from !== peer) throw new HttpError(403, 'forbidden');
+        send(res, 200, { done: true, files: tomb.files });
+        return;
+      }
+      const existing = await getLive(sessionId);
       if (existing) {
         if (existing.manifest.from !== peer) throw new HttpError(403, 'forbidden');
         const stored = await inbox.load(sessionId);
@@ -264,7 +252,7 @@ export function createMeshServer(opts: MeshServerOptions): Server {
         return;
       }
       await inbox.begin(sessionId, accepted.manifest, exportCtx(accepted.ctx));
-      live.set(sessionId, { manifest: accepted.manifest, ctx: accepted.ctx, done: new Map() });
+      live.set(sessionId, { manifest: accepted.manifest, ctx: accepted.ctx });
       emit({ type: 'offer', sessionId, from: peer, manifest: accepted.manifest });
       send(res, 200, { have: await inbox.have(sessionId) });
     });
@@ -296,7 +284,8 @@ export function createMeshServer(opts: MeshServerOptions): Server {
   async function handleComplete(res: ServerResponse, peer: string, seg: string[]): Promise<void> {
     const sessionId = sessionIdParam(seg[1]);
     const fileId = parseUint(seg[2]);
-    const s = await requireOwned(sessionId, peer);
+    await requireOwned(sessionId, peer);
+    const wasDone = (await inbox.completed(sessionId)).includes(fileId);
     let path: string;
     try {
       path = await inbox.finalize(sessionId, fileId);
@@ -304,23 +293,29 @@ export function createMeshServer(opts: MeshServerOptions): Server {
       if (e instanceof IncompleteFileError) throw new HttpError(409, 'incomplete');
       throw e;
     }
-    const first = !s.done.has(fileId);
-    s.done.set(fileId, path);
-    if (first) emit({ type: 'file', sessionId, from: peer, fileId, path });
+    if (!wasDone) emit({ type: 'file', sessionId, from: peer, fileId, path });
     send(res, 200, { path });
   }
 
   async function handleFinish(res: ServerResponse, peer: string, seg: string[]): Promise<void> {
     const sessionId = sessionIdParam(seg[1]);
+    // A tombstone means this session was already delivered: a retried finish gets the same answer.
+    const tomb = await inbox.finished(sessionId);
+    if (tomb) {
+      if (tomb.from !== peer) throw new HttpError(403, 'forbidden');
+      if (live.delete(sessionId) || (await inbox.load(sessionId))) await inbox.drop(sessionId).catch(() => {});
+      send(res, 200, { files: tomb.files });
+      return;
+    }
     const s = await requireOwned(sessionId, peer);
-    const done = await completedFiles(sessionId, s);
+    const done = new Set(await inbox.completed(sessionId));
     const files: string[] = [];
     for (const f of s.manifest.files) {
-      const p = done.get(f.fileId);
-      if (p === undefined) throw new HttpError(409, 'incomplete');
-      files.push(p);
+      if (!done.has(f.fileId)) throw new HttpError(409, 'incomplete');
+      files.push(await inbox.finalize(sessionId, f.fileId)); // already done: returns the stored path
     }
     await inbox.finalizeDirs(sessionId);
+    await inbox.markFinished(sessionId, { from: peer, files });
     const ev: ReceiverEvent = { type: 'received', sessionId, from: peer, files };
     if (s.manifest.text !== undefined) ev.text = s.manifest.text;
     emit(ev);
@@ -391,9 +386,10 @@ export function createMeshServer(opts: MeshServerOptions): Server {
       if (e instanceof UnknownSessionError) return send(res, 404, { error: 'unknown-session' });
       if (e instanceof IntegrityError) return send(res, 422, { error: 'integrity' });
       if (e instanceof UnsafePathError) return send(res, 422, { error: 'bad-offer' });
-      if (code(e) === 'ENOSPC') {
-        emit({ type: 'error', sessionId: who.sessionId ?? '', from: who.peer ?? '', code: 'ENOSPC' });
-        return send(res, 507, { error: 'no-space' });
+      const errno = code(e);
+      if (typeof errno === 'string' && /^E[A-Z0-9_]+$/.test(errno)) {
+        emit({ type: 'error', sessionId: who.sessionId ?? '', from: who.peer ?? '', code: errno });
+        if (errno === 'ENOSPC') return send(res, 507, { error: 'no-space' });
       }
       send(res, 500, { error: 'internal' });
     });
