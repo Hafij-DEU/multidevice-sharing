@@ -138,7 +138,12 @@ function wireIpc(): void {
   handle('scanSubnet', () => ctl().scanSubnet());
   handle('hubInit', (u) => ctl().hubInit(strs(u, 16)));
   handle('setHubUrls', (u) => ctl().setHubUrls(strs(u, 16)));
-  handle('createInvite', () => ctl().createInvite());
+  handle('createInvite', async () => {
+    const r = await ctl().createInvite();
+    // MESHDROP_TEST only: a short countdown so e2e can watch an invite expire (the core invite keeps its 5 min).
+    const ttl = TEST ? Number(process.env.MESHDROP_TEST_INVITE_TTL_MS) : NaN;
+    return Number.isFinite(ttl) && ttl > 0 ? { ...r, expiresAt: Date.now() + ttl } : r;
+  });
   handle('join', (u) => ctl().join(str(u)));
   handle('revoke', (id) => ctl().revoke(str(id, 64)));
   handle('exportRecovery', (p, pw) => ctl().exportRecovery(str(p), str(pw, 1024)));

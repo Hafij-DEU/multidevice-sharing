@@ -4,6 +4,7 @@ import { Toasts, type ToastItem } from './components/Toast.tsx';
 import { errorText } from './format.ts';
 import { Devices } from './pages/Devices.tsx';
 import { Inbox } from './pages/Inbox.tsx';
+import { Mesh } from './pages/Mesh.tsx';
 import { Transfers } from './pages/Transfers.tsx';
 
 const PAGES = ['Devices', 'Transfers', 'Inbox', 'Mesh', 'Settings'] as const;
@@ -76,6 +77,8 @@ export function App() {
           <Transfers state={state} run={run} />
         ) : page === 'Inbox' ? (
           <Inbox state={state} run={run} />
+        ) : page === 'Mesh' ? (
+          <Mesh state={state} run={run} />
         ) : null}
       </main>
       <Toasts items={toasts} onClose={(id) => setToasts((t) => t.filter((x) => x.id !== id))} />

@@ -76,3 +76,15 @@ textarea { width: 100%; resize: vertical; }
 .toast.error { border-color: var(--bad); }
 .toast span { flex: 1; }
 .toggle { display: flex; gap: 6px; align-items: center; }
+.lead { font-size: 16px; font-weight: 600; margin: 0 0 4px; }
+.grow { flex: 1; min-width: 200px; }
+.ok-text { color: var(--ok); }
+.invite { display: flex; gap: 18px; align-items: flex-start; flex-wrap: wrap; }
+.invite-side { flex: 1; min-width: 260px; }
+.qr { background: #fff; border-radius: var(--radius); padding: 6px; border: 1px solid var(--border); }
+.qr.expired { filter: grayscale(1) opacity(0.25); }
+.countdown { font-variant-numeric: tabular-nums; font-weight: 600; }
+button.danger { background: var(--bad); color: #fff; border-color: var(--bad); }
+.modal-backdrop { position: fixed; inset: 0; background: rgb(0 0 0 / 0.4); display: flex; align-items: center; justify-content: center; }
+.modal { background: var(--panel); border-radius: var(--radius); padding: 18px 20px; max-width: 440px; box-shadow: 0 8px 30px rgb(0 0 0 / 0.3); }
+.modal h2 { margin-top: 0; }
