@@ -199,6 +199,8 @@ export interface DesktopApi {
   openConfigFolder(): Promise<void>;
   /** Android: the system picker, returning items with display names (content URIs are not readable paths). */
   pickItems?(kind: 'file' | 'dir'): Promise<SendItemInput[]>;
+  /** Android: scans a QR code with the camera; its text, or null when cancelled. */
+  scanQr?(): Promise<string | null>;
   /** Android: the items shared into MeshDrop (Share → MeshDrop), once. */
   takeSharedItems?(): Promise<SendItemInput[]>;
   /** Android: runs one step of the keep-alive checklist (opens the right system screen). */

@@ -92,6 +92,21 @@ export function Mesh({ state, run }: { state: AppState; run: Run }) {
         <h2>Join with an invite</h2>
         <div className="row">
           <input aria-label="Invite to join" className="grow" placeholder="meshdrop://join?…" value={uri} onChange={(e) => setUri(e.target.value)} />
+          {window.meshdrop.scanQr && (
+            <button
+              onClick={() =>
+                void run(async () => {
+                  const t = await window.meshdrop.scanQr!();
+                  if (!t) return;
+                  if (!t.startsWith('meshdrop://join?')) throw new Error('That QR code is not a MeshDrop invite.');
+                  setUri(t);
+                  return 'Invite scanned: tap Join';
+                })
+              }
+            >
+              Scan QR
+            </button>
+          )}
           <button
             disabled={uri.trim() === ''}
             onClick={() =>

@@ -104,6 +104,8 @@ public final class Bridge {
             case "pickSavePath":
             case "pickOpenPath":
                 return null;
+            case "scanQr":
+                return pickers.scanQr();
             case "takeSharedItems":
                 return new ArrayList<Object>(p.takeShared());
             case "keepAliveAction":

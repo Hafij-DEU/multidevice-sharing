@@ -12,9 +12,21 @@ import java.util.concurrent.TimeUnit;
 final class Pickers {
     static final int PICK_FILES = 41;
     static final int PICK_TREE = 42;
+    static final int SCAN_QR = 43;
     private final Activity activity;
     private final AndroidPlatform platform;
     private volatile CompletableFuture<List<Object>> waiting;
+    private volatile CompletableFuture<String> scanning;
+
+    /** Opens the camera scanner; the QR text, or null when cancelled. */
+    String scanQr() throws Exception {
+        CompletableFuture<String> f = new CompletableFuture<>();
+        CompletableFuture<String> prev = scanning;
+        if (prev != null) prev.complete(null);
+        scanning = f;
+        activity.runOnUiThread(() -> activity.startActivityForResult(new Intent(activity, ScannerActivity.class), SCAN_QR));
+        return f.get(30, TimeUnit.MINUTES);
+    }
 
     Pickers(Activity activity, AndroidPlatform platform) {
         this.activity = activity;
@@ -43,6 +55,12 @@ final class Pickers {
 
     /** From MainActivity.onActivityResult. */
     boolean onResult(int requestCode, int resultCode, Intent data) {
+        if (requestCode == SCAN_QR) {
+            CompletableFuture<String> f = scanning;
+            scanning = null;
+            if (f != null) f.complete(resultCode == Activity.RESULT_OK && data != null ? data.getStringExtra(ScannerActivity.EXTRA_TEXT) : null);
+            return true;
+        }
         if (requestCode != PICK_FILES && requestCode != PICK_TREE) return false;
         CompletableFuture<List<Object>> f = waiting;
         waiting = null;
