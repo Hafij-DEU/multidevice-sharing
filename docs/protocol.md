@@ -567,6 +567,38 @@ protocol; any engine may implement it.
   no-referrer`, `Content-Security-Policy: default-src 'self'; img-src 'self' data: blob:; style-src 'self';
   script-src 'self'; frame-ancestors 'none'`. Anything outside `/g/` is `404`.
 
+## Internet guest links (M5b)
+
+Served by the hub on its loopback ingress (what a tunnel points at), under `/l/`. The link is
+`https://<hub host>/l/<id>#k=<key>`: `id` is 16 random bytes and `key` 32, both base64url. The key never
+reaches the hub on a download; the hub stores `SHA-256(key)` only, to check uploads. Vectors:
+`protocol/vectors/link-v1.json`.
+
+- **Sealing** (AES-256-GCM, 4 MiB chunks): `nonce = u32be(file) ‖ u64be(chunk)`;
+  `AAD = utf8("meshdrop-link-v1") ‖ 0x00 ‖ utf8(id) ‖ 0x00 ‖ u32be(file) ‖ u64be(chunk) ‖ u8(last)`;
+  each chunk is `ciphertext ‖ tag`. An empty file is one empty last chunk.
+- **Reserved file indexes:** the manifest `{v:1, files:[{name, size, type?}], text?}` is file `0xffffffff`,
+  chunk 0, last. An upload offer (the M5a offer JSON) is file `0xfffffffe`. Upload slices of offered file
+  `i` are file `0x80000000 + i`, chunk `offset / 4 MiB`, last when the slice reaches the declared size.
+- **Limits:** expiry from 1 h to 30 days; optional password checked by the hub (scrypt N=2^15 r=8 p=1);
+  5 wrong passwords per 10 min, then `429 throttled`.
+- **Download cap:** each `open` counts one, and the cap is never exceeded under concurrency
+  (`410 used-up`).
+- **Removal:** revoke deletes the link (`404`); expired links answer `410 expired` and are pruned.
+- **Quota:** 10 GiB total by default (`507 quota` at creation).
+
+| Route | Answer |
+|---|---|
+| `GET /l/<id>`, `/l/app.js`, `/l/app.css` | the page |
+| `GET /l/<id>/api/info` | `{needsPassword, allowUploads}` |
+| `POST /l/<id>/api/open` | `{password?}` → `{session, allowUploads}` (a session lasts 1 h) |
+| `POST /l/<id>/api/key` | `X-Link-Key`: only to send files back; checked against the stored hash |
+| `GET /l/<id>/api/manifest`, `/api/chunk/<f>/<n>` | sealed bytes (`X-Link-Session`) |
+| `POST /l/<id>/api/offers`, `GET …/offers/<oid>`, `PUT …/offers/<oid>/<i>?offset=N` | uploads, as M5a but sealed; the owner accepts each |
+
+Same response headers as the LAN guest tier, plus `Strict-Transport-Security` behind a tunnel
+(`X-Forwarded-Proto: https`).
+
 ## Notes for other engines (M4 Android)
 
 Not part of the protocol; platform constraints found while specifying it.

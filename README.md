@@ -77,7 +77,15 @@ send you files and a message, and download files you offer ("Offer files…"). T
 - The link works for one browser only, for 1 hour by default (Settings → "A guest link works for",
   5 minutes to 24 hours). "End" stops it at once.
 - The page is plain HTTP on your network (browsers reject self-signed certificates), so use it on Wi-Fi
-  you trust. Guests over the internet come with M5b.
+  you trust.
+
+**Internet links** (on the hub PC): Guests → Internet links → choose files, how long the link works
+(1 hour to 30 days), an optional password and download limit, and whether they may send files back.
+The files are encrypted on your PC; the key is the part of the link after `#`, which browsers never
+send to a server, so the hub's disk and any tunnel only see ciphertext. "Remove" ends a link at once.
+The link uses the hub's internet address (Mesh → Hub address); setting up a tunnel comes with M5c.
+From a terminal: `meshdrop link create FILE... [--days N] [--passphrase-file F] [--max-downloads N]
+[--allow-uploads]`, `meshdrop link list`, `meshdrop link revoke ID`.
 
 From a terminal: `meshdrop guest [--share FILE]... [--minutes N] [--accept-all]`.
 
