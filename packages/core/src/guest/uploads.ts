@@ -205,6 +205,10 @@ export class GuestUploads {
     return { id, status: 'pending' };
   }
 
+  has(id: string): boolean {
+    return this.#offers.has(id);
+  }
+
   /** Offers waiting for the owner's answer (for the accept prompt). */
   pending(): { id: string; files: GuestFile[]; text?: string }[] {
     return [...this.#offers.values()]

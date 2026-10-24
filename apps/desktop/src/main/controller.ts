@@ -12,7 +12,7 @@ import { CHUNK_SIZE } from '@meshdrop/core/src/chunk.ts';
 import { Engine, liveListener, type EngineEvent, type EngineOptions, type SendItem } from '@meshdrop/core/src/engine.ts';
 import { loadOrCreateIdentity } from '@meshdrop/core/src/identity.ts';
 import { writeFileAtomic } from '@meshdrop/core/src/trust.ts';
-import type { AppState, DeviceView, GuestView, SendItemInput, Settings, TransferView } from '../shared/api.ts';
+import type { AppState, DeviceView, GuestView, LinkCreateInput, LinkView, SendItemInput, Settings, TransferView } from '../shared/api.ts';
 import type { HistoryStore } from './history.ts';
 import { SettingsError, type SettingsStore } from './settings.ts';
 
@@ -108,6 +108,9 @@ export class AppController extends EventEmitter {
   #paused = false;
   /** The guest link's QR code (the engine keeps the rest of the session). */
   #guestQr: string | undefined;
+  /** The hub's internet links (refreshed on changes and every 30 s: download counts move on their own). */
+  #links: LinkView[] = [];
+  #linkTimer: NodeJS.Timeout | null = null;
 
   constructor(opts: ControllerOptions) {
     super();
@@ -125,6 +128,8 @@ export class AppController extends EventEmitter {
 
   async stop(): Promise<void> {
     this.#stopped = true;
+    if (this.#linkTimer) clearInterval(this.#linkTimer);
+    this.#linkTimer = null;
     if (this.#timer) clearTimeout(this.#timer);
     this.#timer = null;
     await this.#halt();
@@ -203,6 +208,11 @@ export class AppController extends EventEmitter {
       this.#recheck.unref();
     }
     void this.#refreshOutbox();
+    void this.#refreshLinks();
+    if (!this.#linkTimer) {
+      this.#linkTimer = setInterval(() => void this.#refreshLinks(), 30_000);
+      this.#linkTimer.unref();
+    }
     this.#changed();
   }
 
@@ -262,6 +272,7 @@ export class AppController extends EventEmitter {
       ...(this.#error !== undefined ? { error: this.#error } : {}),
       members: e.members().map((m) => ({ deviceId: m.deviceId, alias: m.alias, role: m.role, self: m.deviceId === me })),
       guest: this.#guestView(e),
+      ...(st.role === 'hub' ? { links: this.#links.map((l) => ({ ...l })) } : {}),
     };
   }
 
@@ -598,6 +609,34 @@ export class AppController extends EventEmitter {
   async guestReject(id: string): Promise<void> {
     await this.#e.guestReject(id);
     this.#changed();
+  }
+
+  // ---- internet guest links (hub PC) -------------------------------------------------------------
+
+  async #refreshLinks(): Promise<void> {
+    const e = this.#engine;
+    if (!e || e.hubStatus().role !== 'hub') return;
+    try {
+      this.#links = await e.linkList();
+    } catch {
+      return;
+    }
+    this.#changed();
+  }
+
+  async linkCreate(input: LinkCreateInput): Promise<{ id: string; url: string; qrSvg: string; expiresAt: number }> {
+    const r = await this.#e.linkCreate(input);
+    await this.#refreshLinks();
+    if (!this.#linkTimer) {
+      this.#linkTimer = setInterval(() => void this.#refreshLinks(), 30_000);
+      this.#linkTimer.unref();
+    }
+    return r;
+  }
+
+  async linkRevoke(id: string): Promise<void> {
+    await this.#e.linkRevoke(id);
+    await this.#refreshLinks();
   }
 
   async createInvite(): Promise<{ uri: string; qrSvg: string; expiresAt: number }> {

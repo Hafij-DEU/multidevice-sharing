@@ -6,7 +6,7 @@ import { execFile } from 'node:child_process';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { configDir } from '@meshdrop/core/src/paths.ts';
-import type { AppState, ReceivedRecord, SendItemInput, Settings } from '../shared/api.ts';
+import type { AppState, LinkCreateInput, ReceivedRecord, SendItemInput, Settings } from '../shared/api.ts';
 import { AppController, type Platform } from './controller.ts';
 import { autostartDir, gnomeShortcutCommands, parseStrList, READ_KEYBINDINGS, setAutostart, validBinding } from './desktop.ts';
 import { HistoryStore } from './history.ts';
@@ -185,6 +185,21 @@ const settingsPatch = (x: unknown): Partial<Settings> => {
   return out as Partial<Settings>;
 };
 
+const linkInput = (x: unknown): LinkCreateInput => {
+  if (typeof x !== 'object' || x === null || Array.isArray(x)) throw new ArgError('invalid argument');
+  const o = x as Record<string, unknown>;
+  const days = o.days;
+  if (typeof days !== 'number' || !Number.isFinite(days) || days < 1 / 24 || days > 30) throw new ArgError('invalid link length');
+  const max = o.maxDownloads;
+  if (max !== undefined && (typeof max !== 'number' || !Number.isInteger(max) || max < 1 || max > 1000)) throw new ArgError('invalid download limit');
+  return {
+    files: strs(o.files, 1000), days, allowUploads: o.allowUploads === true,
+    ...(o.text !== undefined ? { text: str(o.text, 65536) } : {}),
+    ...(o.password !== undefined && o.password !== '' ? { password: str(o.password, 1024) } : {}),
+    ...(max !== undefined ? { maxDownloads: max as number } : {}),
+  };
+};
+
 function ctl(): AppController {
   if (!controller) throw new Error('MeshDrop is still starting');
   return controller;
@@ -254,6 +269,8 @@ function wireIpc(): void {
   handle('guestUnshare', (_e, id) => ctl().guestUnshare(str(id, 64)));
   handle('guestAccept', (_e, id) => ctl().guestAccept(str(id, 64)));
   handle('guestReject', (_e, id) => ctl().guestReject(str(id, 64)));
+  handle('linkCreate', (_e, x) => ctl().linkCreate(linkInput(x)));
+  handle('linkRevoke', (_e, id) => ctl().linkRevoke(str(id, 64)));
   handle('openInbox', (_e) => ctl().openInbox());
   handle('reveal', (_e, p) => ctl().reveal(str(p)));
   handle('registerClipboardShortcut', async (_e, b) => {

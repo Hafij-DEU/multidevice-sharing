@@ -47,6 +47,9 @@ commands:
   invite                                print a single-use QR invite (valid 5 minutes)
   join <meshdrop://join?...> [--alias]  join a mesh with an invite
   members                               list the devices in this mesh
+  link create <path>... [--days N] [--passphrase-file F] [--max-downloads N] [--allow-uploads]
+                                        hub only: an encrypted internet link (key in the URL #fragment)
+  link list / link revoke <id-prefix>   the hub's internet links
   guest [--share <path>]... [--accept-all]
                                         a guest QR link for a browser on this network: the guest sends
                                         to this device (you accept each send) and downloads --share files
@@ -139,6 +142,9 @@ async function main(argv: string[]): Promise<number> {
       share: { type: 'string', multiple: true },
       'accept-all': { type: 'boolean' },
       minutes: { type: 'string' },
+      days: { type: 'string' },
+      'max-downloads': { type: 'string' },
+      'allow-uploads': { type: 'boolean' },
       help: { type: 'boolean', short: 'h' },
     },
   });
@@ -188,6 +194,8 @@ async function main(argv: string[]): Promise<number> {
     case 'members':
       noArgs('members', args);
       return cmdMembers(base);
+    case 'link':
+      return cmdLink(base, args, values);
     case 'guest':
       noArgs('guest', args);
       return cmdGuest(base, values.share ?? [], values['accept-all'] === true, values.minutes);
@@ -636,6 +644,51 @@ async function cmdMembers(base: EngineOptions): Promise<number> {
     out(`${printable(m.alias).padEnd(20)} ${m.role.padEnd(6)} ${short(m.deviceId)}${me}`);
   }
   return 0;
+}
+
+// ---- internet guest links (M5b) ----------------------------------------------------------------
+
+async function cmdLink(base: EngineOptions, args: string[], values: { days?: string; 'max-downloads'?: string; 'allow-uploads'?: boolean; 'passphrase-file'?: string; text?: string }): Promise<number> {
+  const [sub, ...rest] = args;
+  const e = await Engine.create(base);
+  switch (sub) {
+    case 'create': {
+      if (rest.length === 0 && values.text === undefined) throw new UsageError('link create: expected <path>... (or --text)');
+      const days = values.days === undefined ? 7 : Number(values.days);
+      if (!Number.isFinite(days) || days < 1 / 24 || days > 30) throw new UsageError(`invalid --days "${values.days}" (1/24..30)`);
+      const max = values['max-downloads'] === undefined ? undefined : Number(values['max-downloads']);
+      if (max !== undefined && (!Number.isInteger(max) || max < 1 || max > 1000)) throw new UsageError(`invalid --max-downloads "${values['max-downloads']}" (1..1000)`);
+      const password = values['passphrase-file'] !== undefined ? readFileSync(values['passphrase-file'], 'utf8').replace(/\r?\n$/, '') : undefined;
+      const l = await e.linkCreate({
+        files: rest.map((p) => resolve(p)), days, allowUploads: values['allow-uploads'] === true,
+        ...(values.text !== undefined ? { text: values.text } : {}), ...(password ? { password } : {}), ...(max !== undefined ? { maxDownloads: max } : {}),
+      });
+      out(l.url);
+      out(await QRCode.toString(l.url, { type: 'terminal', small: true }));
+      out(`expires ${new Date(l.expiresAt).toLocaleString()}; anyone with the whole link can download (keep the part after #)`);
+      return 0;
+    }
+    case 'list': {
+      noArgs('link list', rest);
+      const ls = await e.linkList();
+      if (ls.length === 0) out('no internet links');
+      for (const l of ls) {
+        out(`${l.id.slice(0, 8)}  ${printable(l.label).padEnd(24)} until ${new Date(l.expiresAt).toLocaleString()}  downloads ${l.downloads}${l.maxDownloads ? `/${l.maxDownloads}` : ''}${l.hasPassword ? '  password' : ''}${l.allowUploads ? '  uploads' : ''}`);
+        if (l.url) out(`          ${l.url}`);
+      }
+      return 0;
+    }
+    case 'revoke': {
+      if (rest.length !== 1) throw new UsageError('link revoke: expected <id-prefix>');
+      const hits = (await e.linkList()).filter((l) => l.id.startsWith(rest[0]!));
+      if (hits.length !== 1) throw new UsageError(hits.length === 0 ? `no link matches "${rest[0]}"` : `"${rest[0]}" matches ${hits.length} links`);
+      await e.linkRevoke(hits[0]!.id);
+      out(`revoked ${hits[0]!.id.slice(0, 8)}`);
+      return 0;
+    }
+    default:
+      throw new UsageError(`link: unknown subcommand "${sub ?? ''}"`);
+  }
 }
 
 // ---- LAN guests (M5a) -------------------------------------------------------------------------

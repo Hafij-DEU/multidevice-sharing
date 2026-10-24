@@ -290,3 +290,21 @@ describe('AppController guests', () => {
     expect((await A.c.setSettings({ guestMinutes: 240 })).guestMinutes).toBe(240);
   });
 });
+
+describe('AppController internet links', () => {
+  it('the hub creates, lists and removes links; other devices cannot', async () => {
+    const H = await make('hub');
+    await H.c.hubInit([]);
+    const f = join(tmpDir(), 'gift.txt');
+    writeFileSync(f, 'gift');
+    const l = await H.c.linkCreate({ files: [f], days: 1, allowUploads: false, maxDownloads: 2 });
+    expect(l.url).toContain(`/l/${l.id}#k=`);
+    await until(() => (H.c.state().links ?? []).some((x) => x.id === l.id));
+    expect(H.c.state().links![0]).toMatchObject({ id: l.id, label: 'gift.txt', maxDownloads: 2, url: l.url });
+    await H.c.linkRevoke(l.id);
+    expect(H.c.state().links).toEqual([]);
+    const A = await make('a');
+    expect(A.c.state().links).toBeUndefined();
+    await expect(A.c.linkCreate({ files: [f], days: 1, allowUploads: false })).rejects.toThrow(/hub/);
+  });
+});

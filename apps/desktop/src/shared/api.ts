@@ -73,8 +73,32 @@ export interface GuestView {
   /** A browser has opened the link. */
   claimed?: boolean;
   shared: { id: string; name: string; size: number }[];
-  /** Sends waiting for the owner's answer. */
-  offers: { id: string; files: GuestFileView[]; text?: string }[];
+  /** Sends waiting for the owner's answer (`via: 'link'`: from an internet link). */
+  offers: { id: string; files: GuestFileView[]; text?: string; via?: 'link' }[];
+}
+
+/** An internet guest link (hub PC only). */
+export interface LinkView {
+  id: string;
+  label: string;
+  createdAt: number;
+  expiresAt: number;
+  files: number;
+  bytes: number;
+  downloads: number;
+  maxDownloads?: number;
+  hasPassword: boolean;
+  allowUploads: boolean;
+  url?: string;
+}
+
+export interface LinkCreateInput {
+  files: string[];
+  text?: string;
+  days: number;
+  password?: string;
+  maxDownloads?: number;
+  allowUploads: boolean;
 }
 
 export interface AppState {
@@ -102,6 +126,8 @@ export interface AppState {
   members: { deviceId: string; alias: string; role: 'hub' | 'member'; self: boolean }[];
   /** LAN guests (absent where the platform has no guest server, e.g. Android). */
   guest?: GuestView;
+  /** Internet guest links (present on the hub PC). */
+  links?: LinkView[];
 }
 
 export interface DesktopApi {
@@ -132,6 +158,8 @@ export interface DesktopApi {
   guestUnshare(id: string): Promise<void>;
   guestAccept(id: string): Promise<void>;
   guestReject(id: string): Promise<void>;
+  linkCreate(input: LinkCreateInput): Promise<{ id: string; url: string; qrSvg: string; expiresAt: number }>;
+  linkRevoke(id: string): Promise<void>;
   openInbox(): Promise<void>;
   reveal(path: string): Promise<void>;
   registerClipboardShortcut(binding: string): Promise<void>;

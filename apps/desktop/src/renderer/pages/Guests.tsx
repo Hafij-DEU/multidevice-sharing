@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import type { AppState } from '../../shared/api.ts';
 import type { Run } from '../App.tsx';
+import { InternetLinks } from '../components/InternetLinks.tsx';
 import { fmtBytes } from '../format.ts';
 
 const fmtLeft = (ms: number) => {
@@ -9,7 +10,7 @@ const fmtLeft = (ms: number) => {
 };
 
 /** LAN guests: a one-time QR link for a browser on this network, the files offered to it. */
-export function Guests({ state, run }: { state: AppState; run: Run }) {
+function LanGuests({ state, run }: { state: AppState; run: Run }) {
   const g = state.guest;
   const [now, setNow] = useState(Date.now());
   useEffect(() => {
@@ -85,5 +86,15 @@ export function Guests({ state, run }: { state: AppState; run: Run }) {
         Offer files…
       </button>
     </section>
+  );
+}
+
+export function Guests({ state, run }: { state: AppState; run: Run }) {
+  return (
+    <>
+      <LanGuests state={state} run={run} />
+      <h2>Internet links</h2>
+      <InternetLinks state={state} run={run} />
+    </>
   );
 }

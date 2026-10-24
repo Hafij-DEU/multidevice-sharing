@@ -32,6 +32,9 @@ import { GuestBook } from './guest/book.ts';
 import { GUEST_PAGE } from './guest/page.ts';
 import { createGuestServer, type SharedFile } from './guest/server.ts';
 import { GuestUploads, type GuestEvent, type GuestFile } from './guest/uploads.ts';
+import { LINK_PAGE } from './links/page.ts';
+import { createLinkHandler } from './links/server.ts';
+import { LinkStore, type LinkInfo } from './links/store.ts';
 import { HubClient } from './hub/client.ts';
 import { HeldStore } from './hub/held.ts';
 import { DEFAULT_INGRESS_PORT, HubServer, type DirectoryEntry, type LanAddr } from './hub/server.ts';
@@ -70,7 +73,8 @@ export type EngineEvent =
   | ({ source: 'sender'; type: 'result'; tag?: string } & SendResult)
   | { source: 'discovery'; type: 'peer' | 'lost'; peer: PeerInfo }
   /** LAN guests: an offer waiting for the owner, a finished upload, one file of it, a rejected offer, the session ended. */
-  | { source: 'guest'; type: 'offer'; id: string; files: GuestFile[]; text?: string }
+  /** `via: 'link'`: the visitor came through an internet guest link (`link` is its id). */
+  | { source: 'guest'; type: 'offer'; id: string; files: GuestFile[]; text?: string; via?: 'link'; link?: string }
   | { source: 'guest'; type: 'received'; id: string; files: string[]; text?: string }
   | { source: 'guest'; type: 'file'; id: string; path: string }
   | { source: 'guest'; type: 'rejected'; id: string }
@@ -106,7 +110,13 @@ export interface GuestState {
   claimed?: boolean;
   shared: { id: string; name: string; size: number }[];
   /** Offers waiting for the owner's answer. */
-  offers: { id: string; files: GuestFile[]; text?: string }[];
+  offers: { id: string; files: GuestFile[]; text?: string; via?: 'link' }[];
+}
+
+/** An internet guest link as the owner's app lists it. */
+export interface LinkView extends LinkInfo {
+  /** The full link (with its key) as created on this device; absent if it was made elsewhere. */
+  url?: string;
 }
 
 /** Where this device stands in its mesh. */
@@ -177,6 +187,8 @@ export interface EngineOptions {
   hub?: { ingressPort?: number; heldQuotaBytes?: number; heldTtlMs?: number };
   /** Hub link reconnect backoff (default 1 s .. 60 s). */
   hubBackoffMs?: number[];
+  /** Total bytes internet guest links may keep on the hub (default 10 GiB). */
+  linkQuotaBytes?: number;
   /** The LAN guest server (plain HTTP; default port 53320); false: no guest sessions. Only with serve. */
   guest?: { port?: number } | false;
   /** This device's LAN addresses as reported to the hub and put in invites (default: all non-internal IPv4). */
@@ -626,6 +638,7 @@ export class Engine extends EventEmitter {
         id: this.identity, home: this.home, rootKey: this.rootKey, members: this.mesh,
         held: new HeldStore(join(this.home, 'hub', 'held'), heldOpts), invites: this.invites,
         hubLan: () => this.lanAddrs(port),
+        ingressHttp: createLinkHandler({ store: this.links(), uploads: (id) => this.linkUploads(id), page: LINK_PAGE }),
       });
       hub.attach(server);
       try {
@@ -1464,10 +1477,10 @@ export class Engine extends EventEmitter {
     if (announce && had) this.emitEvent({ source: 'guest', type: 'ended' });
   }
 
-  private onGuest(ev: GuestEvent): void {
+  private onGuest(ev: GuestEvent, link?: string): void {
     switch (ev.type) {
       case 'guest-offer':
-        this.emitEvent({ source: 'guest', type: 'offer', id: ev.id, files: ev.files, ...(ev.text !== undefined ? { text: ev.text } : {}) });
+        this.emitEvent({ source: 'guest', type: 'offer', id: ev.id, files: ev.files, ...(ev.text !== undefined ? { text: ev.text } : {}), ...(link ? { via: 'link' as const, link } : {}) });
         break;
       case 'guest-received':
         this.emitEvent({ source: 'guest', type: 'received', id: ev.id, files: ev.files, ...(ev.text !== undefined ? { text: ev.text } : {}) });
@@ -1501,19 +1514,25 @@ export class Engine extends EventEmitter {
     this.guestShared = this.guestShared.filter((f) => f.id !== id);
   }
 
+  /** The upload store an offer id belongs to: the LAN guest session or one of the links. */
+  private uploadsOf(id: string): GuestUploads {
+    if (this.guestUploads?.has(id)) return this.guestUploads;
+    for (const u of this.linkUploadMap.values()) if (u.has(id)) return u;
+    throw new Error('no such guest offer');
+  }
+
   guestAccept(id: string): Promise<void> {
-    if (!this.guestUploads) throw new Error('no guest session');
-    return this.guestUploads.accept(id);
+    return this.uploadsOf(id).accept(id);
   }
 
   guestReject(id: string): Promise<void> {
-    if (!this.guestUploads) throw new Error('no guest session');
-    return this.guestUploads.reject(id);
+    return this.uploadsOf(id).reject(id);
   }
 
   guestState(): GuestState {
     const cur = this.guestBook.current();
-    if (!cur || !this.guestUploads) return { active: false, available: !!this.running?.guest, shared: [], offers: [] };
+    const viaLinks = [...this.linkUploadMap.values()].flatMap((u) => u.pending().map((o) => ({ ...o, via: 'link' as const })));
+    if (!cur || !this.guestUploads) return { active: false, available: !!this.running?.guest, shared: [], offers: viaLinks };
     return {
       active: true,
       available: true,
@@ -1521,8 +1540,73 @@ export class Engine extends EventEmitter {
       expiresAt: cur.expiresAt,
       claimed: cur.claimed,
       shared: this.guestShared.map(({ id, name, size }) => ({ id, name, size })),
-      offers: this.guestUploads.pending(),
+      offers: [...this.guestUploads.pending(), ...viaLinks],
     };
+  }
+
+  // ---- internet guest links (M5b, hub only) ------------------------------------------------------
+
+  private linkStore: LinkStore | null = null;
+  private readonly linkUploadMap = new Map<string, GuestUploads>();
+
+  private links(): LinkStore {
+    this.linkStore ??= new LinkStore(join(this.home, 'hub', 'links'), this.opts.linkQuotaBytes !== undefined ? { quotaBytes: this.opts.linkQuotaBytes } : {});
+    return this.linkStore;
+  }
+
+  private linkUploads(id: string): GuestUploads {
+    let u = this.linkUploadMap.get(id);
+    if (!u) {
+      u = new GuestUploads(join(this.home, 'link-partial', id), this.inboxDir, (ev) => this.onGuest(ev, id));
+      this.linkUploadMap.set(id, u);
+    }
+    return u;
+  }
+
+  /** The public base of the hub (its first URL as https://host), or its loopback ingress. */
+  private linkBase(): string {
+    const u = this.mesh?.list().hub.urls[0];
+    if (u) {
+      const p = new URL(u);
+      return `${p.protocol === 'wss:' ? 'https:' : 'http:'}//${p.host}`;
+    }
+    return `http://127.0.0.1:${this.running?.ingressPort || DEFAULT_INGRESS_PORT}`;
+  }
+
+  /** Hub only: seals files (and/or a message) into a new internet guest link and returns its full URL. */
+  async linkCreate(c: { files: string[]; text?: string; days?: number; hours?: number; password?: string; maxDownloads?: number; allowUploads?: boolean }): Promise<{ id: string; url: string; qrSvg: string; expiresAt: number }> {
+    if (!this.rootKey) throw new Error('internet guest links are made on the hub PC');
+    const expiresInMs = c.hours !== undefined ? c.hours * 3_600_000 : (c.days ?? 7) * 24 * 3_600_000;
+    const { id, key, expiresAt } = await this.links().create({
+      files: c.files, expiresInMs, allowUploads: c.allowUploads === true,
+      ...(c.text ? { text: c.text } : {}), ...(c.password ? { password: c.password } : {}),
+      ...(c.maxDownloads !== undefined ? { maxDownloads: c.maxDownloads } : {}),
+    });
+    const url = `${this.linkBase()}/l/${id}#k=${key.toString('base64url')}`;
+    writeFileAtomic(join(this.home, 'hub', 'links', id, 'owner-url'), url);
+    return { id, url, qrSvg: await QRCode.toString(url, { type: 'svg', margin: 1 }), expiresAt };
+  }
+
+  async linkList(): Promise<LinkView[]> {
+    await this.links().prune();
+    const out: LinkView[] = [];
+    for (const l of await this.links().list()) {
+      let url: string | undefined;
+      try {
+        url = readFileSync(join(this.home, 'hub', 'links', l.id, 'owner-url'), 'utf8');
+      } catch {
+        /* made elsewhere */
+      }
+      out.push(url !== undefined ? { ...l, url } : l);
+    }
+    return out;
+  }
+
+  async linkRevoke(id: string): Promise<void> {
+    await this.links().revoke(id);
+    const u = this.linkUploadMap.get(id);
+    this.linkUploadMap.delete(id);
+    await u?.cancelAll();
   }
 
   /** Redeems a QR invite: over the LAN if it has addresses, else (or if that fails) through the hub. */
