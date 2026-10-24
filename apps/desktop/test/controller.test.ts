@@ -223,6 +223,24 @@ describe('AppController', () => {
     expect(B.p.clip).not.toContain('already there');
   }, 30_000);
 
+  it('folder sync: set up from the app on both sides, a file travels, the state shows the round', async () => {
+    const A = await make('a');
+    const B = await make('b');
+    await pair(A.c, B.c);
+    const fa = join(tmpDir(), 'SyncA');
+    const fb = join(tmpDir(), 'SyncB');
+    await A.c.syncSet(fa, [B.c.state().self.deviceId]);
+    await B.c.syncSet(fb, [A.c.state().self.deviceId]);
+    writeFileSync(join(fa, 'shared.txt'), 'both');
+    await B.c.syncNow();
+    expect(readFileSync(join(fb, 'shared.txt'), 'utf8')).toBe('both');
+    const p = B.c.state().sync!.partners[0]!;
+    expect(p).toMatchObject({ deviceId: A.c.state().self.deviceId, present: true, last: { errors: 0 } }); // pulled by syncNow or already by the poke
+    expect(B.c.state().sync!.folder).toBe(fb);
+    await B.c.syncSet('', []);
+    expect(B.c.state().sync!.folder).toBe('');
+  }, 30_000);
+
   it('files handed in from Files wait for the Send page, once', async () => {
     const A = await make('a');
     const d = tmpDir();

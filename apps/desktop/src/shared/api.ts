@@ -85,6 +85,21 @@ export interface GuestView {
   offers: { id: string; files: GuestFileView[]; text?: string; via?: 'link' | 'localsend'; alias?: string }[];
 }
 
+/** Folder sync (LAN only): the folder, and the devices it is synced with. */
+export interface SyncView {
+  /** '' while sync is off. */
+  folder: string;
+  /** Where "Use the default folder" would put it. */
+  suggested: string;
+  partners: {
+    deviceId: string;
+    alias?: string;
+    present: boolean;
+    syncing: boolean;
+    last?: { at: number; pulled: number; deleted: number; conflicts: number; errors: number; error?: string };
+  }[];
+}
+
 /** An internet guest link (hub PC only). */
 export interface LinkView {
   id: string;
@@ -160,6 +175,8 @@ export interface AppState {
   joinLink?: string;
   /** Mesh members (for the Mesh page). */
   members: { deviceId: string; alias: string; role: 'hub' | 'member'; self: boolean }[];
+  /** Folder sync (absent where the platform has none yet). */
+  sync?: SyncView;
   /** LAN guests (absent where the platform has no guest server). */
   guest?: GuestView;
   /** Internet guest links (present on the hub PC). */
@@ -200,6 +217,10 @@ export interface DesktopApi {
   linkRevoke(id: string): Promise<void>;
   reachDetect(): Promise<void>;
   reachSet(input: ReachInput): Promise<void>;
+  syncSet(folder: string, partners: string[]): Promise<void>;
+  syncNow(): Promise<void>;
+  /** Desktop: shows the sync folder in the file manager. */
+  openSyncFolder?(): Promise<void>;
   openInbox(): Promise<void>;
   reveal(path: string): Promise<void>;
   /** Opens a received file in its default app (Android: the same as reveal). */

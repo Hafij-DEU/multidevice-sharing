@@ -312,6 +312,9 @@ function wireIpc(): void {
   handle('linkRevoke', (_e, id) => ctl().linkRevoke(str(id, 64)));
   handle('reachDetect', (_e) => ctl().reachDetect());
   handle('reachSet', (_e, x) => ctl().reachSet(reachInput(x)));
+  handle('syncSet', (_e, f, p) => ctl().syncSet(str(f), strs(p, 64)));
+  handle('syncNow', (_e) => ctl().syncNow());
+  handle('openSyncFolder', (_e) => ctl().openSyncFolder());
   handle('openInbox', (_e) => ctl().openInbox());
   handle('reveal', (_e, p) => ctl().reveal(str(p)));
   handle('takeSharedItems', (_e) => ctl().takeSharedItems());

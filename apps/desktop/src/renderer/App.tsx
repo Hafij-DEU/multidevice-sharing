@@ -8,20 +8,23 @@ import { Guests } from './pages/Guests.tsx';
 import { Inbox } from './pages/Inbox.tsx';
 import { Mesh } from './pages/Mesh.tsx';
 import { Settings } from './pages/Settings.tsx';
+import { Sync } from './pages/Sync.tsx';
 import { Transfers } from './pages/Transfers.tsx';
 
 /** Three tabs; the rarer pages live under More. */
 const TABS = ['Send', 'Received', 'More'] as const;
 type Tab = (typeof TABS)[number];
-const MORE = ['Guests', 'Mesh', 'Transfers', 'Settings'] as const;
+const MORE = ['Sync', 'Guests', 'Mesh', 'Transfers', 'Settings'] as const;
 type Sub = (typeof MORE)[number];
 const ICON: Record<Sub, string> = {
+  Sync: 'M4 12a8 8 0 0 1 14-5.3M20 4v4h-4M20 12a8 8 0 0 1-14 5.3M4 20v-4h4',
   Guests: 'M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM4 21a8 8 0 0 1 16 0',
   Mesh: 'M5 12a2 2 0 1 0 0 .01M19 5a2 2 0 1 0 0 .01M19 19a2 2 0 1 0 0 .01M7 11l10-5M7 13l10 5',
   Transfers: 'M7 4v14M3 14l4 4 4-4M17 20V6M13 10l4-4 4 4',
   Settings: 'M4 7h10M18 7h2M4 17h4M12 17h8M16 5v4M10 15v4',
 };
 const MORE_HINT: Record<Sub, string> = {
+  Sync: 'Keep one folder the same on your devices',
   Guests: 'Let someone without the app send or get files from a browser',
   Mesh: 'Link your devices so they reach each other from anywhere',
   Transfers: 'Unfinished sends and transfer history',
@@ -95,7 +98,7 @@ export function App() {
     return off;
   }, []);
 
-  const subs = MORE.filter((p) => !(p === 'Guests' && !state?.guest));
+  const subs = MORE.filter((p) => !(p === 'Guests' && !state?.guest) && !(p === 'Sync' && !state?.sync));
   const status = !state
     ? ''
     : state.mode === 'client-only'
@@ -157,7 +160,9 @@ export function App() {
               </button>
               <h1>{sub}</h1>
             </div>
-            {sub === 'Guests' ? (
+            {sub === 'Sync' ? (
+              <Sync state={state} run={run} />
+            ) : sub === 'Guests' ? (
               <Guests state={state} run={run} />
             ) : sub === 'Mesh' ? (
               <Mesh state={state} run={run} />

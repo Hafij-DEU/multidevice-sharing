@@ -170,6 +170,7 @@ input:focus, textarea:focus, select:focus { outline: 2px solid color-mix(in srgb
 .menu-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .menu-icon { flex: none; width: 44px; height: 44px; border-radius: 13px; display: grid; place-items: center; color: #fff; }
 .menu-icon svg { width: 22px; height: 22px; }
+.icon-Sync { background: linear-gradient(135deg, #22c55e, #84cc16); }
 .icon-Guests { background: linear-gradient(135deg, #f97316, #ec4899); }
 .icon-Mesh { background: linear-gradient(135deg, #06b6d4, #6366f1); }
 .icon-Transfers { background: linear-gradient(135deg, #10b981, #06b6d4); }
