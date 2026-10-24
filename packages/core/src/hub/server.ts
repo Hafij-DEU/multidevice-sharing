@@ -147,6 +147,21 @@ export class HubServer extends EventEmitter {
     });
   }
 
+  /**
+   * The public HTTPS listener of port-forward mode (a CA certificate, no client certificates): the same
+   * as the ingress, i.e. the hub link plus internet guest links.
+   */
+  attachPublic(server: HttpsServer): void {
+    server.on('upgrade', (req: IncomingMessage, socket: Duplex, head: Buffer) => this.#upgrade(req, socket, head, null));
+    server.on('request', (req: IncomingMessage, res: ServerResponse) => {
+      if (this.#opts.ingressHttp?.(req, res)) return;
+      res.writeHead(404);
+      res.end();
+    });
+    server.headersTimeout = 10_000;
+    server.requestTimeout = 300_000;
+  }
+
   /** Plain-HTTP ingress for tunnels, bound to 127.0.0.1 only; authentication is application-level. */
   listenIngress(port = DEFAULT_INGRESS_PORT): Promise<number> {
     const srv = createHttpServer((req, res) => {

@@ -33,6 +33,7 @@ import { GUEST_PAGE } from './guest/page.ts';
 import { createGuestServer, type SharedFile } from './guest/server.ts';
 import { GuestUploads, type GuestEvent, type GuestFile } from './guest/uploads.ts';
 import { LINK_PAGE } from './links/page.ts';
+import { ReachManager, type ReachConfig, type ReachEnv, type ReachStatus } from './reach/manager.ts';
 import { createLinkHandler } from './links/server.ts';
 import { LinkStore, type LinkInfo } from './links/store.ts';
 import { HubClient } from './hub/client.ts';
@@ -187,6 +188,8 @@ export interface EngineOptions {
   hub?: { ingressPort?: number; heldQuotaBytes?: number; heldTtlMs?: number };
   /** Hub link reconnect backoff (default 1 s .. 60 s). */
   hubBackoffMs?: number[];
+  /** Internet reach (M5c) seams for tests: fake CLIs, CA, DuckDNS and router. */
+  reach?: Omit<ReachEnv, 'home' | 'ingressPort' | 'attachPublic' | 'publish'>;
   /** Total bytes internet guest links may keep on the hub (default 10 GiB). */
   linkQuotaBytes?: number;
   /** The LAN guest server (plain HTTP; default port 53320); false: no guest sessions. Only with serve. */
@@ -649,6 +652,22 @@ export class Engine extends EventEmitter {
         throw e;
       }
     }
+    if (hub) {
+      const h = hub;
+      this.reach = new ReachManager({
+        ...(this.opts.reach ?? {}),
+        home: this.home,
+        ingressPort: () => this.running?.ingressPort || ingressPort,
+        attachPublic: (s) => h.attachPublic(s),
+        publish: async (url, previous) => {
+          const cur = this.mesh?.list().hub.urls ?? [];
+          const next = cur.filter((u) => u !== previous);
+          if (url && !next.includes(url)) next.unshift(url);
+          if (next.join('\n') !== cur.join('\n')) await h.setUrls(next);
+        },
+      });
+      void this.reach.start();
+    }
     this.joinHandler = createJoinHandler({
       id: this.identity, invites: this.invites, members: () => this.mesh, manualTrust: this.trust,
       ...(hub ? { hub } : {}), hubClient: () => this.running?.client ?? null,
@@ -747,6 +766,8 @@ export class Engine extends EventEmitter {
     r.abort.abort();
     for (const t of r.timers) clearInterval(t);
     await r.client?.stop();
+    await this.reach?.stop(false);
+    this.reach = null;
     await r.hub?.close();
     await this.endGuest(false);
     if (r.guest) {
@@ -1545,6 +1566,23 @@ export class Engine extends EventEmitter {
   }
 
   // ---- internet guest links (M5b, hub only) ------------------------------------------------------
+
+  private reach: ReachManager | null = null;
+
+  /** Hub only: how this hub is reached from the internet. */
+  reachStatus(): (ReachStatus & { detection: ReturnType<ReachManager['lastDetection']> }) | null {
+    return this.reach ? { ...this.reach.status(), detection: this.reach.lastDetection() } : null;
+  }
+
+  reachDetect(): Promise<ReturnType<ReachManager['lastDetection']>> {
+    if (!this.reach) throw new Error('internet access is set up on the running hub');
+    return this.reach.detect();
+  }
+
+  reachSet(cfg: ReachConfig, secrets: { duckdnsToken?: string } = {}): Promise<ReachStatus> {
+    if (!this.reach) throw new Error('internet access is set up on the running hub');
+    return this.reach.set(cfg, secrets);
+  }
 
   private linkStore: LinkStore | null = null;
   private readonly linkUploadMap = new Map<string, GuestUploads>();

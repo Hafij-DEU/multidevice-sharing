@@ -1,7 +1,5 @@
-import { execFileSync } from 'node:child_process';
-import { X509Certificate, createHash, createPublicKey, generateKeyPairSync, verify } from 'node:crypto';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { createServer, type Server } from 'node:http';
+import { X509Certificate, createPublicKey, generateKeyPairSync } from 'node:crypto';
+import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
