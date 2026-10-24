@@ -53,6 +53,32 @@ public class MeshServerTest {
     }
 
     @Test
+    public void servesTheMembershipListToTrustedPeersOnly() throws Exception {
+        Map<String, Object> signed = new java.util.LinkedHashMap<>();
+        signed.put("list", java.util.Collections.singletonMap("version", 3L));
+        signed.put("sig", "AA==");
+        java.util.concurrent.atomic.AtomicReference<Map<String, Object>> current = new java.util.concurrent.atomic.AtomicReference<>();
+        MeshServer.Options o = new MeshServer.Options();
+        o.membership = current::get;
+        o.meshVersion = () -> current.get() == null ? 0 : 3;
+        try (Peers.Receiver r = Peers.receiver(tmp.newFolder(), o)) {
+            Identity c = Identity.loadOrCreate(tmp.newFolder(), new PlainKeyVault());
+            Identity stranger = Identity.loadOrCreate(tmp.newFolder(), new PlainKeyVault());
+            r.trust.add(c.deviceId(), "c", TrustStore.pem(c.keyPair().getPublic()));
+            Http.Response none = Http.request(Tls.connect(Tls.pinnedClient(c, r.id.deviceId()), "127.0.0.1", r.port, 3000), "GET", "/mesh/v1/membership", null, null, 4096);
+            assertEquals(404, none.status);
+            current.set(signed);
+            Http.Response ok = Http.request(Tls.connect(Tls.pinnedClient(c, r.id.deviceId()), "127.0.0.1", r.port, 3000), "GET", "/mesh/v1/membership", null, null, 4096);
+            assertEquals(200, ok.status);
+            assertEquals(Json.stringify(signed), ok.text());
+            Http.Response no = Http.request(Tls.connect(Tls.pinnedClient(stranger, r.id.deviceId()), "127.0.0.1", r.port, 3000), "GET", "/mesh/v1/membership", null, null, 4096);
+            assertEquals(403, no.status);
+            Http.Response info = Http.request(Tls.connect(Tls.probeClient(), "127.0.0.1", r.port, 3000), "GET", "/mesh/v1/info", null, null, 4096);
+            assertEquals(3L, json(info).get("mv"));
+        }
+    }
+
+    @Test
     public void pausedReceivingAnswers503() throws Exception {
         MeshServer.Options o = new MeshServer.Options();
         o.accepting = () -> false;

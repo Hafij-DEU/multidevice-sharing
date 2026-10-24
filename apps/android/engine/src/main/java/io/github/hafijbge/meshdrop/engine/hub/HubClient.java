@@ -142,20 +142,79 @@ public final class HubClient {
         }
     }
 
-    private static final class Target {
-        final String host;
-        final int port;
+    /** Where to reach the hub: its LAN mesh port (pinned) or one of its URLs. */
+    public static final class Endpoint {
+        public final String host;
+        public final int port;
         final String hostHeader;
         final String path;
         /** "pinned" (LAN, mutual TLS to the hub's id), "wss" (CA-validated), "ws" (loopback only). */
         final String kind;
 
-        Target(String host, int port, String hostHeader, String path, String kind) {
+        Endpoint(String host, int port, String hostHeader, String path, String kind) {
             this.host = host;
             this.port = port;
             this.hostHeader = hostHeader;
             this.path = path;
             this.kind = kind;
+        }
+
+        public static Endpoint lan(LanAddr a) {
+            String h = a.host.contains(":") ? "[" + a.host + "]" : a.host;
+            return new Endpoint(a.host, a.port, h + ":" + a.port, PATH, "pinned");
+        }
+
+        /** A hub URL: wss:// anywhere, ws:// only to loopback (a local ingress); null for anything else. */
+        public static Endpoint url(String u) {
+            try {
+                URI p = new URI(u);
+                String host = p.getHost();
+                if (host == null) return null;
+                boolean loopback = host.equals("127.0.0.1") || host.equals("localhost") || host.equals("[::1]");
+                String scheme = p.getScheme();
+                if (!"wss".equals(scheme) && !("ws".equals(scheme) && loopback)) return null;
+                int port = p.getPort() > 0 ? p.getPort() : ("wss".equals(scheme) ? 443 : 80);
+                String path = (p.getRawPath() == null || p.getRawPath().isEmpty() ? "/" : p.getRawPath()) + (p.getRawQuery() == null ? "" : "?" + p.getRawQuery());
+                String bare = host.startsWith("[") ? host.substring(1, host.length() - 1) : host;
+                return new Endpoint(bare, port, p.getPort() > 0 ? host + ":" + port : host, path, scheme);
+            } catch (Exception e) {
+                return null;
+            }
+        }
+
+        boolean pinned() {
+            return kind.equals("pinned");
+        }
+
+        /** Connects (TLS as the kind says; `hubId` is the pin for a LAN endpoint) within `timeoutMs`. */
+        Socket open(Identity me, String hubId, int timeoutMs) throws IOException {
+            switch (kind) {
+                case "pinned":
+                    return Tls.connect(Tls.pinnedClient(me, hubId), host, port, timeoutMs);
+                case "wss":
+                    return Tls.connectVerified(Tls.caClient(me), host, port, timeoutMs);
+                default:
+                    Socket s = new Socket();
+                    try {
+                        s.connect(new InetSocketAddress(host, port), timeoutMs);
+                    } catch (IOException e) {
+                        s.close();
+                        throw e;
+                    }
+                    return s;
+            }
+        }
+
+        /** Opens the WebSocket on /mesh/v1/hub (or the URL's path). */
+        public WebSocket connect(Identity me, String hubId, int timeoutMs, WebSocket.Listener l) throws IOException {
+            Socket s = open(me, hubId, timeoutMs);
+            try {
+                s.setSoTimeout(0);
+                return WebSocket.connect(s, hostHeader, path, l, WebSocket.DEFAULT_MAX_MESSAGE);
+            } catch (IOException | RuntimeException e) {
+                s.close();
+                throw e;
+            }
         }
     }
 
@@ -335,31 +394,15 @@ public final class HubClient {
 
     // ---- connection ---------------------------------------------------------------------------
 
-    private List<Target> targets() {
-        List<Target> out = new ArrayList<>();
+    private List<Endpoint> targets() {
+        List<Endpoint> out = new ArrayList<>();
         MembershipStore ms = members();
         if (ms == null) return out;
         LanAddr lan = o.hubLan.get();
-        if (lan != null) {
-            String h = lan.host.contains(":") ? "[" + lan.host + "]" : lan.host;
-            out.add(new Target(lan.host, lan.port, h + ":" + lan.port, PATH, "pinned"));
-        }
+        if (lan != null) out.add(Endpoint.lan(lan));
         for (String u : ms.list().urls) {
-            try {
-                URI p = new URI(u);
-                String host = p.getHost();
-                if (host == null) continue;
-                boolean loopback = host.equals("127.0.0.1") || host.equals("localhost") || host.equals("[::1]");
-                String scheme = p.getScheme();
-                // Public URLs use standard CA validation; plain ws:// only to a local ingress (dev, tests).
-                if (!"wss".equals(scheme) && !("ws".equals(scheme) && loopback)) continue;
-                int port = p.getPort() > 0 ? p.getPort() : ("wss".equals(scheme) ? 443 : 80);
-                String path = (p.getRawPath() == null || p.getRawPath().isEmpty() ? "/" : p.getRawPath()) + (p.getRawQuery() == null ? "" : "?" + p.getRawQuery());
-                String bare = host.startsWith("[") ? host.substring(1, host.length() - 1) : host;
-                out.add(new Target(bare, port, p.getPort() > 0 ? host + ":" + port : host, path, scheme));
-            } catch (Exception ignored) {
-                // skip malformed
-            }
+            Endpoint e = Endpoint.url(u);
+            if (e != null) out.add(e);
         }
         return out;
     }
@@ -369,7 +412,7 @@ public final class HubClient {
             if (stopped || state == State.REVOKED) return;
         }
         setState(State.CONNECTING);
-        for (Target t : targets()) {
+        for (Endpoint t : targets()) {
             synchronized (this) {
                 if (stopped) return;
             }
@@ -401,25 +444,6 @@ public final class HubClient {
         }
     }
 
-    private Socket open(Target t) throws IOException {
-        String hubId = members().list().hubId;
-        switch (t.kind) {
-            case "pinned":
-                return Tls.connect(Tls.pinnedClient(me(), hubId), t.host, t.port, HANDSHAKE_TIMEOUT_MS);
-            case "wss":
-                return Tls.connectVerified(Tls.caClient(me()), t.host, t.port, HANDSHAKE_TIMEOUT_MS);
-            default:
-                Socket s = new Socket();
-                try {
-                    s.connect(new InetSocketAddress(t.host, t.port), HANDSHAKE_TIMEOUT_MS);
-                } catch (IOException e) {
-                    s.close();
-                    throw e;
-                }
-                return s;
-        }
-    }
-
     /** The next handshake message as JSON, or null when the link failed (it is aborted then). */
     @SuppressWarnings("unchecked")
     private Map<String, Object> nextJson(Link l, long deadline) throws InterruptedException {
@@ -447,7 +471,7 @@ public final class HubClient {
 
     /** True once the link is online; false if this target failed before that. */
     @SuppressWarnings("unchecked")
-    private boolean tryTarget(Target t) {
+    private boolean tryTarget(Endpoint t) {
         Link l = new Link();
         MembershipStore ms = members();
         if (ms == null) return false;
@@ -460,7 +484,7 @@ public final class HubClient {
                 if (stopped) return false;
                 trying = l;
             }
-            s = open(t);
+            s = t.open(me(), hubId, HANDSHAKE_TIMEOUT_MS);
             synchronized (this) {
                 if (stopped) {
                     closeQuietly(s);
@@ -481,7 +505,7 @@ public final class HubClient {
             String helloHub = (String) hello.get("hub");
             // The pinned link already proved the cert is the list's hub; a different hub id is only
             // possible after a recovery, and then the hub must hand us a newer list naming it.
-            if (t.kind.equals("pinned") && !helloHub.equals(hubId)) {
+            if (t.pinned() && !helloHub.equals(hubId)) {
                 l.abort();
                 return false;
             }

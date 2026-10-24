@@ -55,6 +55,8 @@ public final class MeshServer {
         public String deviceType = "mobile";
         public BooleanSupplier accepting = () -> true;
         public LongSupplier meshVersion = () -> 0;
+        /** The signed membership list served to trusted peers by GET /mesh/v1/membership (null: none). */
+        public java.util.function.Supplier<Map<String, Object>> membership = () -> null;
     }
 
     /** Receiver events: {type, sessionId, from, …} as in docs/protocol.md "Receiver events". */
@@ -319,6 +321,11 @@ public final class MeshServer {
         status[0] = 200;
         if (m.equals("GET") && seg.length == 1 && seg[0].equals("info")) return json(info());
         if (peer == null || !trust.isTrusted(peer)) throw new HttpError(403, "untrusted");
+        if (m.equals("GET") && seg.length == 1 && seg[0].equals("membership")) {
+            Map<String, Object> s = opts.membership.get();
+            if (s == null) throw new HttpError(404, "not-found");
+            return json(s);
+        }
         if (m.equals("POST") && seg.length == 1 && seg[0].equals("offer")) {
             if (!opts.accepting.getAsBoolean()) throw new HttpError(503, "paused");
             return offer(req, peer);
