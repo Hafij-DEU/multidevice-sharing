@@ -23,6 +23,8 @@ export interface Platform {
   readClipboard(): string;
   openPath(p: string): Promise<void>;
   revealPath(p: string): void;
+  /** A small preview of an image or video as a data: URL, or null when there is none. */
+  thumbnail(p: string): Promise<string | null>;
 }
 
 export interface ControllerOptions {
@@ -36,6 +38,10 @@ export interface ControllerOptions {
 /** Minimum gap between two 'state' events (so at most 10 progress updates per second). */
 const STATE_INTERVAL_MS = 100;
 const MAX_TRANSFERS = 100;
+const RATE_WINDOW_MS = 500;
+/** Shared clipboard: how often the clipboard is checked, and the most text it sends. */
+const CLIP_POLL_MS = 1000;
+const MAX_CLIP_SYNC = 64 * 1024;
 const MAX_RECOVERY_BYTES = 1024 * 1024;
 /** Settings the engine is created with: changing one restarts it. */
 const ENGINE_KEYS = ['alias', 'inbox', 'port', 'discovery'] as const;
@@ -47,6 +53,9 @@ interface Transfer extends TransferView {
   /** Out: the send()'s tag (`deviceId\0tag`) and the engine session, once known. */
   tagKey?: string;
   sessionId?: string;
+  /** Start of the current speed window and the bytes done at that time. */
+  rateAt?: number;
+  rateSent?: number;
 }
 
 const CLIENT_ONLY = 'Receiving is handled by the MeshDrop background service on this PC. Stop it first (systemctl --user stop meshdrop).';
@@ -117,6 +126,11 @@ export class AppController extends EventEmitter {
   #paused = false;
   /** The guest link's QR code (the engine keeps the rest of the session). */
   #guestQr: string | undefined;
+  /** Shared clipboard: the poll, and the last text seen (copied here or received), so nothing echoes back. */
+  #clipTimer: NodeJS.Timeout | null = null;
+  #lastClip: string | undefined;
+  /** Files handed in from outside (Files → Send with MeshDrop), waiting for takeSharedItems(). */
+  #shared: SendItemInput[] = [];
   /** The hub's internet links (refreshed on changes and every 30 s: download counts move on their own). */
   #links: LinkView[] = [];
   #linkTimer: NodeJS.Timeout | null = null;
@@ -139,6 +153,8 @@ export class AppController extends EventEmitter {
     this.#stopped = true;
     if (this.#linkTimer) clearInterval(this.#linkTimer);
     this.#linkTimer = null;
+    if (this.#clipTimer) clearInterval(this.#clipTimer);
+    this.#clipTimer = null;
     if (this.#timer) clearTimeout(this.#timer);
     this.#timer = null;
     await this.#halt();
@@ -222,6 +238,10 @@ export class AppController extends EventEmitter {
       this.#linkTimer = setInterval(() => void this.#refreshLinks(), 30_000);
       this.#linkTimer.unref();
     }
+    if (!this.#clipTimer) {
+      this.#clipTimer = setInterval(() => this.#clipTick(), CLIP_POLL_MS);
+      this.#clipTimer.unref();
+    }
     this.#changed();
   }
 
@@ -272,11 +292,12 @@ export class AppController extends EventEmitter {
       mode: this.#mode,
       hub: { role: st.role, online: st.online, version: st.version, members: st.members, urls: st.urls, ingressPort: e.hubIngressPort },
       devices: e.devices().map((d): DeviceView => ({ ...d, self: false })),
-      transfers: [...this.#transfers.values()].reverse().map(({ done: _d, sizes: _s, ...t }) => t),
+      transfers: [...this.#transfers.values()].reverse().map(({ done: _d, sizes: _s, rateAt: _a, rateSent: _r, ...t }) => t),
       outbox: this.#outbox.map((o) => ({ ...o })),
       received: this.#history.received(),
       settings: this.#settings.get(),
       platform: 'desktop',
+      ...(this.#shared.length > 0 ? { sharedPending: this.#shared.length } : {}),
       receiving: this.#mode === 'serving' && !this.#paused && this.#error === undefined,
       ...(this.#error !== undefined ? { error: this.#error } : {}),
       members: e.members().map((m) => ({ deviceId: m.deviceId, alias: m.alias, role: m.role, self: m.deviceId === me })),
@@ -373,6 +394,17 @@ export class AppController extends EventEmitter {
     let n = 0;
     for (const v of t.done.values()) n += v;
     t.sent = Math.min(n, t.bytes || n);
+    // Speed: bytes over windows of at least RATE_WINDOW_MS, smoothed so the time left does not jump.
+    const now = Date.now();
+    if (t.rateAt === undefined) {
+      t.rateAt = now;
+      t.rateSent = t.sent;
+    } else if (now - t.rateAt >= RATE_WINDOW_MS) {
+      const r = ((t.sent - (t.rateSent ?? 0)) * 1000) / (now - t.rateAt);
+      t.bytesPerSec = t.bytesPerSec === undefined ? r : 0.7 * t.bytesPerSec + 0.3 * r;
+      t.rateAt = now;
+      t.rateSent = t.sent;
+    }
   }
 
   // ---- engine events ----------------------------------------------------------------------------
@@ -518,7 +550,10 @@ export class AppController extends EventEmitter {
       ...(ev.clipboard ? { clipboard: true } : {}),
     });
     // Clipboard text is only ever placed on the clipboard: never opened, run or interpreted.
-    if (ev.clipboard && ev.text !== undefined && s.clipboardReceive) this.#platform.writeClipboard(ev.text);
+    if (ev.clipboard && ev.text !== undefined && s.clipboardReceive) {
+      this.#lastClip = ev.text; // shared clipboard: do not send it straight back
+      this.#platform.writeClipboard(ev.text);
+    }
     if (!s.notifications) return;
     const n = ev.files.length;
     if (ev.clipboard) {
@@ -789,11 +824,64 @@ export class AppController extends EventEmitter {
   }
 
   /** Shows a received file in the file manager (only files inside the inbox). */
-  async reveal(path: string): Promise<void> {
+  /** `path` if it is inside the inbox (only received files are shown, opened or previewed). */
+  #inInbox(path: string): string {
     const inbox = resolve(this.#settings.get().inbox);
     const rel = relative(inbox, resolve(path));
     if (rel === '' || rel.startsWith('..') || isAbsolute(rel)) throw new Error('Only received files can be shown.');
-    this.#platform.revealPath(resolve(path));
+    return resolve(path);
+  }
+
+  async reveal(path: string): Promise<void> {
+    this.#platform.revealPath(this.#inInbox(path));
+  }
+
+  /** Shared clipboard: newly copied text goes to every online trusted device, without rows or toasts. */
+  #clipTick(): void {
+    if (!this.#engine || this.#stopped) return;
+    let text: string;
+    try {
+      text = this.#platform.readClipboard();
+    } catch {
+      return;
+    }
+    const first = this.#lastClip === undefined;
+    if (text === this.#lastClip) return;
+    this.#lastClip = text;
+    // What was on the clipboard when MeshDrop started is not "newly copied"; nor is anything while sharing is off.
+    if (first || !this.#settings.get().clipboardSync || text.trim() === '' || Buffer.byteLength(text) > MAX_CLIP_SYNC) return;
+    const ls = new Set(this.#e.devices().filter((d) => d.role === 'localsend').map((d) => d.deviceId));
+    const ids = this.#allTargets().filter((id) => !ls.has(id));
+    if (ids.length > 0) this.#e.sendClipboard(ids, text).catch(() => {});
+  }
+
+  /** Files to put on the Send page (from `--send`): files and folders that exist. */
+  addShared(paths: string[]): void {
+    for (const p of paths) {
+      let dir: boolean;
+      try {
+        dir = statSync(p).isDirectory();
+      } catch {
+        continue;
+      }
+      if (!this.#shared.some((s) => s.path === p)) this.#shared.push({ kind: dir ? 'dir' : 'file', path: p });
+    }
+    this.#changed();
+  }
+
+  async takeSharedItems(): Promise<SendItemInput[]> {
+    const out = this.#shared;
+    this.#shared = [];
+    this.#changed();
+    return out;
+  }
+
+  async openFile(path: string): Promise<void> {
+    await this.#platform.openPath(this.#inInbox(path));
+  }
+
+  async thumb(path: string): Promise<string | null> {
+    return this.#platform.thumbnail(this.#inInbox(path)).catch(() => null);
   }
 
   async openConfigFolder(): Promise<void> {

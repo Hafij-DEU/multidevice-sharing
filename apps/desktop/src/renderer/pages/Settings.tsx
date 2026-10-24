@@ -6,6 +6,7 @@ const DEFAULT_BINDING = '<Primary><Alt>c';
 const SWITCHES: [keyof S, string][] = [
   ['discovery', 'Find devices on this network automatically'],
   ['clipboardReceive', 'Put received clipboard text on my clipboard'],
+  ['clipboardSync', 'Shared clipboard: text I copy goes to my online devices'],
   ['notifications', 'Show notifications'],
   ['closeToTray', 'Keep running in the tray when the window is closed'],
   ['autostart', 'Start MeshDrop when I log in'],

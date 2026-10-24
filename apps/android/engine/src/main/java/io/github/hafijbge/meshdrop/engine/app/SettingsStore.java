@@ -70,6 +70,7 @@ public final class SettingsStore {
             case "startHidden":
             case "closeToTray":
             case "clipboardReceive":
+            case "clipboardSync":
             case "notifications":
                 if (!(v instanceof Boolean)) throw new SettingsError("Invalid value for " + k + ".");
                 boolean b = (Boolean) v;
@@ -78,6 +79,7 @@ public final class SettingsStore {
                 else if (k.equals("startHidden")) s.startHidden = b;
                 else if (k.equals("closeToTray")) s.closeToTray = b;
                 else if (k.equals("clipboardReceive")) s.clipboardReceive = b;
+                else if (k.equals("clipboardSync")) s.clipboardSync = b;
                 else s.notifications = b;
                 break;
             case "guestMinutes":

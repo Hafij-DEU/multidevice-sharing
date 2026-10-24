@@ -37,6 +37,8 @@ export interface TransferView {
   sent: number;
   /** waiting: the device was away; the send goes out when it is seen again. */
   status: 'preparing' | 'sending' | 'receiving' | 'done' | 'held' | 'waiting' | 'failed' | 'cancelled';
+  /** Smoothed speed while it moves (absent until measured). */
+  bytesPerSec?: number;
   error?: string;
   startedAt: number;
 }
@@ -59,6 +61,8 @@ export interface Settings {
   startHidden: boolean;
   closeToTray: boolean;
   clipboardReceive: boolean;
+  /** Copying text sends it to the online trusted devices (they put it on their clipboard). */
+  clipboardSync: boolean;
   notifications: boolean;
   /** How long a guest link works, in minutes (5..1440). */
   guestMinutes: number;
@@ -150,7 +154,7 @@ export interface AppState {
   platform?: 'desktop' | 'android';
   /** Android: the "Keep MeshDrop alive" checklist for this phone's ROM. */
   keepAlive?: { batteryUnrestricted: boolean; rom: 'miui' | 'hios' | 'stock'; steps: { id: string; label: string; done?: boolean }[] };
-  /** Android: files shared into MeshDrop from another app, waiting for takeSharedItems(). */
+  /** Files shared into MeshDrop (Android share menu, Files → Send with MeshDrop), waiting for takeSharedItems(). */
   sharedPending?: number;
   /** Android: the meshdrop://join link the app was opened with (pre-fills the join box until a join is tried). */
   joinLink?: string;
@@ -198,6 +202,10 @@ export interface DesktopApi {
   reachSet(input: ReachInput): Promise<void>;
   openInbox(): Promise<void>;
   reveal(path: string): Promise<void>;
+  /** Opens a received file in its default app (Android: the same as reveal). */
+  openFile(path: string): Promise<void>;
+  /** A preview (data: URL) of a received image or video, or null. */
+  thumb(path: string): Promise<string | null>;
   registerClipboardShortcut(binding: string): Promise<void>;
   openConfigFolder(): Promise<void>;
   /** Android: the system picker, returning items with display names (content URIs are not readable paths). */

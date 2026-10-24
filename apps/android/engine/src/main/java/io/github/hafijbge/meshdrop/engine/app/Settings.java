@@ -15,6 +15,8 @@ public final class Settings implements Cloneable {
     public boolean startHidden = false;
     public boolean closeToTray = true;
     public boolean clipboardReceive = true;
+    /** Copying text sends it to the online trusted devices (Android: while MeshDrop is in front). */
+    public boolean clipboardSync = false;
     public boolean notifications = true;
     /** How long a guest link works, in minutes (5..1440). */
     public int guestMinutes = 60;
@@ -43,6 +45,7 @@ public final class Settings implements Cloneable {
         m.put("startHidden", startHidden);
         m.put("closeToTray", closeToTray);
         m.put("clipboardReceive", clipboardReceive);
+        m.put("clipboardSync", clipboardSync);
         m.put("notifications", notifications);
         m.put("guestMinutes", (long) guestMinutes);
         return m;

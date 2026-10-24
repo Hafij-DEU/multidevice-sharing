@@ -26,6 +26,7 @@ export function defaultSettings(over: Partial<Settings> = {}): Settings {
     startHidden: false,
     closeToTray: true,
     clipboardReceive: true,
+    clipboardSync: false,
     notifications: true,
     guestMinutes: 60,
     ...over,
@@ -64,7 +65,7 @@ function validate(s: Settings): void {
   if (!Number.isInteger(s.guestMinutes) || s.guestMinutes < 5 || s.guestMinutes > 1440) {
     throw new SettingsError('A guest link must last between 5 minutes and 24 hours (1440 minutes).');
   }
-  for (const k of ['discovery', 'autostart', 'startHidden', 'closeToTray', 'clipboardReceive', 'notifications'] as const) {
+  for (const k of ['discovery', 'autostart', 'startHidden', 'closeToTray', 'clipboardReceive', 'clipboardSync', 'notifications'] as const) {
     if (typeof s[k] !== 'boolean') throw new SettingsError(`Invalid value for ${k}.`);
   }
 }

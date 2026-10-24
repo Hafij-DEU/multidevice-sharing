@@ -81,6 +81,7 @@ textarea { width: 100%; resize: vertical; }
 .progress-row { padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--panel); margin-bottom: 8px; }
 .progress-head { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
 .progress-head .status { margin-left: auto; font-weight: 600; }
+.speed { font-size: 12px; font-weight: 600; color: var(--accent); font-variant-numeric: tabular-nums; }
 .status-done .status { color: var(--ok); }
 .status-failed .status { color: var(--bad); }
 .status-waiting .status { color: var(--warn); }
@@ -182,6 +183,12 @@ input:focus, textarea:focus, select:focus { outline: 2px solid color-mix(in srgb
 .toast.error { border-left-color: var(--bad); }
 .qr { box-shadow: var(--shadow); border: 0; }
 code { font-size: 12.5px; padding: 1px 6px; border-radius: 6px; background: color-mix(in srgb, var(--accent) 10%, transparent); }
+
+.record .files li { display: flex; align-items: center; gap: 10px; }
+.thumb-btn { padding: 0; border: 0; background: none; border-radius: 10px; overflow: hidden; flex: none; line-height: 0; }
+.record .thumb { width: 64px; height: 64px; border-radius: 10px; }
+.file-name { text-align: left; color: var(--text); font-weight: 500; padding: 2px 0; overflow-wrap: anywhere; }
+.file-name:hover { color: var(--accent); }
 
 /* Phones (and narrow windows): tabs share the width; the status line hides. */
 @media (max-width: 720px) {

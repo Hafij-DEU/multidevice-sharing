@@ -45,6 +45,7 @@ function fakePlatform(): FakePlatform {
     readClipboard: () => p.clipboardText,
     openPath: async () => {},
     revealPath: () => {},
+    thumbnail: async () => null,
   };
   return p;
 }
@@ -207,6 +208,31 @@ describe('AppController', () => {
     expect(readFileSync(join(B2.inbox, 'later.txt'), 'utf8')).toBe('later');
     await until(() => A.c.state().outbox.length === 0);
   }, 60_000);
+
+  it('shared clipboard: newly copied text reaches the other device, and does not echo back', async () => {
+    const A = await make('a', { clipboardSync: true });
+    const B = await make('b', { clipboardSync: true });
+    await pair(A.c, B.c);
+    A.p.clipboardText = 'already there';
+    await sleep(1500); // the first look only takes note
+    A.p.clipboardText = 'copied on A';
+    await until(() => B.p.clip.includes('copied on A'), 15_000);
+    B.p.clipboardText = 'copied on A'; // B's clipboard now holds it: B must not send it back
+    await sleep(2500);
+    expect(A.p.clip).toEqual([]);
+    expect(B.p.clip).not.toContain('already there');
+  }, 30_000);
+
+  it('files handed in from Files wait for the Send page, once', async () => {
+    const A = await make('a');
+    const d = tmpDir();
+    const f = join(d, 'a.txt');
+    writeFileSync(f, 'a');
+    A.c.addShared([f, d, join(d, 'missing')]);
+    expect(A.c.state().sharedPending).toBe(2);
+    expect(await A.c.takeSharedItems()).toEqual([{ kind: 'file', path: f }, { kind: 'dir', path: d }]);
+    expect(A.c.state().sharedPending).toBeUndefined();
+  });
 
   it('pausing receiving refuses files but keeps the device and its hub up', async () => {
     const H = await make('hub');

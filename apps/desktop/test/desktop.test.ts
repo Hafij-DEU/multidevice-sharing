@@ -2,7 +2,9 @@ import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { AUTOSTART_NAME, autostartFile, gnomeShortcutCommands, parseStrList, setAutostart, validBinding } from '../src/main/desktop.ts';
+import { execFileSync } from 'node:child_process';
+import { mkdirSync, statSync, writeFileSync } from 'node:fs';
+import { AUTOSTART_NAME, autostartFile, gnomeShortcutCommands, installNautilusScript, NAUTILUS_SCRIPT, parseStrList, sendArgs, setAutostart, validBinding } from '../src/main/desktop.ts';
 
 const tmps: string[] = [];
 afterEach(() => {
@@ -57,5 +59,36 @@ describe('GNOME shortcut', () => {
     expect(validBinding('<Primary><Alt>c')).toBe(true);
     expect(validBinding("c'; rm -rf ~")).toBe(false);
     expect(validBinding('')).toBe(false);
+  });
+});
+
+describe('Files right-click script', () => {
+  it('passes the selection to the app after --send, quoting a path with spaces and quotes', () => {
+    const d = mkdtempSync(join(tmpdir(), 'md-naut-'));
+    try {
+      const bin = join(d, "it's me.sh");
+      writeFileSync(bin, '#!/bin/sh\nprintf "%s|" "$@"\n');
+      execFileSync('chmod', ['+x', bin]);
+      expect(installNautilusScript(bin, join(d, 'nautilus', 'scripts'))).toBe(false); // no Files data folder: nothing written
+      mkdirSync(join(d, 'nautilus'));
+      expect(installNautilusScript(bin, join(d, 'nautilus', 'scripts'))).toBe(true);
+      const script = join(d, 'nautilus', 'scripts', NAUTILUS_SCRIPT);
+      expect(statSync(script).mode & 0o777).toBe(0o755);
+      expect(execFileSync(script, ['/a b.txt', '/c'], { encoding: 'utf8' })).toBe('--send|/a b.txt|/c|');
+    } finally {
+      rmSync(d, { recursive: true, force: true });
+    }
+  });
+
+  it('sendArgs keeps the absolute paths after --send that exist', () => {
+    const d = mkdtempSync(join(tmpdir(), 'md-send-'));
+    try {
+      const f = join(d, 'x.txt');
+      writeFileSync(f, 'x');
+      expect(sendArgs(['/usr/bin/meshdrop-desktop', '--send', f, 'relative.txt', join(d, 'missing')])).toEqual([f]);
+      expect(sendArgs(['/usr/bin/meshdrop-desktop', '--hidden'])).toEqual([]);
+    } finally {
+      rmSync(d, { recursive: true, force: true });
+    }
   });
 });

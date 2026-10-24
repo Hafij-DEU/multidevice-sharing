@@ -75,6 +75,11 @@ export function App() {
     open('More', 'Settings');
   }, [state?.platform, state?.keepAlive]);
 
+  // Files shared into MeshDrop (Android share menu, Files → Send with MeshDrop): show the Send page.
+  useEffect(() => {
+    if ((state?.sharedPending ?? 0) > 0) open('Send');
+  }, [state?.sharedPending]);
+
   // Android: an invite link opened the app: show the Mesh page with it in the join box.
   useEffect(() => {
     if (state?.joinLink) open('More', 'Mesh');

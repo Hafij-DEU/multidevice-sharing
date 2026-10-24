@@ -122,6 +122,20 @@ public class AndroidPlatform implements Platform {
         }
     }
 
+    @Override
+    public String thumbnail(String located) {
+        Uri u = sink == null ? null : sink.uriForLocated(located);
+        if (u == null) return null;
+        try {
+            android.graphics.Bitmap b = ctx.getContentResolver().loadThumbnail(u, new android.util.Size(192, 192), null);
+            java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
+            b.compress(android.graphics.Bitmap.CompressFormat.JPEG, 80, out);
+            return "data:image/jpeg;base64," + android.util.Base64.encodeToString(out.toByteArray(), android.util.Base64.NO_WRAP);
+        } catch (IOException | RuntimeException e) {
+            return null; // not an image or video, or gone
+        }
+    }
+
     /** ACTION_VIEW for a received file (its MediaStore item), or null. */
     Intent viewIntent(String located) {
         Uri u = sink == null ? null : sink.uriForLocated(located);

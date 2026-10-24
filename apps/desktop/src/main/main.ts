@@ -3,13 +3,17 @@
 // type-checked here); no navigation, no new windows.
 import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeImage, Notification, shell, Tray, type IpcMainInvokeEvent } from 'electron';
 import { execFile } from 'node:child_process';
+import { createHash } from 'node:crypto';
+import { existsSync, statSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
 import { configDir } from '@meshdrop/core/src/paths.ts';
 import type { EngineOptions } from '@meshdrop/core/src/engine.ts';
 import type { AppState, LinkCreateInput, ReachInput, ReceivedRecord, SendItemInput, Settings } from '../shared/api.ts';
 import { AppController, type Platform } from './controller.ts';
-import { autostartDir, gnomeShortcutCommands, parseStrList, READ_KEYBINDINGS, setAutostart, validBinding } from './desktop.ts';
+import { autostartDir, gnomeShortcutCommands, installNautilusScript, parseStrList, READ_KEYBINDINGS, sendArgs, setAutostart, validBinding } from './desktop.ts';
 import { HistoryStore } from './history.ts';
 import { SettingsStore, defaultSettings } from './settings.ts';
 
@@ -129,6 +133,26 @@ function createTray(): void {
   }
 }
 
+const IMAGE_EXT = /\.(png|jpe?g|webp|gif|bmp)$/i;
+const MAX_THUMB_SOURCE = 60 * 1024 * 1024;
+
+/**
+ * An image: scaled down here. Anything else (videos): the freedesktop thumbnail cache the file
+ * manager fills (~/.cache/thumbnails), else what the OS gives (macOS/Windows), else null.
+ */
+async function thumbnailOf(p: string): Promise<string | null> {
+  const small = (img: Electron.NativeImage) => (img.isEmpty() ? null : img.resize({ width: Math.min(192, img.getSize().width), quality: 'good' }).toDataURL());
+  if (IMAGE_EXT.test(p) && statSync(p).size <= MAX_THUMB_SOURCE) return small(nativeImage.createFromPath(p));
+  const md5 = createHash('md5').update(pathToFileURL(p).href).digest('hex');
+  const cache = join(process.env.XDG_CACHE_HOME || join(homedir(), '.cache'), 'thumbnails');
+  for (const size of ['large', 'normal', 'x-large']) {
+    const t = join(cache, size, `${md5}.png`);
+    if (existsSync(t)) return small(nativeImage.createFromPath(t));
+  }
+  if (process.platform === 'linux') return null;
+  return small(await nativeImage.createThumbnailFromPath(p, { width: 192, height: 192 }));
+}
+
 const platform: Platform = {
   notify(title, body, onClick) {
     if (!Notification.isSupported()) return;
@@ -143,6 +167,7 @@ const platform: Platform = {
     if (err) throw new Error(err);
   },
   revealPath: (p) => shell.showItemInFolder(p),
+  thumbnail: thumbnailOf,
 };
 
 // ---- IPC: argument checks -------------------------------------------------------------------------
@@ -172,7 +197,7 @@ const items = (x: unknown): SendItemInput[] => {
 };
 const SETTING_TYPES: Record<keyof Settings, 'string' | 'number' | 'boolean'> = {
   alias: 'string', inbox: 'string', port: 'number', discovery: 'boolean', autostart: 'boolean',
-  startHidden: 'boolean', closeToTray: 'boolean', clipboardReceive: 'boolean', notifications: 'boolean',
+  startHidden: 'boolean', closeToTray: 'boolean', clipboardReceive: 'boolean', clipboardSync: 'boolean', notifications: 'boolean',
   guestMinutes: 'number',
 };
 const settingsPatch = (x: unknown): Partial<Settings> => {
@@ -289,6 +314,9 @@ function wireIpc(): void {
   handle('reachSet', (_e, x) => ctl().reachSet(reachInput(x)));
   handle('openInbox', (_e) => ctl().openInbox());
   handle('reveal', (_e, p) => ctl().reveal(str(p)));
+  handle('takeSharedItems', (_e) => ctl().takeSharedItems());
+  handle('openFile', (_e, p) => ctl().openFile(str(p)));
+  handle('thumb', (_e, p) => ctl().thumb(str(p)));
   handle('registerClipboardShortcut', async (_e, b) => {
     const binding = str(b, 64);
     if (!validBinding(binding)) throw new Error('That is not a valid shortcut (example: <Primary><Alt>c).');
@@ -334,7 +362,11 @@ if (!app.requestSingleInstanceLock()) {
 } else {
   app.on('second-instance', (_e, argv) => {
     if (argv.includes('--send-clipboard')) showPicker();
-    else showMain();
+    else {
+      const files = sendArgs(argv);
+      if (files.length > 0) controller?.addShared(files);
+      showMain();
+    }
   });
 
   void app.whenReady().then(async () => {
@@ -356,6 +388,15 @@ if (!app.requestSingleInstanceLock()) {
     }
     rebuildTray();
     if (clip) showPicker();
+    const files = sendArgs(process.argv);
+    if (files.length > 0) controller?.addShared(files);
+    if (app.isPackaged && !TEST && process.platform === 'linux') {
+      try {
+        installNautilusScript(launchCommand());
+      } catch {
+        // no Files integration: everything else works
+      }
+    }
   });
 
   app.on('window-all-closed', () => {

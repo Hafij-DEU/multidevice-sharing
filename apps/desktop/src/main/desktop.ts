@@ -1,6 +1,6 @@
-// Linux desktop integration that needs no Electron: the autostart entry and the GNOME
-// custom keyboard shortcut for "send clipboard".
-import { mkdirSync, rmSync } from 'node:fs';
+// Linux desktop integration that needs no Electron: the autostart entry, the GNOME custom keyboard
+// shortcut for "send clipboard" and the Files (Nautilus) right-click script "Send with MeshDrop".
+import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { writeFileAtomic } from '@meshdrop/core/src/trust.ts';
@@ -77,3 +77,33 @@ export function gnomeShortcutCommands(binding: string, execPath: Exec, existing:
 }
 
 export const READ_KEYBINDINGS = ['gsettings', 'get', MEDIA_KEYS, 'custom-keybindings'];
+
+export const NAUTILUS_SCRIPT = 'Send with MeshDrop';
+
+export function nautilusScriptsDir(): string {
+  return join(process.env.XDG_DATA_HOME || join(homedir(), '.local', 'share'), 'nautilus', 'scripts');
+}
+
+/** Files → right-click → Scripts → Send with MeshDrop: hands the selection to the running app. */
+export function nautilusScript(execPath: Exec): string {
+  const sh = (s: string) => `'${s.replace(/'/g, `'\\''`)}'`;
+  return ['#!/bin/sh', '# Installed by MeshDrop: right-click files in Files, then Scripts → Send with MeshDrop.', `exec ${(typeof execPath === 'string' ? [execPath] : execPath).map(sh).join(' ')} --send "$@"`, ''].join('\n');
+}
+
+/** Writes the script when Files is in use here (its data folder exists) and it changed; returns whether it is there. */
+export function installNautilusScript(execPath: Exec, dir = nautilusScriptsDir()): boolean {
+  if (!existsSync(join(dir, '..'))) return false;
+  const file = join(dir, NAUTILUS_SCRIPT);
+  const body = nautilusScript(execPath);
+  if (existsSync(file) && readFileSync(file, 'utf8') === body) return true;
+  mkdirSync(dir, { recursive: true });
+  writeFileAtomic(file, body);
+  chmodSync(file, 0o755);
+  return true;
+}
+
+/** The files after `--send` in a command line (absolute paths that exist). */
+export function sendArgs(argv: string[]): string[] {
+  const i = argv.indexOf('--send');
+  return i < 0 ? [] : argv.slice(i + 1).filter((p) => p.startsWith('/') && existsSync(p));
+}

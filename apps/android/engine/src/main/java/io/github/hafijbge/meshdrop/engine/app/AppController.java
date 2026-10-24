@@ -59,6 +59,9 @@ public final class AppController {
         long startedAt;
         String tagKey;
         String sessionId;
+        long rateAt;
+        long rateSent;
+        double bytesPerSec = -1;
         final Map<Long, Long> done = new HashMap<>();
         final Map<Long, Long> sizes = new HashMap<>();
 
@@ -73,6 +76,7 @@ public final class AppController {
             m.put("sent", sent);
             m.put("status", status);
             if (error != null) m.put("error", error);
+            if (bytesPerSec >= 0) m.put("bytesPerSec", (long) bytesPerSec);
             m.put("startedAt", startedAt);
             return m;
         }
@@ -81,6 +85,17 @@ public final class AppController {
             long n = 0;
             for (long v : done.values()) n += v;
             sent = bytes > 0 ? Math.min(n, bytes) : n;
+            // Speed: bytes over windows of at least 500 ms, smoothed so the time left does not jump.
+            long now = System.currentTimeMillis();
+            if (rateAt == 0) {
+                rateAt = now;
+                rateSent = sent;
+            } else if (now - rateAt >= 500) {
+                double r = (sent - rateSent) * 1000.0 / (now - rateAt);
+                bytesPerSec = bytesPerSec < 0 ? r : 0.7 * bytesPerSec + 0.3 * r;
+                rateAt = now;
+                rateSent = sent;
+            }
         }
     }
 
@@ -105,6 +120,9 @@ public final class AppController {
     /** The guest link's QR code (the engine keeps the rest of the session). */
     private volatile String guestQr;
     private ScheduledFuture<?> pending;
+    /** Shared clipboard: the poll, and the last text seen (copied here or received), so nothing echoes back. */
+    private ScheduledFuture<?> clipTick;
+    private volatile String lastClip;
     private long lastEmit;
     private volatile boolean stopped;
 
@@ -128,6 +146,7 @@ public final class AppController {
     public synchronized void start() throws IOException {
         stopped = false;
         boot();
+        if (clipTick == null) clipTick = timer.scheduleWithFixedDelay(this::clipTick, 1, 1, TimeUnit.SECONDS);
     }
 
     public synchronized void stop() {
@@ -542,7 +561,10 @@ public final class AppController {
             // the files arrived; only the history entry is lost
         }
         // Clipboard text is only ever placed on the clipboard: never opened, run or interpreted.
-        if (clipboard && text != null && s.clipboardReceive) platform.writeClipboard(text);
+        if (clipboard && text != null && s.clipboardReceive) {
+            lastClip = text; // shared clipboard: do not send it straight back
+            platform.writeClipboard(text);
+        }
         if (!s.notifications) return;
         if (clipboard) {
             platform.notify("Clipboard", s.clipboardReceive ? "Copied text from " + alias : "Text from " + alias + " (see Inbox)", null);
@@ -652,6 +674,30 @@ public final class AppController {
         } finally {
             platform.joinHandled();
         }
+    }
+
+    /**
+     * Shared clipboard: newly copied text goes to every online trusted device, without rows. Android
+     * lets an app read the clipboard only while it is in front, so on the phone this works while
+     * MeshDrop is open (the clipboard tile and notification button work any time).
+     */
+    private void clipTick() {
+        Engine x = engine;
+        if (x == null || stopped) return;
+        String text;
+        try {
+            text = platform.readClipboard();
+        } catch (RuntimeException e) {
+            return;
+        }
+        if (text == null || text.isEmpty()) return; // Android: in the background this reads as empty
+        boolean first = lastClip == null;
+        if (text.equals(lastClip)) return;
+        lastClip = text;
+        if (first || !settings.get().clipboardSync || text.trim().isEmpty() || text.getBytes(StandardCharsets.UTF_8).length > 64 * 1024) return;
+        List<String> ids = new ArrayList<>();
+        for (EngineDevice d : x.devices()) if (d.trusted && !d.reach.equals("offline") && !d.role.equals("localsend")) ids.add(d.deviceId);
+        if (!ids.isEmpty()) x.sendClipboard(ids, text, null);
     }
 
     public void sendClipboard(Object targets) {
@@ -798,8 +844,11 @@ public final class AppController {
                 openInbox();
                 return null;
             case "reveal":
+            case "openFile":
                 reveal(str(a0));
                 return null;
+            case "thumb":
+                return platform.thumbnail(str(a0));
             case "join":
                 return join(str(a0));
             case "guestStart": {

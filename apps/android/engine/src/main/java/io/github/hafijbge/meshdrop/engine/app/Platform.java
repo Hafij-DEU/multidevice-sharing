@@ -25,4 +25,9 @@ public interface Platform {
 
     /** A join was attempted: a pending meshdrop://join link has been dealt with. */
     default void joinHandled() {}
+
+    /** A small preview (a data: URL) of a received image or video, or null. */
+    default String thumbnail(String ref) {
+        return null;
+    }
 }
