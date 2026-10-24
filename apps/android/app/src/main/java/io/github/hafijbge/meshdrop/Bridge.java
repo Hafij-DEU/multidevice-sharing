@@ -60,6 +60,12 @@ public final class Bridge {
         push("window.__mdResolve(" + id + "," + ok + "," + json + ")");
     }
 
+    /** window.close() from the page (the clipboard picker): finish the activity. */
+    @JavascriptInterface
+    public void close() {
+        if (trusted) activity.runOnUiThread(activity::finish);
+    }
+
     @JavascriptInterface
     @SuppressWarnings("unchecked")
     public void call(int id, String method, String argsJson) {

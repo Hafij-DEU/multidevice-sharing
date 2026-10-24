@@ -14,13 +14,10 @@ import io.github.hafijbge.meshdrop.engine.EngineConfig;
 import io.github.hafijbge.meshdrop.engine.app.AppController;
 import io.github.hafijbge.meshdrop.engine.app.Platform;
 import io.github.hafijbge.meshdrop.engine.identity.KeyVault;
-import io.github.hafijbge.meshdrop.engine.identity.PlainKeyVault;
-import io.github.hafijbge.meshdrop.engine.recv.DirectorySink;
 import io.github.hafijbge.meshdrop.engine.recv.InboxSink;
 import io.github.hafijbge.meshdrop.engine.send.PathSource;
 import io.github.hafijbge.meshdrop.engine.send.SendItem;
 import io.github.hafijbge.meshdrop.engine.send.Source;
-import java.io.File;
 import java.io.IOException;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -43,13 +40,15 @@ public class AndroidPlatform implements Platform {
         this.controller = c;
     }
 
+    private MediaStoreSink sink;
+
     KeyVault keyVault() {
-        return new PlainKeyVault();
+        return new KeystoreVault();
     }
 
     InboxSink inboxSink() {
-        File dir = ctx.getExternalFilesDir("inbox");
-        return new DirectorySink(dir != null ? dir : new File(ctx.getFilesDir(), "inbox"));
+        if (sink == null) sink = new MediaStoreSink(ctx);
+        return sink;
     }
 
     EngineConfig.MulticastHooks multicastHooks() {
@@ -70,12 +69,42 @@ public class AndroidPlatform implements Platform {
     }
 
     Source.Resolver resolver() {
-        return PathSource.RESOLVER;
+        return UriSource.resolver(ctx);
     }
+
+    private static final String RECEIVED = "received";
+    private int nextNote = 100;
 
     @Override
     public void notify(String title, String body, String openRef) {
-        // notifications arrive with the service (Task 10)
+        android.app.NotificationManager nm = ctx.getSystemService(android.app.NotificationManager.class);
+        if (nm.getNotificationChannel(RECEIVED) == null) {
+            nm.createNotificationChannel(new android.app.NotificationChannel(RECEIVED, "Received", android.app.NotificationManager.IMPORTANCE_DEFAULT));
+        }
+        Intent open = openRef != null ? viewIntent(openRef) : null;
+        if (open == null) open = new Intent(ctx, MainActivity.class);
+        android.app.PendingIntent pi = android.app.PendingIntent.getActivity(ctx, nextNote, open.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                android.app.PendingIntent.FLAG_IMMUTABLE);
+        android.app.Notification n = new android.app.Notification.Builder(ctx, RECEIVED)
+                .setSmallIcon(R.drawable.ic_notify)
+                .setContentTitle(title)
+                .setContentText(body)
+                .setContentIntent(pi)
+                .setAutoCancel(true)
+                .build();
+        try {
+            nm.notify(nextNote++, n);
+        } catch (SecurityException ignored) {
+            // notifications not allowed
+        }
+    }
+
+    /** ACTION_VIEW for a received file (its MediaStore item), or null. */
+    Intent viewIntent(String located) {
+        Uri u = sink == null ? null : sink.uriForLocated(located);
+        if (u == null) return null;
+        String type = ctx.getContentResolver().getType(u);
+        return new Intent(Intent.ACTION_VIEW).setDataAndType(u, type).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
     }
 
     @Override
@@ -94,13 +123,29 @@ public class AndroidPlatform implements Platform {
     }
 
     @Override
-    public void openInbox() {}
+    public void openInbox() {
+        // The system Downloads app (the MeshDrop folder is inside it).
+        Intent i = new Intent(android.app.DownloadManager.ACTION_VIEW_DOWNLOADS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        try {
+            ctx.startActivity(i);
+        } catch (RuntimeException ignored) {
+            // no downloads app
+        }
+    }
 
     @Override
-    public void reveal(String ref) {}
+    public void reveal(String ref) {
+        Intent i = viewIntent(ref);
+        if (i == null) throw new IllegalArgumentException("That file is no longer in Download/MeshDrop.");
+        ctx.startActivity(Intent.createChooser(i, null).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+    }
 
     @Override
     public SendItem item(String kind, String pathOrUri) throws IOException {
+        if (pathOrUri.startsWith("content://")) {
+            Uri u = Uri.parse(pathOrUri);
+            return kind.equals("dir") ? SendItem.dir(UriSource.tree(ctx, u)) : SendItem.file(new UriSource(ctx, u));
+        }
         Path p = java.nio.file.Paths.get(pathOrUri);
         return kind.equals("dir") ? SendItem.dir(PathSource.tree(p)) : SendItem.file(PathSource.file(p));
     }

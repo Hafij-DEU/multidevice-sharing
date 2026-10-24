@@ -46,4 +46,5 @@
     api[m] = call(m);
   }
   window.meshdrop = api;
+  window.close = () => window.MeshDropBridge.close();
 })();

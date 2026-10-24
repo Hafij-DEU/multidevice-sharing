@@ -24,6 +24,10 @@ public final class MainActivity extends Activity {
                 // the UI shows "Starting…" and retries through getState
             }
         }, "meshdrop-start").start();
+        MeshService.start(this);
+        if (android.os.Build.VERSION.SDK_INT >= 33 && checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(new String[] {android.Manifest.permission.POST_NOTIFICATIONS}, 7);
+        }
         pickers = new Pickers(this, core.platform);
         bridge = new Bridge(this, core, pickers);
         web = WebUi.create(this, bridge, null);
