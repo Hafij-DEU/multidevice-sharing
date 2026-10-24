@@ -335,6 +335,8 @@ public final class HubClient {
     private volatile State state = State.IDLE;
     private boolean stopped = true;
     private int attempt;
+    /** A connect pass (over all targets) is running on the link thread. */
+    private boolean connecting;
     private Link link;
     private Link trying;
     private Socket tryingSocket;
@@ -482,6 +484,35 @@ public final class HubClient {
         if (state != State.REVOKED) setState(State.IDLE);
     }
 
+    /**
+     * The network changed (Wi-Fi switch, Wi-Fi to mobile data): the current link may be half-open and
+     * reported old LAN addresses. Drops it and connects again at once, with the backoff reset.
+     */
+    public void relink() {
+        Link l;
+        Link t;
+        Socket ts;
+        boolean idle;
+        synchronized (this) {
+            if (stopped || state == State.REVOKED || state == State.REFUSED) return;
+            attempt = 0;
+            if (retry != null) {
+                retry.cancel(false);
+                retry = null;
+            }
+            l = link;
+            t = trying;
+            ts = tryingSocket;
+            idle = l == null && t == null && !connecting;
+        }
+        if (l != null) l.abort(); // offline() schedules the next attempt with the reset backoff
+        if (t != null) {
+            t.abort();
+            closeQuietly(ts);
+        }
+        if (idle) exec.execute(this::connect);
+    }
+
     /** Ends the link thread for good (the client cannot be started again). */
     public void shutdown() {
         stop();
@@ -515,16 +546,23 @@ public final class HubClient {
 
     private void connect() {
         synchronized (this) {
-            if (stopped || state == State.REVOKED) return;
+            if (stopped || state == State.REVOKED || link != null || connecting) return;
+            connecting = true;
         }
-        setState(State.CONNECTING);
-        for (Endpoint t : targets()) {
-            synchronized (this) {
-                if (stopped) return;
+        try {
+            setState(State.CONNECTING);
+            for (Endpoint t : targets()) {
+                synchronized (this) {
+                    if (stopped) return;
+                }
+                if (tryTarget(t)) return;
+                synchronized (this) {
+                    if (stopped || state == State.REVOKED || state == State.REFUSED) return;
+                }
             }
-            if (tryTarget(t)) return;
+        } finally {
             synchronized (this) {
-                if (stopped || state == State.REVOKED || state == State.REFUSED) return;
+                connecting = false;
             }
         }
         scheduleRetry();
@@ -680,6 +718,9 @@ public final class HubClient {
             if (w.get("directory") instanceof List) directory = parseDirectory((List<Object>) w.get("directory"));
             online(l);
             for (Object m : early) onMessage(l, m);
+            // The hub pushes the directory to everyone but the device that just linked: hand ours over
+            // too, so sends that this link's drop interrupted resume now.
+            if (w.get("directory") instanceof List) o.listener.onDirectory(directory);
             return true;
         } catch (IOException | RuntimeException e) {
             l.abort();

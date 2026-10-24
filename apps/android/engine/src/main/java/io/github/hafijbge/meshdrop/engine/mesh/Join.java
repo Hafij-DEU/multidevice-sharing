@@ -89,7 +89,7 @@ public final class Join {
         return new File(home, PENDING_FILE).exists();
     }
 
-    static void writeHubAddr(File home, String deviceId, Invite.Addr a) throws IOException {
+    public static void writeHubAddr(File home, String deviceId, Invite.Addr a) throws IOException {
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("deviceId", deviceId);
         m.put("host", a.host);

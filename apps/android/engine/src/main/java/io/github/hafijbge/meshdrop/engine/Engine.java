@@ -261,10 +261,7 @@ public final class Engine {
         if (mesh == null || hub != null || server == null) return;
         HubClient.Options ho = new HubClient.Options(identity, () -> mesh);
         ho.lanAddrs = cfg.lanAddrs != null ? cfg.lanAddrs : this::defaultLanAddrs;
-        ho.hubLan = () -> {
-            MembershipStore m = mesh;
-            return m == null ? null : Join.readHubAddr(cfg.home, m.list().hubId);
-        };
+        ho.hubLan = this::hubLan;
         ho.backoffMs = cfg.hubBackoffMs;
         ho.handler = (peer, method, path, contentType, body) -> {
             MeshServer s = server;
@@ -309,6 +306,28 @@ public final class Engine {
         HubClient h = new HubClient(ho);
         hub = h;
         h.start();
+    }
+
+    /**
+     * Where the hub is on the LAN: where discovery sees it now (remembered for next time), else the
+     * address remembered from the join or an earlier link.
+     */
+    private HubClient.LanAddr hubLan() {
+        MembershipStore m = mesh;
+        if (m == null) return null;
+        String hubId = m.list().hubId;
+        HubClient.LanAddr saved = Join.readHubAddr(cfg.home, hubId);
+        Discovery d = discovery;
+        Discovery.PeerInfo p = d == null ? null : d.peer(hubId);
+        if (p == null) return saved;
+        if (saved == null || !saved.host.equals(p.host) || saved.port != p.port) {
+            try {
+                Join.writeHubAddr(cfg.home, hubId, new io.github.hafijbge.meshdrop.engine.mesh.Invite.Addr(p.host, p.port));
+            } catch (IOException ignored) {
+                // remembered next time
+            }
+        }
+        return new HubClient.LanAddr(p.host, p.port);
     }
 
     private synchronized void stopHub() {
@@ -489,6 +508,10 @@ public final class Engine {
                 emit("discovery", "peer", m);
                 maybeAutoResume(p.deviceId);
                 execute(() -> maybePull(p));
+                MembershipStore ms = mesh;
+                HubClient h = hub;
+                // The hub showed up on the LAN (or moved): link to it there now instead of waiting out the backoff.
+                if (ms != null && h != null && p.deviceId.equals(ms.list().hubId) && h.state() != HubClient.State.ONLINE) h.relink();
             }
 
             @Override
@@ -547,6 +570,8 @@ public final class Engine {
         if (d == null || exec == null) return;
         if (cfg.discovery) d.restart(); // keeps manual peers
         execute(this::reprobeManual);
+        HubClient h = hub;
+        if (h != null) h.relink(); // the old link may be half-open and announced old addresses
     }
 
     private Discovery requireRunning() {
