@@ -15,17 +15,23 @@
 //   mesh-pending.json             a provisional join waiting for the hub to sign this device in
 //
 // Events: everything is emitted on the single 'event' channel as an EngineEvent.
-import { X509Certificate, createPublicKey, type KeyObject } from 'node:crypto';
+import { X509Certificate, createPublicKey, randomBytes, type KeyObject } from 'node:crypto';
 import { EventEmitter } from 'node:events';
 import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, statSync, unlinkSync, writeSync } from 'node:fs';
 import { lstat, readdir } from 'node:fs/promises';
+import type { Server as HttpServer } from 'node:http';
 import type { Server } from 'node:https';
 import { homedir, hostname, networkInterfaces } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { connect } from 'node:tls';
 import { createMeshHandler, type TrustSource } from './api/handler.ts';
 import { createMeshServer, type ReceiverEvent } from './api/server.ts';
 import { CHUNK_SIZE, chunkCount } from './chunk.ts';
+import QRCode from 'qrcode';
+import { GuestBook } from './guest/book.ts';
+import { GUEST_PAGE } from './guest/page.ts';
+import { createGuestServer, type SharedFile } from './guest/server.ts';
+import { GuestUploads, type GuestEvent, type GuestFile } from './guest/uploads.ts';
 import { HubClient } from './hub/client.ts';
 import { HeldStore } from './hub/held.ts';
 import { DEFAULT_INGRESS_PORT, HubServer, type DirectoryEntry, type LanAddr } from './hub/server.ts';
@@ -63,6 +69,12 @@ export type EngineEvent =
   | { source: 'sender'; type: 'progress'; deviceId: string; sessionId: string; fileId: number; sent: number; total: number; tag?: string }
   | ({ source: 'sender'; type: 'result'; tag?: string } & SendResult)
   | { source: 'discovery'; type: 'peer' | 'lost'; peer: PeerInfo }
+  /** LAN guests: an offer waiting for the owner, a finished upload, one file of it, a rejected offer, the session ended. */
+  | { source: 'guest'; type: 'offer'; id: string; files: GuestFile[]; text?: string }
+  | { source: 'guest'; type: 'received'; id: string; files: string[]; text?: string }
+  | { source: 'guest'; type: 'file'; id: string; path: string }
+  | { source: 'guest'; type: 'rejected'; id: string }
+  | { source: 'guest'; type: 'ended' }
   | {
       source: 'mesh';
       type: 'online' | 'offline' | 'membership' | 'directory' | 'revoked' | 'held-delivered' | 'held-failed' | 'joined';
@@ -75,6 +87,26 @@ export type EngineEvent =
       status?: number;
       error?: string;
     };
+
+export const DEFAULT_GUEST_PORT = 53320;
+/** How long a guest link works: the owner's choice within these bounds (plain HTTP: keep it short). */
+export const DEFAULT_GUEST_MINUTES = 60;
+export const MIN_GUEST_MINUTES = 5;
+export const MAX_GUEST_MINUTES = 24 * 60;
+
+/** The LAN guest session as the app shows it. */
+export interface GuestState {
+  active: boolean;
+  /** False when the guest server could not bind its port. */
+  available: boolean;
+  url?: string;
+  expiresAt?: number;
+  /** A browser has opened the link. */
+  claimed?: boolean;
+  shared: { id: string; name: string; size: number }[];
+  /** Offers waiting for the owner's answer. */
+  offers: { id: string; files: GuestFile[]; text?: string }[];
+}
 
 /** Where this device stands in its mesh. */
 export interface HubStatus {
@@ -144,6 +176,8 @@ export interface EngineOptions {
   hub?: { ingressPort?: number; heldQuotaBytes?: number; heldTtlMs?: number };
   /** Hub link reconnect backoff (default 1 s .. 60 s). */
   hubBackoffMs?: number[];
+  /** The LAN guest server (plain HTTP; default port 53320); false: no guest sessions. Only with serve. */
+  guest?: { port?: number } | false;
   /** This device's LAN addresses as reported to the hub and put in invites (default: all non-internal IPv4). */
   lanAddrs?: () => LanAddr[];
   /**
@@ -382,6 +416,9 @@ const DEVICE_TYPES: readonly string[] = ['desktop', 'mobile', 'headless'];
 
 interface Running {
   server: Server | null;
+  /** The LAN guest server and its port (null / 0: none). */
+  guest: HttpServer | null;
+  guestPort: number;
   discovery: Discovery;
   abort: AbortController;
   port: number;
@@ -471,6 +508,10 @@ export class Engine extends EventEmitter {
   private mesh: MembershipStore | null;
   private rootKey: KeyObject | null;
   private readonly invites = new InviteBook();
+  private readonly guestBook = new GuestBook();
+  private guestUploads: GuestUploads | null = null;
+  private guestShared: SharedFile[] = [];
+  private guestUrl: string | null = null;
   private lastInviteSecret = '';
   private joinHandler: ((peer: string, body: unknown) => Promise<{ status: number; body: object }>) | null = null;
   private readonly lastPull = new Map<string, number>();
@@ -598,7 +639,35 @@ export class Engine extends EventEmitter {
       ...(hub ? { hub } : {}), hubClient: () => this.running?.client ?? null,
     });
 
-    this.running = { server, discovery, abort: new AbortController(), port, hub, ingressPort, client: null, timers: [] };
+    // The guest server is optional: a taken port leaves guest sessions unavailable, never the receiver.
+    let guest: HttpServer | null = null;
+    let guestPort = 0;
+    if (server && this.opts.guest !== false) {
+      const g = createGuestServer({
+        book: this.guestBook,
+        uploads: () => this.guestUploads,
+        shared: () => this.guestShared,
+        alias: () => this.alias,
+        page: GUEST_PAGE,
+      });
+      const want = (this.opts.guest && this.opts.guest.port) ?? DEFAULT_GUEST_PORT;
+      try {
+        await new Promise<void>((resolve, reject) => {
+          g.once('error', reject);
+          g.listen(want, () => {
+            g.removeListener('error', reject);
+            resolve();
+          });
+        });
+        g.on('error', () => {});
+        guest = g;
+        guestPort = (g.address() as { port: number }).port;
+      } catch {
+        /* port in use: no guest sessions */
+      }
+    }
+
+    this.running = { server, guest, guestPort, discovery, abort: new AbortController(), port, hub, ingressPort, client: null, timers: [] };
     if (server) {
       if (this.mesh) this.startClient();
       const r = this.running;
@@ -662,6 +731,12 @@ export class Engine extends EventEmitter {
     for (const t of r.timers) clearInterval(t);
     await r.client?.stop();
     await r.hub?.close();
+    await this.endGuest(false);
+    if (r.guest) {
+      const closed = new Promise<void>((resolve) => r.guest!.close(() => resolve()));
+      r.guest.closeAllConnections();
+      await closed;
+    }
     r.discovery.stop();
     r.discovery.removeAllListeners('peer');
     r.discovery.removeAllListeners('lost');
@@ -1341,6 +1416,99 @@ export class Engine extends EventEmitter {
     this.lastInviteSecret = secret;
     this.running?.client?.registerInvite(invite);
     return { invite, uri: inviteUri(invite) };
+  }
+
+  // ---- LAN guests (M5a) -------------------------------------------------------------------------
+
+  /**
+   * Opens a guest session (ending any earlier one): a one-time link for a browser on the LAN, shown as
+   * a QR code. The guest can send to this device (after guestAccept) and download what guestShare offers.
+   */
+  async guestStart(opts: { minutes?: number } = {}): Promise<{ url: string; qrSvg: string; expiresAt: number }> {
+    const r = this.requireRunning();
+    if (!r.guest) throw new Error(`guest sessions are not available: port ${(this.opts.guest && this.opts.guest.port) ?? DEFAULT_GUEST_PORT} is in use`);
+    await this.endGuest(false);
+    const minutes = Math.min(MAX_GUEST_MINUTES, Math.max(MIN_GUEST_MINUTES, Math.round(opts.minutes ?? DEFAULT_GUEST_MINUTES)));
+    const { token, expiresAt } = this.guestBook.open(minutes * 60_000);
+    this.guestUploads = new GuestUploads(join(this.home, 'guest-partial'), this.inboxDir, (ev) => this.onGuest(ev));
+    const host = this.lanAddrs(r.port)[0]?.host ?? '127.0.0.1';
+    const url = `http://${host.includes(':') ? `[${host}]` : host}:${r.guestPort}/g/${token}`;
+    this.guestUrl = url;
+    return { url, qrSvg: await QRCode.toString(url, { type: 'svg', margin: 1 }), expiresAt };
+  }
+
+  /** Ends the guest session: the link stops working, unfinished uploads are deleted, shares are cleared. */
+  guestEnd(): Promise<void> {
+    return this.endGuest(true);
+  }
+
+  private async endGuest(announce: boolean): Promise<void> {
+    const had = this.guestBook.current() !== null || this.guestUploads !== null;
+    this.guestBook.end();
+    const u = this.guestUploads;
+    this.guestUploads = null;
+    this.guestShared = [];
+    this.guestUrl = null;
+    await u?.cancelAll();
+    if (announce && had) this.emitEvent({ source: 'guest', type: 'ended' });
+  }
+
+  private onGuest(ev: GuestEvent): void {
+    switch (ev.type) {
+      case 'guest-offer':
+        this.emitEvent({ source: 'guest', type: 'offer', id: ev.id, files: ev.files, ...(ev.text !== undefined ? { text: ev.text } : {}) });
+        break;
+      case 'guest-received':
+        this.emitEvent({ source: 'guest', type: 'received', id: ev.id, files: ev.files, ...(ev.text !== undefined ? { text: ev.text } : {}) });
+        break;
+      case 'guest-file':
+        this.emitEvent({ source: 'guest', type: 'file', id: ev.id, path: ev.path });
+        break;
+      case 'guest-rejected':
+        this.emitEvent({ source: 'guest', type: 'rejected', id: ev.id });
+        break;
+    }
+  }
+
+  /** Offers files (regular files only) to the guest; returns the new entries. */
+  async guestShare(paths: string[]): Promise<{ id: string; name: string; size: number }[]> {
+    if (!this.guestBook.current()) throw new Error('no guest session: start one first');
+    const added: SharedFile[] = [];
+    for (const p of paths) {
+      const st = statSync(p);
+      if (!st.isFile()) throw new Error(`not a file: ${p}`);
+      added.push({ id: randomBytes(9).toString('base64url'), name: basename(p), size: st.size, path: p });
+    }
+    this.guestShared = [...this.guestShared, ...added];
+    return added.map(({ id, name, size }) => ({ id, name, size }));
+  }
+
+  guestUnshare(id: string): void {
+    this.guestShared = this.guestShared.filter((f) => f.id !== id);
+  }
+
+  guestAccept(id: string): Promise<void> {
+    if (!this.guestUploads) throw new Error('no guest session');
+    return this.guestUploads.accept(id);
+  }
+
+  guestReject(id: string): Promise<void> {
+    if (!this.guestUploads) throw new Error('no guest session');
+    return this.guestUploads.reject(id);
+  }
+
+  guestState(): GuestState {
+    const cur = this.guestBook.current();
+    if (!cur || !this.guestUploads) return { active: false, available: !!this.running?.guest, shared: [], offers: [] };
+    return {
+      active: true,
+      available: true,
+      url: this.guestUrl ?? '',
+      expiresAt: cur.expiresAt,
+      claimed: cur.claimed,
+      shared: this.guestShared.map(({ id, name, size }) => ({ id, name, size })),
+      offers: this.guestUploads.pending(),
+    };
   }
 
   /** Redeems a QR invite: over the LAN if it has addresses, else (or if that fails) through the hub. */

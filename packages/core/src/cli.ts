@@ -8,7 +8,7 @@
 import { randomBytes } from 'node:crypto';
 import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { stat } from 'node:fs/promises';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { createInterface } from 'node:readline';
 import QRCode from 'qrcode';
 import { parseArgs } from 'node:util';
@@ -47,6 +47,9 @@ commands:
   invite                                print a single-use QR invite (valid 5 minutes)
   join <meshdrop://join?...> [--alias]  join a mesh with an invite
   members                               list the devices in this mesh
+  guest [--share <path>]... [--accept-all]
+                                        a guest QR link for a browser on this network: the guest sends
+                                        to this device (you accept each send) and downloads --share files
 
 options:
   --home DIR            config dir (default: $MESHDROP_HOME, $XDG_CONFIG_HOME/meshdrop, ~/.config/meshdrop)
@@ -57,6 +60,9 @@ options:
   --no-discovery        listen: no multicast announce/discovery
   --url URL             hub init: public wss:// URL of the hub (repeatable)
   --passphrase-file F   hub recovery-*: read the passphrase from F instead of the terminal
+  --share PATH          guest: a file the guest may download (repeatable)
+  --accept-all          guest: accept every send without asking
+  --minutes N           guest: how long the link works (5..1440, default 60)
   -h, --help            this help`;
 
 class UsageError extends Error {}
@@ -130,6 +136,9 @@ async function main(argv: string[]): Promise<number> {
       'no-discovery': { type: 'boolean' },
       url: { type: 'string', multiple: true },
       'passphrase-file': { type: 'string' },
+      share: { type: 'string', multiple: true },
+      'accept-all': { type: 'boolean' },
+      minutes: { type: 'string' },
       help: { type: 'boolean', short: 'h' },
     },
   });
@@ -179,6 +188,9 @@ async function main(argv: string[]): Promise<number> {
     case 'members':
       noArgs('members', args);
       return cmdMembers(base);
+    case 'guest':
+      noArgs('guest', args);
+      return cmdGuest(base, values.share ?? [], values['accept-all'] === true, values.minutes);
     default:
       throw new UsageError(`unknown command "${cmd}"`);
   }
@@ -624,6 +636,49 @@ async function cmdMembers(base: EngineOptions): Promise<number> {
     out(`${printable(m.alias).padEnd(20)} ${m.role.padEnd(6)} ${short(m.deviceId)}${me}`);
   }
   return 0;
+}
+
+// ---- LAN guests (M5a) -------------------------------------------------------------------------
+
+async function cmdGuest(base: EngineOptions, share: string[], acceptAll: boolean, minutesArg: string | undefined): Promise<number> {
+  const minutes = minutesArg === undefined ? undefined : Number(minutesArg);
+  if (minutes !== undefined && (!Number.isInteger(minutes) || minutes < 5 || minutes > 1440)) throw new UsageError(`invalid --minutes "${minutesArg}" (5..1440)`);
+  // Its own short-lived receiver (ephemeral port, no multicast) next to whatever else runs on this home.
+  const e = await Engine.create({ ...base, serve: true, port: 0, discovery: false });
+  await e.start();
+  const { promise, dispose } = onSignal(e);
+  try {
+    const g = await e.guestStart(minutes !== undefined ? { minutes } : {});
+    if (share.length > 0) await e.guestShare(share.map((p) => resolve(p)));
+    out(g.url);
+    out(await QRCode.toString(g.url, { type: 'terminal', small: true }));
+    out(`one browser, until ${new Date(g.expiresAt).toLocaleTimeString()}; Ctrl-C ends the session`);
+    const ask = process.stdin.isTTY && !acceptAll ? createInterface({ input: process.stdin, output: process.stderr, terminal: true }) : null;
+    let queue = Promise.resolve();
+    e.on('event', (ev: EngineEvent) => {
+      if (ev.source !== 'guest') return;
+      if (ev.type === 'offer') {
+        const what = [...ev.files.map((f) => `${printable(f.name)} (${f.size} B)`), ...(ev.text !== undefined ? ['a message'] : [])].join(', ');
+        queue = queue.then(async () => {
+          out(`guest  wants to send: ${what}`);
+          let yes = acceptAll;
+          if (ask) yes = /^y(es)?$/i.test((await new Promise<string>((r) => ask.question('accept? [y/N] ', r))).trim());
+          await (yes ? e.guestAccept(ev.id) : e.guestReject(ev.id)).catch(() => {});
+          out(yes ? 'guest  accepted' : 'guest  declined');
+        });
+      } else if (ev.type === 'received') {
+        for (const f of ev.files) out(`file   ${printable(f)}`);
+        if (ev.text !== undefined) out(`text   ${printable(ev.text)}`);
+      }
+    });
+    await promise;
+    ask?.close();
+    await e.guestEnd();
+    return 0;
+  } finally {
+    dispose();
+    await e.stop();
+  }
 }
 
 main(process.argv.slice(2)).then(
