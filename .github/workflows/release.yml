@@ -1,0 +1,101 @@
+name: Release
+
+# Builds the Ubuntu .deb, the signed Android APK and (best effort) the Windows installer for a v* tag,
+# and attaches them to a DRAFT release: the owner reviews and publishes it.
+# APK signing needs these repository secrets (the owner adds them once):
+#   MESHDROP_KEYSTORE_B64 (base64 of the .jks), MESHDROP_KS_PASS, MESHDROP_KEY_ALIAS, MESHDROP_KEY_PASS
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  deb:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: bash apps/desktop/scripts/build-deb.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: deb
+          path: apps/desktop/dist-deb/*.deb
+
+  apk:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: 8.11.1
+      - name: Signed release APK
+        env:
+          KS_B64: ${{ secrets.MESHDROP_KEYSTORE_B64 }}
+          MESHDROP_KS_PASS: ${{ secrets.MESHDROP_KS_PASS }}
+          MESHDROP_KEY_ALIAS: ${{ secrets.MESHDROP_KEY_ALIAS }}
+          MESHDROP_KEY_PASS: ${{ secrets.MESHDROP_KEY_PASS }}
+        working-directory: apps/android
+        run: |
+          if [ -z "$KS_B64" ]; then echo "::error::MESHDROP_KEYSTORE_B64 is not set: the APK must be signed with the owner's release key"; exit 1; fi
+          echo "$KS_B64" | base64 -d > "$RUNNER_TEMP/meshdrop.jks"
+          export MESHDROP_KS="$RUNNER_TEMP/meshdrop.jks"
+          gradle :app:lintRelease :app:assembleRelease
+          v=$(sed -n "s/.*versionName '\(.*\)'.*/\1/p" app/build.gradle)
+          mkdir -p dist-apk && cp app/build/outputs/apk/release/app-release.apk "dist-apk/MeshDrop-$v.apk"
+          rm -f "$RUNNER_TEMP/meshdrop.jks"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: apk
+          path: apps/android/dist-apk/*.apk
+
+  windows:
+    runs-on: windows-latest
+    continue-on-error: true # not a priority target yet
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @meshdrop/desktop build
+      - run: pnpm --filter @meshdrop/desktop exec electron-builder --win nsis --config electron-builder.yml --publish never
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: apps/desktop/dist/*.exe
+
+  draft:
+    needs: [deb, apk]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: out
+      - name: Draft release (the owner publishes it)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          find out -type f \( -name '*.deb' -o -name '*.apk' -o -name '*.exe' \) -exec sha256sum {} \; | sed 's# out/[^/]*/# #' > SHA256SUMS
+          gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --draft --title "MeshDrop ${GITHUB_REF_NAME#v}" --generate-notes \
+            $(find out -type f \( -name '*.deb' -o -name '*.apk' -o -name '*.exe' \)) SHA256SUMS

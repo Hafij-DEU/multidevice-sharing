@@ -17,7 +17,8 @@ esha() { $E shell sha256sum "'$1'" | cut -d' ' -f1; }
 until_ok() { local t=$1; shift; for _ in $(seq 1 "$t"); do if "$@"; then return 0; fi; sleep 1; done; return 1; }
 dlog() { $E shell cat "/sdcard/Android/data/$PKG/files/debug.log" 2>/dev/null; }
 
-~/.local/opt/gradle-8.11.1/bin/gradle --offline -q :app:assembleDebug
+# GRADLE overrides the build command (CI: plain "gradle"; here: the offline Gradle 8.11.1).
+${GRADLE:-$HOME/.local/opt/gradle-8.11.1/bin/gradle --offline} -q :app:assembleDebug
 $E uninstall $PKG >/dev/null 2>&1 || true   # fresh install: a release-signed build may be on the emulator
 $E install app/build/outputs/apk/debug/app-debug.apk >/dev/null
 $E shell pm grant $PKG android.permission.POST_NOTIFICATIONS 2>/dev/null || true

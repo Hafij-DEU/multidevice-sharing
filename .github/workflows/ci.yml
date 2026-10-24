@@ -44,6 +44,40 @@ jobs:
           path: apps/desktop/test-results
           if-no-files-found: ignore
 
+  android-emulator:
+    name: Android emulator e2e
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: 8.11.1
+      - name: Emulator e2e (PC <-> phone, resume, join from a meshdrop:// link)
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 34
+          target: google_apis
+          arch: x86_64
+          disable-animations: true
+          emulator-options: -no-window -no-audio -no-boot-anim -no-snapshot-save -camera-back none
+          script: cd apps/android && GRADLE=gradle bash scripts/emulator-e2e.sh
+
   android:
     name: Android engine + app
     runs-on: ubuntu-24.04

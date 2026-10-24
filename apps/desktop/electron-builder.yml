@@ -33,6 +33,15 @@ linux:
       Comment: Send files between your devices
       StartupWMClass: meshdrop
       Keywords: share;send;transfer;files;clipboard;
+win:
+  target: nsis
+  icon: build/icon.png
+  executableName: MeshDrop
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  artifactName: MeshDrop-Setup-${version}.exe
 deb:
   packageName: meshdrop
   artifactName: meshdrop_${version}_amd64.deb

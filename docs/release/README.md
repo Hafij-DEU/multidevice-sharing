@@ -1,0 +1,50 @@
+# Releasing MeshDrop
+
+These steps change things outside this repository. Do them yourself: nothing here does them for you.
+
+1. **Version.** Set it in `apps/desktop/package.json` (`version`) and `apps/android/app/build.gradle`
+   (`versionName` and a higher `versionCode`). Merge to `main`.
+2. **APK signing secrets** (once). Add these to the GitHub repository secrets:
+   - `MESHDROP_KEYSTORE_B64` = `base64 -w0 ~/.android/meshdrop-release.jks`;
+   - `MESHDROP_KS_PASS`, `MESHDROP_KEY_ALIAS`, `MESHDROP_KEY_PASS` from `~/.android/meshdrop-release.env`.
+
+   Every update must be signed with this same key.
+3. **Tag.** `git tag v0.2.0 && git push origin v0.2.0`. The Release workflow builds the .deb, the
+   signed APK and (best effort) the Windows installer, then creates a **draft** release. Check it, then
+   publish it.
+4. **App Hub (Ubuntu).** Add the entry below to `src/catalog.json` in Hafij-DEU/Application-hub and a
+   96 px icon `src/icons/meshdrop.png` (from `apps/desktop/build/icon.png`). Release App Hub as usual.
+5. **App Hub for Android.** Add the entry below to `catalog.json` in Hafij-DEU/app-hub-android, and a
+   `<queries><package android:name="io.github.hafijbge.meshdrop"/></queries>` entry in its manifest
+   (it has no QUERY_ALL_PACKAGES), plus an icon `icon_meshdrop`.
+
+## App Hub catalog entry (`src/catalog.json`)
+
+```json
+{
+  "id": "meshdrop",
+  "name": "MeshDrop",
+  "summary": "Send files between your PC and phones, on Wi-Fi or through your own hub",
+  "repo": "Hafij-DEU/multidevice-sharing",
+  "package": "meshdrop",
+  "desktop": "meshdrop.desktop"
+}
+```
+
+## App Hub for Android catalog entry (`catalog.json`)
+
+```json
+{
+  "id": "meshdrop",
+  "name": "MeshDrop",
+  "repo": "Hafij-DEU/multidevice-sharing",
+  "package": "io.github.hafijbge.meshdrop",
+  "icon": "icon_meshdrop"
+}
+```
+
+## Windows
+
+`electron-builder.yml` has an NSIS target (per-user install with a choosable folder). It is built in
+the Release workflow, but is not tested on Windows: the LAN discovery, file paths and the clipboard
+shortcut there need a real check first.
