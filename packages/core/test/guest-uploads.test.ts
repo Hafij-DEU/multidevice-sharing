@@ -97,3 +97,66 @@ describe('GuestUploads', () => {
     expect(readFileSync(join(inbox, 'x (1).txt'), 'utf8')).toBe('new');
   });
 });
+
+describe('GuestUploads review fixes', () => {
+  const slow = (chunks: string[], gate: Promise<void>) =>
+    Readable.from((async function* () {
+      yield Buffer.from(chunks[0]!);
+      await gate;
+      for (const c of chunks.slice(1)) yield Buffer.from(c);
+    })());
+
+  it('a reject during the last slice never lands the file', async () => {
+    const { u, inbox } = setup();
+    const { id } = u.offer({ files: [{ name: 'r.bin', size: 6 }] });
+    await u.accept(id);
+    let open!: () => void;
+    const gate = new Promise<void>((r) => (open = r));
+    const w = u.write(id, 0, 0, slow(['abc', 'def'], gate));
+    const rj = u.reject(id);
+    open();
+    expect(await code(w)).toEqual([410, 'rejected']);
+    await rj;
+    expect(existsSync(inbox) ? readdirSync(inbox) : []).toEqual([]);
+  });
+
+  it('files of an offer land only when the whole offer is complete', async () => {
+    const { u, inbox } = setup();
+    const { id } = u.offer({ files: [{ name: 'one.txt', size: 1 }, { name: 'two.txt', size: 1 }] });
+    await u.accept(id);
+    await u.write(id, 0, 0, body('1'));
+    expect(existsSync(inbox) ? readdirSync(inbox) : []).toEqual([]);
+    await u.reject(id);
+    expect(existsSync(inbox) ? readdirSync(inbox) : []).toEqual([]);
+  });
+
+  it('two offers finishing the same name at once keep both files', async () => {
+    for (let k = 0; k < 15; k++) {
+      const { u, inbox } = setup();
+      const a = u.offer({ files: [{ name: 'same.txt', size: 1 }] });
+      const b = u.offer({ files: [{ name: 'same.txt', size: 1 }] });
+      await u.accept(a.id);
+      await u.accept(b.id);
+      await Promise.all([u.write(a.id, 0, 0, body('a')), u.write(b.id, 0, 0, body('b'))]);
+      expect(readdirSync(inbox).sort()).toEqual(['same (1).txt', 'same.txt']);
+    }
+  });
+
+  it('refuses the inbox partial area, a file that is also a folder, and too many thumbnail bytes', async () => {
+    const { u } = setup();
+    expect(await code(() => u.offer({ files: [{ name: '.MeshDrop-Partial/x', size: 1 }] }))).toEqual([400, 'bad-offer']);
+    expect(await code(() => u.offer({ files: [{ name: 'a', size: 1 }, { name: 'a/b', size: 1 }] }))).toEqual([400, 'bad-offer']);
+    const thumb = 'data:image/png;base64,' + 'A'.repeat(40_000);
+    expect(await code(() => u.offer({ files: Array.from({ length: 30 }, (_, i) => ({ name: `f${i}`, size: 1, thumb })) }))).toEqual([400, 'bad-offer']);
+  });
+
+  it('a file that cannot land makes the offer failed, not done', async () => {
+    const { u, d, events } = setup();
+    writeFileSync(join(d, 'inbox'), 'not a folder');
+    const { id } = u.offer({ files: [{ name: 'x.txt', size: 1 }] });
+    await u.accept(id);
+    await code(u.write(id, 0, 0, body('x'))).catch(() => {});
+    expect(u.status(id).status).toBe('failed');
+    expect(events.some((e) => e.type === 'guest-failed')).toBe(true);
+  });
+});

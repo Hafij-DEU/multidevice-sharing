@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -67,6 +67,26 @@ describe('engine guest sessions', () => {
     near((await e.guestStart({ minutes: 15 })).expiresAt, 15);
     near((await e.guestStart({ minutes: 1 })).expiresAt, 5);
     near((await e.guestStart({ minutes: 100_000 })).expiresAt, 24 * 60);
+  });
+
+  it('ends by itself at expiry (deleting partial uploads) and clears leftovers at startup', async () => {
+    const { d, e, events } = await start();
+    const g = await e.guestStart({ ttlMs: 300 });
+    const token = g.url.split('/').pop()!;
+    const base = g.url.slice(0, g.url.indexOf('/g/'));
+    const cookie = ((await fetch(g.url)).headers.get('set-cookie') ?? '').split(';')[0]!;
+    const h = { 'x-guest-token': token, cookie };
+    const { id } = (await (await fetch(`${base}/g/api/offers`, { method: 'POST', headers: h, body: JSON.stringify({ files: [{ name: 'p.bin', size: 10 }] }) })).json()) as { id: string };
+    await e.guestAccept(id);
+    await fetch(`${base}/g/api/offers/${id}/0?offset=0`, { method: 'PUT', headers: h, body: 'abc' });
+    await new Promise((r) => setTimeout(r, 600));
+    expect(events.some((x) => x.source === 'guest' && x.type === 'ended')).toBe(true);
+    expect(e.guestState().active).toBe(false);
+    expect(existsSync(join(d, 'home', 'guest-partial', id))).toBe(false);
+    await e.stop();
+    mkdirSync(join(d, 'home', 'guest-partial', 'junk'), { recursive: true });
+    await e.start();
+    expect(existsSync(join(d, 'home', 'guest-partial'))).toBe(false);
   });
 
   it('a rejected offer stores nothing', async () => {

@@ -4,7 +4,7 @@
 // free name once complete. Reject or end: partial data is deleted and further writes get 410.
 import { randomBytes } from 'node:crypto';
 import * as fsp from 'node:fs/promises';
-import { basename, dirname, join } from 'node:path';
+import { join } from 'node:path';
 import type { Readable } from 'node:stream';
 import { safeRelPath, uniqueName } from '../sanitize.ts';
 
@@ -13,6 +13,10 @@ export const MAX_GUEST_TEXT = 64 * 1024;
 export const MAX_GUEST_THUMB = 48 * 1024;
 export const MAX_GUEST_SLICE = 4 * 1024 * 1024;
 export const MAX_GUEST_PENDING = 4;
+/** All thumbnails of one offer together (they travel in every app state update while pending). */
+export const MAX_GUEST_THUMBS_TOTAL = 1024 * 1024;
+const PARTIAL_DIR = '.meshdrop-partial';
+const NO_HARDLINK = new Set(['EPERM', 'ENOTSUP', 'EOPNOTSUPP', 'ENOSYS', 'EMLINK']);
 
 const THUMB_RE = /^data:image\/(png|jpeg|webp);base64,[A-Za-z0-9+/]*={0,2}$/;
 const TYPE_RE = /^[\x21-\x7e][\x20-\x7e]{0,127}$/;
@@ -37,17 +41,21 @@ export type GuestEvent =
   | { type: 'guest-offer'; id: string; files: GuestFile[]; text?: string }
   | { type: 'guest-file'; id: string; path: string }
   | { type: 'guest-received'; id: string; files: string[]; text?: string }
-  | { type: 'guest-rejected'; id: string };
+  | { type: 'guest-rejected'; id: string }
+  /** Accepted and uploaded, but the files could not be saved (disk full, a name clash with a file…). */
+  | { type: 'guest-failed'; id: string; error: string };
 
-export type GuestStatus = 'pending' | 'accepted' | 'rejected' | 'done';
+export type GuestStatus = 'pending' | 'accepted' | 'rejected' | 'done' | 'failed';
 
 interface Offer {
   id: string;
   status: GuestStatus;
   files: (GuestFile & { rel: string; received: number; path?: string })[];
   text?: string;
-  /** Serializes writes to one offer (one file at a time keeps offsets exact). */
+  /** Serializes everything that touches one offer: writes, accept, reject, landing the files. */
   lock: Promise<unknown>;
+  /** Landing the files has begun: a reject arriving now is too late. */
+  landing?: boolean;
 }
 
 const bad = (): never => {
@@ -88,6 +96,14 @@ function parseOffer(b: unknown): { files: Offer['files']; text?: string } {
     out.push(g);
   }
   if (out.length === 0 && text === undefined) bad();
+  // Never inside the mesh inbox's partial area; never one path both a file and a folder.
+  const files_ = new Set(out.map((f) => f.rel.toLowerCase()));
+  for (const f of out) {
+    const parts = f.rel.toLowerCase().split('/');
+    if (parts[0] === PARTIAL_DIR) bad();
+    for (let i = 1; i < parts.length; i++) if (files_.has(parts.slice(0, i).join('/'))) bad();
+  }
+  if (out.reduce((n, f) => n + (f.thumb?.length ?? 0), 0) > MAX_GUEST_THUMBS_TOTAL) bad();
   return text !== undefined ? { files: out, text } : { files: out };
 }
 
@@ -103,13 +119,50 @@ async function readSlice(body: Readable): Promise<Buffer> {
   return Buffer.concat(parts);
 }
 
-async function moveFile(from: string, to: string): Promise<void> {
-  try {
-    await fsp.rename(from, to);
-  } catch (e) {
-    if ((e as NodeJS.ErrnoException).code !== 'EXDEV') throw e;
-    await fsp.copyFile(from, to);
-    await fsp.rm(from, { force: true });
+const errCode = (e: unknown): string | undefined => (e as NodeJS.ErrnoException)?.code;
+
+/** Walks from `root` creating `parts`, refusing symlinks and non-directories on the way. */
+async function ensureDir(root: string, parts: string[]): Promise<string> {
+  await fsp.mkdir(root, { recursive: true });
+  let cur = root;
+  for (const part of parts) {
+    cur = join(cur, part);
+    try {
+      await fsp.mkdir(cur);
+    } catch (e) {
+      if (errCode(e) !== 'EEXIST') throw e;
+    }
+    const st = await fsp.lstat(cur);
+    if (!st.isDirectory()) throw new Error(`not a folder: ${cur}`);
+  }
+  return cur;
+}
+
+/** Moves `part` into `dir` under `base` or the next free "name (n)": never over an existing file. */
+async function land(part: string, dir: string, base: string): Promise<string> {
+  for (;;) {
+    const dest = join(dir, await uniqueName(dir, base));
+    try {
+      await fsp.link(part, dest); // atomic, never overwrites
+      await fsp.rm(part, { force: true });
+      return dest;
+    } catch (e) {
+      const c = errCode(e);
+      if (c === 'EEXIST') continue; // lost a race for this name: take the next
+      if (c === 'EXDEV') {
+        try {
+          await fsp.copyFile(part, dest, fsp.constants.COPYFILE_EXCL);
+        } catch (e2) {
+          if (errCode(e2) === 'EEXIST') continue;
+          throw e2;
+        }
+        await fsp.rm(part, { force: true });
+        return dest;
+      }
+      if (!NO_HARDLINK.has(c ?? '')) throw e;
+      await fsp.rename(part, dest); // no hard links here: tiny window, the name was just checked free
+      return dest;
+    }
   }
 }
 
@@ -164,20 +217,33 @@ export class GuestUploads {
     return { status: o.status, files: o.files.map((f) => ({ name: f.name, size: f.size, received: f.received })) };
   }
 
+  #locked<T>(o: Offer, fn: () => Promise<T>): Promise<T> {
+    const run = o.lock.then(fn);
+    o.lock = run.catch(() => {});
+    return run;
+  }
+
   async accept(id: string): Promise<void> {
     const o = this.#get(id);
     if (o.status !== 'pending') throw new GuestError(409, o.status);
     o.status = 'accepted';
-    await fsp.mkdir(join(this.partialDir, id), { recursive: true });
-    for (const [i, f] of o.files.entries()) if (f.size === 0) await this.#complete(o, i);
-    await this.#maybeDone(o);
+    for (const f of o.files) delete f.thumb; // answered: the preview is no longer needed
+    await this.#locked(o, async () => {
+      if (o.status !== 'accepted') return;
+      const dir = join(this.partialDir, o.id);
+      await fsp.mkdir(dir, { recursive: true });
+      for (const [i, f] of o.files.entries()) if (f.size === 0) await fsp.writeFile(join(dir, String(i)), Buffer.alloc(0));
+      await this.#maybeLand(o);
+    });
   }
 
   async reject(id: string): Promise<void> {
     const o = this.#get(id);
-    if (o.status === 'done' || o.status === 'rejected') return;
-    o.status = 'rejected';
-    await fsp.rm(join(this.partialDir, id), { recursive: true, force: true });
+    if (o.status !== 'pending' && o.status !== 'accepted') return;
+    if (o.landing) return; // every byte is in: the files land
+    o.status = 'rejected'; // at once: a write in flight stops at its next check
+    for (const f of o.files) delete f.thumb;
+    await this.#locked(o, () => fsp.rm(join(this.partialDir, id), { recursive: true, force: true }));
     this.#emit({ type: 'guest-rejected', id });
   }
 
@@ -189,9 +255,7 @@ export class GuestUploads {
   /** Writes one slice at `offset` (which must equal what is stored so far); returns the new total. */
   write(id: string, fileIdx: number, offset: number, body: Readable): Promise<number> {
     const o = this.#get(id);
-    const run = o.lock.then(() => this.#write(o, fileIdx, offset, body));
-    o.lock = run.catch(() => {});
-    return run;
+    return this.#locked(o, () => this.#write(o, fileIdx, offset, body));
   }
 
   async #write(o: Offer, fileIdx: number, offset: number, body: Readable): Promise<number> {
@@ -199,11 +263,11 @@ export class GuestUploads {
     if (o.status === 'pending') throw new GuestError(409, 'not-accepted');
     const f = Number.isSafeInteger(fileIdx) && fileIdx >= 0 ? o.files[fileIdx] : undefined;
     if (!f) throw new GuestError(404, 'not-found');
-    if (f.path !== undefined) return f.received; // complete already (a repeated last slice)
+    if (o.status !== 'accepted' || f.received === f.size) return f.received; // complete already (a repeated last slice)
     if (offset !== f.received) throw new GuestError(409, 'offset', { received: f.received });
     const data = await readSlice(body);
-    if (o.status !== 'accepted') throw new GuestError(410, 'rejected'); // rejected while reading
     if (f.received + data.length > f.size) throw new GuestError(400, 'too-large');
+    if (o.status !== 'accepted') throw new GuestError(410, 'rejected'); // rejected while reading
     const part = join(this.partialDir, o.id, String(fileIdx));
     const fh = await fsp.open(part, f.received === 0 ? 'w' : 'r+');
     try {
@@ -211,30 +275,46 @@ export class GuestUploads {
     } finally {
       await fh.close();
     }
+    if (o.status !== 'accepted') throw new GuestError(410, 'rejected');
     f.received += data.length;
-    if (f.received === f.size) {
-      await this.#complete(o, fileIdx);
-      await this.#maybeDone(o);
-    }
+    await this.#maybeLand(o);
     return f.received;
   }
 
-  async #complete(o: Offer, i: number): Promise<void> {
-    const f = o.files[i]!;
-    const dir = join(this.inboxRoot, dirname(f.rel));
-    await fsp.mkdir(dir, { recursive: true });
-    const name = await uniqueName(dir, basename(f.rel));
-    const dest = join(dir, name);
-    if (f.size === 0) await fsp.writeFile(dest, Buffer.alloc(0), { flag: 'wx' });
-    else await moveFile(join(this.partialDir, o.id, String(i)), dest);
-    f.path = dest;
-    this.#emit({ type: 'guest-file', id: o.id, path: dest });
-  }
-
-  async #maybeDone(o: Offer): Promise<void> {
-    if (o.status !== 'accepted' || o.files.some((f) => f.path === undefined)) return;
+  /** Every byte is in: move the files into the inbox together (nothing lands before that). */
+  async #maybeLand(o: Offer): Promise<void> {
+    if (o.status !== 'accepted' || o.files.some((f) => f.received !== f.size)) return;
+    o.landing = true;
+    const dir = join(this.partialDir, o.id);
+    const tops = new Map<string, string>(); // a folder's top name -> its free name in the inbox, for this offer
+    const landed: string[] = [];
+    try {
+      for (const [i, f] of o.files.entries()) {
+        const parts = f.rel.split('/');
+        const base = parts.pop()!;
+        if (parts.length > 0) {
+          let top = tops.get(parts[0]!);
+          if (top === undefined) {
+            top = await uniqueName(this.inboxRoot, parts[0]!).catch(() => parts[0]!);
+            tops.set(parts[0]!, top);
+          }
+          parts[0] = top;
+        }
+        const destDir = await ensureDir(this.inboxRoot, parts);
+        f.path = await land(join(dir, String(i)), destDir, base);
+        landed.push(f.path);
+        this.#emit({ type: 'guest-file', id: o.id, path: f.path });
+      }
+    } catch (e) {
+      // Do not leave half an offer behind: the guest is told it failed, the owner gets an event.
+      for (const p of landed) await fsp.rm(p, { force: true }).catch(() => {});
+      o.status = 'failed';
+      await fsp.rm(dir, { recursive: true, force: true });
+      this.#emit({ type: 'guest-failed', id: o.id, error: errCode(e) ?? (e as Error).message ?? 'error' });
+      return;
+    }
     o.status = 'done';
-    await fsp.rm(join(this.partialDir, o.id), { recursive: true, force: true });
+    await fsp.rm(dir, { recursive: true, force: true });
     this.#emit({ type: 'guest-received', id: o.id, files: o.files.map((f) => f.path!), ...(o.text !== undefined ? { text: o.text } : {}) });
   }
 }

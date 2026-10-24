@@ -356,6 +356,7 @@ export class AppController extends EventEmitter {
       const what = n > 0 ? `${n} file${n === 1 ? '' : 's'}${ev.text !== undefined ? ' and a message' : ''}` : 'a message';
       this.#platform.notify('A guest wants to send', `${what}: open MeshDrop to accept or decline.`);
     }
+    if (ev.type === 'failed' && s.notifications) this.#platform.notify('A guest send could not be saved', `The files were uploaded but could not be saved (${ev.error}).`);
     if (ev.type === 'received') {
       this.#history.addReceived({ at: Date.now(), from: 'guest', alias: 'Guest', files: [...ev.files], ...(ev.text !== undefined ? { text: ev.text } : {}) });
       const first = ev.files[0];
