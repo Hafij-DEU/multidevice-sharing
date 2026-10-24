@@ -60,7 +60,7 @@ public final class DebugCommands extends BroadcastReceiver {
     private static Uri toMediaStore(Context ctx, File f) throws Exception {
         ContentValues v = new ContentValues();
         v.put(MediaStore.MediaColumns.DISPLAY_NAME, f.getName());
-        v.put(MediaStore.MediaColumns.RELATIVE_PATH, "Download/MeshDrop-test/");
+        v.put(MediaStore.MediaColumns.RELATIVE_PATH, "Download/MeshDrop-test/" + System.currentTimeMillis() + "/"); // never an older run's name
         Uri u = ctx.getContentResolver().insert(MediaStore.Downloads.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY), v);
         try (InputStream in = new FileInputStream(f); OutputStream out = ctx.getContentResolver().openOutputStream(u, "w")) {
             byte[] b = new byte[1 << 20];
