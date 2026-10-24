@@ -1,0 +1,28 @@
+// The MeshDrop engine in plain Java (no Android imports), tested on the JVM against the protocol
+// vectors and the Node engine.
+plugins {
+    id 'java-library'
+}
+
+java {
+    sourceCompatibility = JavaVersion.VERSION_17
+    targetCompatibility = JavaVersion.VERSION_17
+}
+
+dependencies {
+    testImplementation 'junit:junit:4.13.2'
+}
+
+tasks.withType(JavaCompile).configureEach {
+    options.encoding = 'UTF-8'
+    options.compilerArgs += ['-Xlint:unchecked', '-Xlint:deprecation']
+}
+
+test {
+    maxHeapSize = '512m'
+    systemProperty 'meshdrop.repo', rootDir.parentFile.parentFile.path
+    testLogging {
+        events 'failed'
+        exceptionFormat 'full'
+    }
+}
