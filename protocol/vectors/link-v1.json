@@ -1,0 +1,27 @@
+{
+  "description": "Internet link v1. AES-256-GCM, nonce = u32be(file) || u64be(chunk), AAD = utf8(\"meshdrop-link-v1\") || 0x00 || utf8(linkId) || 0x00 || u32be(file) || u64be(chunk) || u8(last); sealed = ciphertext || tag. Manifest = file 0xffffffff chunk 0 last, JSON.stringify of the object below.",
+  "keyHex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+  "keyB64url": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
+  "linkId": "AAECAwQFBgcICQoLDA0ODw",
+  "chunk": {
+    "fileIdx": 0,
+    "chunkIdx": 0,
+    "last": true,
+    "plainHex": "68656c6c6f2c20696e7465726e6574206775657374",
+    "sealedHex": "66d9d9b2da00a3d466dccc477649e5b9b53633205c09081b7988df1c06a2d403f2d254f9e0"
+  },
+  "manifest": {
+    "value": {
+      "v": 1,
+      "files": [
+        {
+          "name": "hello.txt",
+          "size": 21,
+          "type": "text/plain"
+        }
+      ],
+      "text": "for you"
+    },
+    "sealedHex": "e2addced02b78285d15a7f7d3256e8842b7bc43fea9ffc3cbff485ab13cc4d2bea560ba002e8acfdbed9bb51794f086446ce82731fa2244774f4ea0d2bc2d1f21739ba5db573787275bae272c96a99dbbaf6ec38ef22964808d10b1863900bd673285a9f7d"
+  }
+}
