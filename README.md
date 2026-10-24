@@ -33,12 +33,14 @@ in `/usr/bin`.
 2. To link your devices through this PC: Mesh → **Create a mesh on this PC**, then **Invite a device** and
    scan the QR code with the phone app (or paste the link into another PC's Mesh page).
 3. Devices on the same network also show up under Nearby. You can add one by address
-   (`192.168.1.20:53318`) on both sides to pair it without a mesh.
+   (`192.168.1.20:53318`) on both sides to pair it without a mesh. Both screens then show the same
+   6-digit pairing code: pair only if they match (a different code means another device is in between).
 4. Devices: tick one or more devices (or **All devices**), drop files or folders, press **Send**. Received
    files land in `~/Downloads/MeshDrop`.
 
 Closing the window keeps MeshDrop running in the tray, so it keeps receiving. Settings has autostart at
-login and a GNOME keyboard shortcut (default Ctrl+Alt+C) that sends your clipboard.
+login and a GNOME keyboard shortcut (default Ctrl+Alt+C) that sends your clipboard. The shared clipboard
+carries text, copied images and copied files.
 
 ## Android
 
@@ -56,7 +58,7 @@ keep it, every update must be signed with it). Install it from the phone's file 
 2. Settings → "Keep MeshDrop alive": allow the battery exemption and notifications; on Xiaomi and Tecno
    phones also the Autostart steps.
 3. Pair with the PC: on Devices, "Add by address" with the PC's address (shown in MeshDrop on the PC),
-   and on the PC add the phone the same way.
+   and on the PC add the phone the same way. Check that both show the same pairing code.
 4. Send from Devices (Add files / Add folder / Text), from any app's Share menu, or send the clipboard
    with the notification's "Send clipboard" button or the quick-settings tile. Received files land in
    `Download/MeshDrop`.
