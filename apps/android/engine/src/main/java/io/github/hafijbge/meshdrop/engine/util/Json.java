@@ -177,7 +177,7 @@ public final class Json {
             if (s.charAt(i) == '0') {
                 i++;
             } else if (s.charAt(i) >= '1' && s.charAt(i) <= '9') {
-                while (i < s.length() && Character.isDigit(s.charAt(i))) i++;
+                while (i < s.length() && isDigit(s.charAt(i))) i++;
             } else {
                 throw err("bad number");
             }
@@ -186,7 +186,7 @@ public final class Json {
                 integer = false;
                 i++;
                 int d = i;
-                while (i < s.length() && Character.isDigit(s.charAt(i))) i++;
+                while (i < s.length() && isDigit(s.charAt(i))) i++;
                 if (i == d) throw err("bad fraction");
             }
             if (i < s.length() && (s.charAt(i) == 'e' || s.charAt(i) == 'E')) {
@@ -194,17 +194,26 @@ public final class Json {
                 i++;
                 if (i < s.length() && (s.charAt(i) == '+' || s.charAt(i) == '-')) i++;
                 int d = i;
-                while (i < s.length() && Character.isDigit(s.charAt(i))) i++;
+                while (i < s.length() && isDigit(s.charAt(i))) i++;
                 if (i == d) throw err("bad exponent");
             }
             String t = s.substring(start, i);
-            if (integer && t.length() <= 17) {
-                long v = Long.parseLong(t);
-                if (Math.abs(v) <= MAX_SAFE) return v;
+            try {
+                if (integer && t.length() <= 17) {
+                    long v = Long.parseLong(t);
+                    if (Math.abs(v) <= MAX_SAFE) return v;
+                }
+                double d = Double.parseDouble(t);
+                if (Double.isInfinite(d)) throw err("number out of range");
+                return d;
+            } catch (NumberFormatException e) {
+                throw err("bad number");
             }
-            double d = Double.parseDouble(t);
-            if (Double.isInfinite(d)) throw err("number out of range");
-            return d;
+        }
+
+        /** ASCII digits only (Character.isDigit also accepts other scripts' digits). */
+        private static boolean isDigit(char c) {
+            return c >= '0' && c <= '9';
         }
     }
 

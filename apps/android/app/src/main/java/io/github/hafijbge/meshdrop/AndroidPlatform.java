@@ -68,6 +68,29 @@ public class AndroidPlatform implements Platform {
         };
     }
 
+    /**
+     * While a transfer is active: a partial wake lock (the CPU keeps running with the screen off) and a
+     * high-performance Wi-Fi lock (the radio does not doze), released after the engine reports idle.
+     */
+    @SuppressWarnings("deprecation") // WIFI_MODE_FULL_HIGH_PERF: the only mode that holds with the screen off before API 34
+    EngineConfig.ActivityListener transferLocks() {
+        android.os.PowerManager pm = ctx.getSystemService(android.os.PowerManager.class);
+        android.os.PowerManager.WakeLock wake = pm.newWakeLock(android.os.PowerManager.PARTIAL_WAKE_LOCK, "meshdrop:transfer");
+        wake.setReferenceCounted(false);
+        WifiManager wifi = (WifiManager) ctx.getSystemService(Context.WIFI_SERVICE);
+        WifiManager.WifiLock wl = wifi.createWifiLock(WifiManager.WIFI_MODE_FULL_HIGH_PERF, "meshdrop:transfer");
+        wl.setReferenceCounted(false);
+        return busy -> {
+            if (busy) {
+                wake.acquire(6 * 60 * 60 * 1000L); // a safety cap; idle releases it much sooner
+                wl.acquire();
+            } else {
+                if (wake.isHeld()) wake.release();
+                if (wl.isHeld()) wl.release();
+            }
+        };
+    }
+
     Source.Resolver resolver() {
         return UriSource.resolver(ctx);
     }

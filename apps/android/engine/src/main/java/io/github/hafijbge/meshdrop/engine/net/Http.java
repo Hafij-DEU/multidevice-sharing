@@ -147,6 +147,7 @@ public final class Http {
             long n;
             try {
                 n = Long.parseLong((semi >= 0 ? line.substring(0, semi) : line).trim(), 16);
+                if (n > Integer.MAX_VALUE) throw new BodyTooLarge();
             } catch (NumberFormatException e) {
                 throw new BadRequest("bad chunk size");
             }
@@ -212,7 +213,13 @@ public final class Http {
         if (te != null && te.toLowerCase().contains("chunked")) {
             r.body = readChunked(in, maxBody);
         } else if (cl != null) {
-            long n = Long.parseLong(cl.trim());
+            long n;
+            try {
+                n = Long.parseLong(cl.trim());
+            } catch (NumberFormatException e) {
+                throw new IOException("bad content-length");
+            }
+            if (n < 0) throw new IOException("bad content-length");
             if (n > maxBody) throw new BodyTooLarge();
             r.body = readExactly(in, (int) n);
         } else {

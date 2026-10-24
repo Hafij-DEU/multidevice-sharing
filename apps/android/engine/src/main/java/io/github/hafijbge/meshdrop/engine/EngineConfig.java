@@ -30,6 +30,15 @@ public final class EngineConfig {
     public long partialMaxAgeMs = Inbox.PARTIAL_TTL_MS;
     public MulticastHooks multicastHooks;
     public Source.Resolver resolver = PathSource.RESOLVER;
+    /** How often manually paired peers that are not present are probed again (network blips, filtered multicast). */
+    public long manualReprobeMs = 60_000;
+    /** Called with true when a send or receive becomes active, false after `activityIdleMs` without any (Android: wake/Wi-Fi locks). */
+    public ActivityListener activity;
+    public long activityIdleMs = 60_000;
+
+    public interface ActivityListener {
+        void onBusy(boolean busy);
+    }
 
     public EngineConfig(File home, KeyVault vault, InboxSink sink) {
         this.home = home;

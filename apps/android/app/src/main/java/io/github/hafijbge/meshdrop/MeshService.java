@@ -59,6 +59,12 @@ public final class MeshService extends Service {
             public void onLost(Network network) {
                 if (core.started()) core.controller.networkChanged();
             }
+
+            @Override
+            public void onLinkPropertiesChanged(Network network, android.net.LinkProperties lp) {
+                // a new address on the same Wi-Fi: the announce sockets are bound to the old one
+                if (core.started()) core.controller.networkChanged();
+            }
         };
         cm.registerNetworkCallback(new NetworkRequest.Builder().addTransportType(NetworkCapabilities.TRANSPORT_WIFI).build(), netCallback);
     }

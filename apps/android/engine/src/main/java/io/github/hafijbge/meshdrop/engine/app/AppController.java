@@ -114,6 +114,10 @@ public final class AppController {
         stateListeners.add(l);
     }
 
+    public void removeStateListener(StateListener l) {
+        stateListeners.remove(l);
+    }
+
     // ---- lifecycle ------------------------------------------------------------------------------
 
     public synchronized void start() throws IOException {

@@ -48,4 +48,10 @@ public class AnnounceTest {
         String s = new String(Announce.encode(ID, "phone", "mobile", 4000), StandardCharsets.UTF_8);
         assertEquals("{\"v\":1,\"deviceId\":\"" + ID + "\",\"alias\":\"phone\",\"deviceType\":\"mobile\",\"port\":4000}", s);
     }
+
+    @Test
+    public void garbageNumbersNeverThrow() {
+        assertNull(parse("{\"v\":1.\u0663}"));
+        assertNull(parse("{\"v\":1,\"port\":5\u0663}"));
+    }
 }

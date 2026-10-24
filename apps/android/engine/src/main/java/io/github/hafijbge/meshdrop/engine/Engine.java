@@ -95,6 +95,12 @@ public final class Engine {
     private volatile Discovery discovery;
     private volatile ExecutorService exec;
     private volatile int port;
+    private volatile java.util.concurrent.ScheduledExecutorService ticker;
+    /** Transfer activity, for wake/Wi-Fi locks: active sends, the last send/receive event, and the reported state. */
+    private final Object act = new Object();
+    private int activeSends;
+    private long lastActivity;
+    private boolean busy;
 
     private Engine(EngineConfig cfg, Identity identity) throws IOException {
         this.cfg = cfg;
@@ -168,6 +174,7 @@ public final class Engine {
         so.deviceType = cfg.deviceType;
         so.accepting = () -> accepting;
         MeshServer s = new MeshServer(identity, trust, inbox, ev -> {
+            touch();
             Map<String, Object> d = new LinkedHashMap<>(ev);
             String type = (String) d.remove("type");
             emit("receiver", type, d);
@@ -187,6 +194,82 @@ public final class Engine {
             }
         });
         exec.execute(this::reprobeManual);
+        ticker = java.util.concurrent.Executors.newSingleThreadScheduledExecutor(r -> {
+            Thread t = new Thread(r, "meshdrop-ticker");
+            t.setDaemon(true);
+            return t;
+        });
+        // Manual peers come back by themselves after a blip (no multicast to announce them).
+        ticker.scheduleWithFixedDelay(() -> execute(this::reprobeManual), cfg.manualReprobeMs, cfg.manualReprobeMs, java.util.concurrent.TimeUnit.MILLISECONDS);
+        long tick = Math.max(50, cfg.activityIdleMs / 4);
+        ticker.scheduleWithFixedDelay(this::activityTick, tick, tick, java.util.concurrent.TimeUnit.MILLISECONDS);
+    }
+
+    /** Runs on the engine's executor unless it is stopping (never throws). */
+    private void execute(Runnable r) {
+        ExecutorService e = exec;
+        if (e == null) return;
+        try {
+            e.execute(() -> {
+                try {
+                    r.run();
+                } catch (RuntimeException ignored) {
+                    // a background task must never take the process down
+                }
+            });
+        } catch (java.util.concurrent.RejectedExecutionException ignored) {
+            // stopping
+        }
+    }
+
+    // ---- activity (wake locks) ---------------------------------------------------------------------
+
+    private void notifyBusy(boolean b) {
+        EngineConfig.ActivityListener l = cfg.activity;
+        if (l == null) return;
+        try {
+            l.onBusy(b);
+        } catch (RuntimeException ignored) {
+            // the platform's problem
+        }
+    }
+
+    /** A send or receive event happened. */
+    private void touch() {
+        boolean becameBusy = false;
+        synchronized (act) {
+            lastActivity = System.currentTimeMillis();
+            if (!busy) {
+                busy = true;
+                becameBusy = true;
+            }
+        }
+        if (becameBusy) notifyBusy(true);
+    }
+
+    private void sendStarted() {
+        synchronized (act) {
+            activeSends++;
+        }
+        touch();
+    }
+
+    private void sendEnded() {
+        synchronized (act) {
+            activeSends--;
+            lastActivity = System.currentTimeMillis();
+        }
+    }
+
+    private void activityTick() {
+        boolean becameIdle = false;
+        synchronized (act) {
+            if (busy && activeSends == 0 && System.currentTimeMillis() - lastActivity >= cfg.activityIdleMs) {
+                busy = false;
+                becameIdle = true;
+            }
+        }
+        if (becameIdle) notifyBusy(false);
     }
 
     private Discovery makeDiscovery() {
@@ -241,18 +324,24 @@ public final class Engine {
         ExecutorService e = exec;
         exec = null;
         if (e != null) e.shutdown();
+        java.util.concurrent.ScheduledExecutorService t = ticker;
+        ticker = null;
+        if (t != null) t.shutdownNow();
+        boolean wasBusy;
+        synchronized (act) {
+            wasBusy = busy;
+            busy = false;
+            activeSends = 0;
+        }
+        if (wasBusy) notifyBusy(false);
     }
 
     /** After a network change: re-bind discovery on the current interfaces, re-probe manual peers, re-check auto-resume. */
     public void restartNetworking() {
         Discovery d = discovery;
-        ExecutorService e = exec;
-        if (d == null || e == null) return;
-        if (cfg.discovery) {
-            d.stop();
-            d.start();
-        }
-        e.execute(this::reprobeManual);
+        if (d == null || exec == null) return;
+        if (cfg.discovery) d.restart(); // keeps manual peers
+        execute(this::reprobeManual);
     }
 
     private Discovery requireRunning() {
@@ -310,7 +399,7 @@ public final class Engine {
                 try {
                     Discovery.PeerInfo p = d.probe((String) m.get("host"), ((Long) m.get("port")).intValue(), REPROBE_TIMEOUT_MS);
                     maybeAutoResume(p.deviceId);
-                } catch (IOException ignored) {
+                } catch (IOException | RuntimeException ignored) {
                     // not reachable right now
                 }
             });
@@ -530,6 +619,7 @@ public final class Engine {
         Sender.Control control = new Sender.Control();
         controls.add(control);
         CompletableFuture<List<SendResult>> f = new CompletableFuture<>();
+        sendStarted();
         e.execute(() -> {
             try {
                 List<SendResult> out = new ArrayList<>();
@@ -559,6 +649,7 @@ public final class Engine {
                 f.completeExceptionally(x);
             } finally {
                 controls.remove(control);
+                sendEnded();
             }
         });
         return f;
@@ -574,17 +665,24 @@ public final class Engine {
         Sender.Control control = new Sender.Control();
         controls.add(control);
         CompletableFuture<List<SendResult>> f = new CompletableFuture<>();
-        exec.execute(() -> {
-            try {
-                List<SendResult> rs = outbox.resumeAll(identity, this::target, sendOptions(null, control));
-                for (SendResult r : rs) emitResult(r, null);
-                f.complete(rs);
-            } catch (Throwable x) {
-                f.completeExceptionally(x);
-            } finally {
-                controls.remove(control);
-            }
-        });
+        sendStarted();
+        try {
+            exec.execute(() -> {
+                try {
+                    List<SendResult> rs = outbox.resumeAll(identity, this::target, sendOptions(null, control));
+                    for (SendResult r : rs) emitResult(r, null);
+                    f.complete(rs);
+                } catch (Throwable x) {
+                    f.completeExceptionally(x);
+                } finally {
+                    controls.remove(control);
+                    sendEnded();
+                }
+            });
+        } catch (java.util.concurrent.RejectedExecutionException x) {
+            sendEnded();
+            throw new IllegalStateException("engine not started");
+        }
         return f;
     }
 
@@ -640,17 +738,27 @@ public final class Engine {
             autoResuming.remove(deviceId);
             return;
         }
-        e.execute(() -> {
+        try {
+            e.execute(() -> autoResumeLoop(deviceId));
+        } catch (java.util.concurrent.RejectedExecutionException x) {
+            autoResuming.remove(deviceId); // stopping
+        }
+    }
+
+    private void autoResumeLoop(String deviceId) {
+        {
             try {
                 boolean resumed;
                 do {
                     autoResuming.put(deviceId, false);
                     resumed = autoResume(deviceId);
                 } while (!resumed && Boolean.TRUE.equals(autoResuming.get(deviceId)) && server != null);
+            } catch (RuntimeException ignored) {
+                // never take the process down from a background resume
             } finally {
                 autoResuming.remove(deviceId);
             }
-        });
+        }
     }
 
     private boolean autoResume(String deviceId) {
@@ -667,6 +775,7 @@ public final class Engine {
         lastAutoResume.put(deviceId, System.currentTimeMillis());
         Sender.Control control = new Sender.Control();
         controls.add(control);
+        sendStarted();
         try {
             for (Outbox.Entry en : entries) {
                 SendResult r = outbox.resumeEntry(identity, en.sessionId, t, sendOptions(null, control));
@@ -674,6 +783,7 @@ public final class Engine {
             }
         } finally {
             controls.remove(control);
+            sendEnded();
         }
         return true;
     }

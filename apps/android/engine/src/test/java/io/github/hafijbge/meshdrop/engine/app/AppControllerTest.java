@@ -277,4 +277,19 @@ public class AppControllerTest {
         assertTrue(p.waitFor(30, java.util.concurrent.TimeUnit.SECONDS));
         assertEquals(new String(p.getInputStream().readAllBytes(), StandardCharsets.UTF_8), 0, p.exitValue());
     }
+
+    @Test
+    public void aRemovedStateListenerIsNoLongerCalled() throws Exception {
+        Node a = make("a");
+        AtomicInteger calls = new AtomicInteger();
+        AppController.StateListener l = json -> calls.incrementAndGet();
+        a.c.addStateListener(l);
+        a.c.refresh();
+        until(() -> calls.get() > 0, 5_000);
+        a.c.removeStateListener(l);
+        int n = calls.get();
+        a.c.refresh();
+        Thread.sleep(400);
+        assertEquals(n, calls.get());
+    }
 }

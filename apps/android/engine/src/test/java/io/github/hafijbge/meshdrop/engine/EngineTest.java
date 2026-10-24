@@ -153,4 +153,57 @@ public class EngineTest {
             // invalid prefix
         }
     }
+
+    @Test
+    public void aManualPeerComesBackAfterANetworkRestartWhileItWasDown() throws Exception {
+        File home = tmp.newFolder();
+        EngineConfig c = new EngineConfig(home, new PlainKeyVault(), new DirectorySink(new File(home, "inbox")));
+        c.port = 0;
+        c.discovery = true; // restartNetworking then really re-binds discovery
+        c.discoveryPort = 47000 + (int) (Math.random() * 900);
+        c.manualReprobeMs = 300;
+        Engine e = Engine.create(c);
+        e.start();
+        engines.add(e);
+        File pcHome = tmp.newFolder();
+        NodeListen pc = NodeListen.start(pcHome);
+        try {
+            pairBoth(e, pc);
+            int port = pc.port;
+            pc.kill();
+            e.restartNetworking();
+            pc = NodeListen.start(pcHome, port);
+            String id = pc.deviceId;
+            until(() -> e.devices().stream().anyMatch(d -> d.deviceId.equals(id) && d.reach.equals("lan")), 10_000);
+        } finally {
+            pc.close();
+        }
+    }
+
+    @Test
+    public void reportsWhenTransfersAreActiveForWakeLocks() throws Exception {
+        List<Boolean> busy = Collections.synchronizedList(new ArrayList<>());
+        File home = tmp.newFolder();
+        EngineConfig c = new EngineConfig(home, new PlainKeyVault(), new DirectorySink(new File(home, "inbox")));
+        c.port = 0;
+        c.discovery = false;
+        c.activityIdleMs = 300;
+        c.activity = busy::add;
+        Engine e = Engine.create(c);
+        e.start();
+        engines.add(e);
+        try (NodeListen pc = NodeListen.start(tmp.newFolder())) {
+            pairBoth(e, pc);
+            File f = new File(tmp.getRoot(), "w.bin");
+            Files.write(f.toPath(), new byte[1 << 20]);
+            e.send(List.of(pc.deviceId), List.of(SendItem.file(PathSource.file(f.toPath()))), null).get(60, TimeUnit.SECONDS);
+            assertEquals(Boolean.TRUE, busy.get(0));
+            until(() -> busy.size() >= 2 && !busy.get(busy.size() - 1), 5_000);
+            File g = new File(tmp.getRoot(), "in.txt");
+            Files.write(g.toPath(), "in".getBytes(StandardCharsets.UTF_8));
+            int before = busy.size();
+            assertEquals(0, Node.run(60, "send", e.identity().shortId(), g.getPath(), "--home", pc.home.getPath()).code);
+            until(() -> busy.size() > before && busy.subList(before, busy.size()).contains(Boolean.TRUE), 5_000);
+        }
+    }
 }

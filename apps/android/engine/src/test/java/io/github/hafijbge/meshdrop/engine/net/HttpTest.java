@@ -87,4 +87,40 @@ public class HttpTest {
             assertEquals("bad-json", ((Map<?, ?>) Json.parse(resp.text())).get("error"));
         }
     }
+
+    @Test
+    public void aSlowHeadIsCutAtTheHeadDeadlineEvenWhenEachByteIsOnTime() throws Exception {
+        MeshServer.Options o = new MeshServer.Options();
+        o.idleTimeoutMs = 400;
+        o.headDeadlineMs = 1000;
+        try (Peers.Receiver r = Peers.receiver(tmp.newFolder(), o)) {
+            SSLSocket s = Tls.connect(Tls.probeClient(), "127.0.0.1", r.port, 3000);
+            OutputStream out = s.getOutputStream();
+            long t0 = System.nanoTime();
+            boolean closed = false;
+            byte[] head = "GET /mesh/v1/info HTTP/1.1\r\nX-Slow: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".getBytes(StandardCharsets.US_ASCII);
+            for (byte b : head) {
+                try {
+                    out.write(b);
+                    out.flush();
+                } catch (java.io.IOException e) {
+                    closed = true;
+                    break;
+                }
+                Thread.sleep(150); // each byte well inside the 400 ms idle timeout
+                if ((System.nanoTime() - t0) / 1_000_000 > 4000) break;
+            }
+            long ms = (System.nanoTime() - t0) / 1_000_000;
+            if (!closed) {
+                s.setSoTimeout(2000);
+                try {
+                    closed = s.getInputStream().read() == -1;
+                } catch (java.io.IOException e) {
+                    closed = true;
+                }
+            }
+            assertTrue("the slow client was cut off", closed);
+            assertTrue("within the head deadline (" + ms + " ms)", ms < 3500);
+        }
+    }
 }

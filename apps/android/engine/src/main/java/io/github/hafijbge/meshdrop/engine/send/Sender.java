@@ -39,6 +39,8 @@ import javax.net.ssl.SSLSocket;
  */
 public final class Sender {
     private static final String PREFIX = "/mesh/v1/";
+    /** Largest reply accepted (as the Node sender): a finish for a big folder lists every landed path. */
+    private static final int MAX_REPLY = 16 << 20;
     public static final int CANCEL_TIMEOUT_MS = 3000;
     private static final Pattern CODE = Pattern.compile("^[a-z0-9-]{1,64}$");
     private static final Set<String> ACTIVE = ConcurrentHashMap.newKeySet();
@@ -221,7 +223,11 @@ public final class Sender {
             s.setSoTimeout(timeoutMs);
             Map<String, String> h = new LinkedHashMap<>();
             if (body != null) h.put("Content-Type", path.startsWith(PREFIX + "chunk/") ? "application/octet-stream" : "application/json");
-            return Http.request(s, method, path, h, body, 1 << 20);
+            try {
+                return Http.request(s, method, path, h, body, MAX_REPLY);
+            } catch (Http.BodyTooLarge e) {
+                throw new Protocol("reply too large"); // a malformed reply is permanent (protocol: Sender algorithm step 6)
+            }
         } finally {
             if (track != null) track.remove(s);
             closeQuietly(s);
@@ -317,14 +323,17 @@ public final class Sender {
             Hpke.Context ctx = Chunks.importCtx(entry.ctxExport);
             Map<Long, Source> sources = new HashMap<>();
             for (Outbox.SourceRec r : entry.sources) {
-                Source s;
+                // Any failure to look at a source (deleted, permission revoked) is a changed source, never a
+                // transient error: it cannot get better by retrying.
                 try {
-                    s = o.resolver.resolve(r.ref);
-                } catch (IOException e) {
+                    Source s = o.resolver.resolve(r.ref);
+                    if (s.size() != r.size || s.lastModified() != r.mtime) throw new SourceChanged(r.ref);
+                    sources.put(r.fileId, s);
+                } catch (SourceChanged e) {
+                    throw e;
+                } catch (IOException | RuntimeException e) {
                     throw new SourceChanged(r.ref);
                 }
-                if (s.size() != r.size || s.lastModified() != r.mtime) throw new SourceChanged(r.ref);
-                sources.put(r.fileId, s);
             }
             transfer(me, t, entry, ctx, sources, o, internal, sockets);
             if (o.outbox != null) o.outbox.remove(sid);
@@ -538,6 +547,16 @@ public final class Sender {
     }
 
     private static byte[] readChunk(Source s, Outbox.SourceRec r, long index) throws IOException {
+        try {
+            return readChunk0(s, r, index);
+        } catch (SourceChanged e) {
+            throw e;
+        } catch (IOException | RuntimeException e) {
+            throw new SourceChanged(r.ref); // deleted, unreadable or revoked mid-send
+        }
+    }
+
+    private static byte[] readChunk0(Source s, Outbox.SourceRec r, long index) throws IOException {
         if (s.size() != r.size || s.lastModified() != r.mtime) throw new SourceChanged(r.ref);
         long start = index * Chunks.CHUNK_SIZE;
         int len = (int) Math.min(Chunks.CHUNK_SIZE, r.size - start);

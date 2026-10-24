@@ -32,9 +32,11 @@ public final class Bridge {
         this.pickers = pickers;
     }
 
+    private final AppController.StateListener stateListener = json -> push("window.__mdState(" + Json.stringify(json) + ")");
+
     void attach(WebView w) {
         this.web = w;
-        core.controller.addStateListener(json -> push("window.__mdState(" + Json.stringify(json) + ")"));
+        core.controller.addStateListener(stateListener);
     }
 
     void pageOrigin(String url) {
@@ -42,6 +44,7 @@ public final class Bridge {
     }
 
     void destroy() {
+        core.controller.removeStateListener(stateListener); // the process outlives this window
         web = null;
         exec.shutdownNow();
     }

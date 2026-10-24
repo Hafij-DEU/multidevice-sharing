@@ -111,4 +111,11 @@ public class JsonTest {
         assertArrayEquals(b, Hex.parse("FBff0001"));
         assertThrows(IllegalArgumentException.class, () -> Hex.parse("abc"));
     }
+
+    @Test
+    public void nonAsciiDigitsAreRejectedAsJsonErrors() {
+        for (String bad : new String[] {"1.\u0663", "\u0663", "1e\u0663", "-\u0663", "1\u0663"}) {
+            assertThrows(bad, Json.JsonException.class, () -> Json.parse(bad));
+        }
+    }
 }

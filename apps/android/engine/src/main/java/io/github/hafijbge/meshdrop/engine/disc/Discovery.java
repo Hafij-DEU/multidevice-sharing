@@ -12,7 +12,6 @@ import java.net.InetSocketAddress;
 import java.net.MulticastSocket;
 import java.net.NetworkInterface;
 import java.net.SocketException;
-import java.net.StandardSocketOptions;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Enumeration;
@@ -167,7 +166,7 @@ public final class Discovery {
                     MulticastSocket s = new MulticastSocket(new InetSocketAddress(a.getValue(), 0));
                     s.setNetworkInterface(a.getKey());
                     s.setTimeToLive(1);
-                    s.setOption(StandardSocketOptions.IP_MULTICAST_LOOP, true);
+                    // multicast loopback is on by default (same-host peers hear us); setOption is API 33+
                     r.senders.add(s);
                 } catch (IOException e) {
                     // skip this interface
@@ -180,9 +179,9 @@ public final class Discovery {
             return th;
         });
         running = r;
-        if (opts.announce) r.timers.scheduleAtFixedRate(() -> announce(r), 0, opts.intervalMs, TimeUnit.MILLISECONDS);
+        if (opts.announce) r.timers.scheduleAtFixedRate(() -> safe(() -> announce(r)), 0, opts.intervalMs, TimeUnit.MILLISECONDS);
         long sweep = Math.min(1000, Math.max(25, opts.ttlMs / 4));
-        r.timers.scheduleAtFixedRate(this::sweep, sweep, sweep, TimeUnit.MILLISECONDS);
+        r.timers.scheduleAtFixedRate(() -> safe(this::sweep), sweep, sweep, TimeUnit.MILLISECONDS);
         if (r.recv != null) {
             MulticastSocket recv = r.recv;
             r.reader = new Thread(() -> readLoop(recv), "meshdrop-discovery-rx");
@@ -211,22 +210,39 @@ public final class Discovery {
             } catch (IOException e) {
                 return;
             }
-            Announce.Peer a = Announce.parse(p.getData(), p.getLength(), p.getAddress().getHostAddress());
-            if (a != null) observe(a, false);
+            try {
+                Announce.Peer a = Announce.parse(p.getData(), p.getLength(), p.getAddress().getHostAddress());
+                if (a != null) observe(a, false);
+            } catch (RuntimeException ignored) {
+                // a hostile packet must never take down the receiver
+            }
         }
     }
 
     /** Stops announcing and listening and forgets all peers (silently). Idempotent. */
     public synchronized void stop() {
+        closeSockets();
+        synchronized (table) {
+            table.clear();
+        }
+    }
+
+    /** After a network change: re-bind on the current interfaces; manual peers stay (they are exempt from expiry). */
+    public synchronized void restart() {
+        closeSockets();
+        synchronized (table) {
+            table.values().removeIf(p -> !p.manual);
+        }
+        start();
+    }
+
+    private void closeSockets() {
         Running r = running;
         running = null;
         if (r != null) {
             r.timers.shutdownNow();
             if (r.recv != null) r.recv.close();
             for (MulticastSocket s : r.senders) s.close();
-        }
-        synchronized (table) {
-            table.clear();
         }
     }
 
@@ -314,8 +330,16 @@ public final class Discovery {
      * Probes host:port with GET info (TLS 1.3, no client certificate, no pin). The device id is the
      * hash of the presented certificate; info must agree. The peer is added as a manual peer.
      */
-    @SuppressWarnings("unchecked")
     public PeerInfo probe(String host, int port, int timeoutMs) throws IOException {
+        try {
+            return probe0(host, port, timeoutMs);
+        } catch (RuntimeException e) {
+            throw new IOException("probe of " + host + ":" + port + " failed: " + e, e);
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    private PeerInfo probe0(String host, int port, int timeoutMs) throws IOException {
         if (port < 1 || port > 65535) throw new IOException("probe: invalid port " + port);
         SSLSocket s = Tls.connect(Tls.probeClient(), host, port, timeoutMs);
         String deviceId = Identity.deviceIdOf(Tls.peerCertDer(s));

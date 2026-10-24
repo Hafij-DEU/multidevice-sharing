@@ -47,6 +47,8 @@ public final class MeshServer {
     public static final class Options {
         public int port = 0;
         public int idleTimeoutMs = 30_000;
+        /** Absolute limit for the TLS handshake plus the request head (a slow drip of bytes cannot hold a slot). */
+        public int headDeadlineMs = 20_000;
         public int maxConnections = 64;
         public String alias = "MeshDrop";
         public String deviceType = "mobile";
@@ -88,6 +90,11 @@ public final class MeshServer {
     private final Map<String, Live> live = new ConcurrentHashMap<>();
     private final Map<String, Object> locks = new ConcurrentHashMap<>();
     private final Semaphore slots;
+    private static final java.util.concurrent.ScheduledExecutorService DEADLINES = Executors.newSingleThreadScheduledExecutor(r -> {
+        Thread t = new Thread(r, "meshdrop-deadlines");
+        t.setDaemon(true);
+        return t;
+    });
     private volatile SSLServerSocket server;
     private ExecutorService pool;
     private Thread acceptor;
@@ -156,6 +163,8 @@ public final class MeshServer {
                 pool.execute(() -> {
                     try {
                         serve((SSLSocket) c);
+                    } catch (Throwable t) {
+                        // never let one connection (even an OutOfMemoryError) take down the receiver process
                     } finally {
                         slots.release();
                         closeQuietly(c);
@@ -177,6 +186,10 @@ public final class MeshServer {
     }
 
     private void serve(SSLSocket sock) {
+        // The handshake plus the request head must finish within headDeadlineMs in total: a client that
+        // drips one byte per idle period would otherwise hold a connection slot indefinitely.
+        java.util.concurrent.ScheduledFuture<?> deadline = DEADLINES.schedule(() -> closeQuietly(sock), opts.headDeadlineMs,
+                java.util.concurrent.TimeUnit.MILLISECONDS);
         try {
             sock.setSoTimeout(opts.idleTimeoutMs);
             sock.startHandshake();
@@ -196,6 +209,7 @@ public final class MeshServer {
                 return;
             }
             if (req == null) return;
+            deadline.cancel(false);
             int[] status = new int[1];
             byte[] body;
             try {
@@ -243,6 +257,8 @@ public final class MeshServer {
             reply(out, status[0], body);
         } catch (IOException e) {
             // client gone or handshake failed
+        } finally {
+            deadline.cancel(false);
         }
     }
 

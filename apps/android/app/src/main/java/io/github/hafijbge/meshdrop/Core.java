@@ -35,6 +35,7 @@ public final class Core {
             c.discovery = s.discovery;
             c.multicastHooks = platform.multicastHooks();
             c.resolver = platform.resolver();
+            c.activity = platform.transferLocks();
             return Engine.create(c);
         });
         platform.attach(controller);
