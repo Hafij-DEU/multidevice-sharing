@@ -93,6 +93,16 @@ internet links point at it. From a terminal: `meshdrop hub reach detect`, `meshd
 `meshdrop hub reach cloudflare HOST`, `meshdrop hub reach port-forward NAME --token-file F [--manual]`,
 `meshdrop hub reach off` (applied by the running `meshdrop listen`).
 
+## Folder sync and photo backup
+
+**More → Sync** keeps one folder the same on your devices whenever they are on the same Wi-Fi. Use a folder made for this (the PC suggests `~/MeshDrop Sync`; on the phone you pick one), not your working folders. Tick the devices to sync with, on both devices.
+
+- Adds, edits and deletes travel both ways. A file that changed on both sides keeps both versions: the newer one keeps the name, the other becomes "name (conflict from <device> <time>)".
+- Replaced and deleted files stay 30 days in the folder's `.meshdrop-trash`.
+- Sync never goes through the hub: only on the LAN.
+
+**Photo backup** (Android, on the same page): new camera photos and videos go to your PC by themselves while both are on the same Wi-Fi. They land in `~/Pictures/MeshDrop Backup/<phone name>/` on the PC.
+
 ## Guests
 
 Let a friend send you files from their phone's browser, no app needed. On the PC, open Guests →

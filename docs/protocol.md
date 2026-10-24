@@ -618,6 +618,31 @@ protocol is always used.
 - **Sending:** `prepare-upload` with our info, then one `upload` per file token; `403` is reported as
   declined, `409` as busy.
 
+## Folder sync (M8a)
+
+LAN only: these routes exist on the TLS receiver, never on the relay. A device answers only the partners it ticked (others: `403 {"error":"not-a-sync-partner"}`).
+
+| Route | Answer |
+|---|---|
+| `GET /mesh/v1/sync/index` | `{v:1, files:[{rel, size, mtime, hash}]}` (sha256 hex; mtime in whole ms) |
+| `GET /mesh/v1/sync/file?rel=&hash=&offset=&len=` | Raw bytes, `len` at most 4 MiB; `409 changed` if the file no longer has `hash` |
+| `POST /mesh/v1/sync/poke` | `204`; the partner pulls soon |
+
+**Rounds are pull only.** Each side fetches the partner's index and decides each path against the base (the hash both last agreed on, kept per partner):
+
+- equal → agree;
+- only the partner changed → take it (download and verify the hash, or delete);
+- only we changed → keep;
+- both changed:
+  - a change beats a delete;
+  - between two changes, the newer mtime wins (tie: the larger device id), and only the losing side renames its copy to a conflict copy.
+
+Never synced: names starting `.meshdrop-`, `*.part`, `~$*`, `.~lock.*`, `.DS_Store`, `Thumbs.db`, `desktop.ini`; symlinks and special files.
+
+## Photo backup (M8b)
+
+A send whose manifest has `"backup": true` (after `clipboard` in canonical order) is filed by the receiver in its backup folder, `<backupDir>/<sender name>/`, under free names, instead of the inbox. Receivers that do not know the flag treat it as a normal send.
+
 ## Notes for other engines (M4 Android)
 
 Not part of the protocol; platform constraints found while specifying it.
