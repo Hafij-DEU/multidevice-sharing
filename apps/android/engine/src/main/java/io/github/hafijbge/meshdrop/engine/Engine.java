@@ -246,6 +246,7 @@ public final class Engine {
         ticker.scheduleWithFixedDelay(() -> execute(this::reprobeManual), cfg.manualReprobeMs, cfg.manualReprobeMs, java.util.concurrent.TimeUnit.MILLISECONDS);
         long tick = Math.max(50, cfg.activityIdleMs / 4);
         ticker.scheduleWithFixedDelay(this::activityTick, tick, tick, java.util.concurrent.TimeUnit.MILLISECONDS);
+        ticker.scheduleWithFixedDelay(() -> execute(this::finishPendingJoin), 0, PENDING_RETRY_MS, java.util.concurrent.TimeUnit.MILLISECONDS);
     }
 
     // ---- the hub link -------------------------------------------------------------------------
@@ -300,9 +301,9 @@ public final class Engine {
 
             @Override
             public void onHeld(String type, Map<String, Object> m) {
-                Map<String, Object> d = new LinkedHashMap<>(m);
-                d.remove("t");
-                emit("sender", type, d);
+                Map<String, Object> d = new LinkedHashMap<>();
+                for (String k : new String[] {"to", "sessionId", "files", "status", "error"}) if (m.get(k) != null) d.put(k, m.get(k));
+                emit("mesh", type, d);
             }
         };
         HubClient h = new HubClient(ho);
@@ -314,6 +315,44 @@ public final class Engine {
         HubClient h = hub;
         hub = null;
         if (h != null) h.shutdown();
+    }
+
+    /**
+     * Redeems a QR invite ("member", or "provisional": the inviter has the hub sign this device in
+     * later, and the engine finishes the join by itself once it has).
+     */
+    public String join(String uri, String alias) throws IOException {
+        if (mesh != null) throw new IOException("join: this device is already in a mesh");
+        String status = Join.join(identity, uri, alias, cfg.home, trust);
+        if (status.equals("member")) adoptMesh();
+        return status;
+    }
+
+    /** True while a provisional join waits for the hub to sign this device in. */
+    public boolean joinPending() {
+        return mesh == null && Join.pending(cfg.home);
+    }
+
+    private void adoptMesh() throws IOException {
+        MembershipStore m = MembershipStore.load(cfg.home);
+        if (m == null) return;
+        synchronized (this) {
+            mesh = m;
+            startHub();
+        }
+        Map<String, Object> d = new LinkedHashMap<>();
+        d.put("version", m.list().version);
+        emit("mesh", "joined", d);
+    }
+
+    private void finishPendingJoin() {
+        if (!joinPending() || server == null) return;
+        try {
+            Join.complete(identity, cfg.home);
+            adoptMesh();
+        } catch (IOException | RuntimeException ignored) {
+            // the hub has not signed us in yet, or the inviter is away: next time
+        }
     }
 
     /** This device was revoked: drop the mesh state (the identity stays) and tell the app once. */
@@ -328,6 +367,7 @@ public final class Engine {
     }
 
     private static final long PULL_INTERVAL_MS = 60_000;
+    private static final long PENDING_RETRY_MS = 10_000;
     private final Map<String, Long> lastPull = new ConcurrentHashMap<>();
 
     /**

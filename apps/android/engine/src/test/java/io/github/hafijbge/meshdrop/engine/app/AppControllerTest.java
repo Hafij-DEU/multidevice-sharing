@@ -265,6 +265,39 @@ public class AppControllerTest {
     }
 
     @Test
+    @SuppressWarnings("unchecked")
+    public void joinsAMeshFromAnInviteAndShowsItsMembers() throws Exception {
+        File hubHome = tmp.newFolder("hub");
+        io.github.hafijbge.meshdrop.engine.testutil.NodeMesh.hubInit(hubHome);
+        try (io.github.hafijbge.meshdrop.engine.testutil.NodeListen hub = io.github.hafijbge.meshdrop.engine.testutil.NodeListen.start(hubHome)) {
+            io.github.hafijbge.meshdrop.engine.testutil.Node.Result inv = io.github.hafijbge.meshdrop.engine.testutil.Node.run("invite", "--home", hubHome.getPath());
+            assertEquals(inv.out, 0, inv.code);
+            Node a = make("a");
+            assertEquals("none", ((Map<String, Object>) state(a.c).get("hub")).get("role"));
+            assertEquals("member", a.c.call("join", List.of(inv.out.split("\n")[0].trim())));
+            until(() -> Boolean.TRUE.equals(((Map<String, Object>) state(a.c).get("hub")).get("online")), 15_000);
+            Map<String, Object> st = state(a.c);
+            Map<String, Object> h = (Map<String, Object>) st.get("hub");
+            assertEquals("member", h.get("role"));
+            assertEquals(2L, h.get("members"));
+            List<Map<String, Object>> ms = list(st, "members");
+            assertEquals(2, ms.size());
+            boolean self = false;
+            boolean theHub = false;
+            for (Map<String, Object> m : ms) {
+                if (Boolean.TRUE.equals(m.get("self")) && "member".equals(m.get("role"))) self = true;
+                if (hub.deviceId.equals(m.get("deviceId")) && "hub".equals(m.get("role"))) theHub = true;
+            }
+            assertTrue(ms.toString(), self && theHub);
+            boolean listed = false;
+            for (Map<String, Object> d : list(st, "devices")) if (hub.deviceId.equals(d.get("deviceId")) && "hub".equals(d.get("role"))) listed = true;
+            assertTrue("the hub shows as a device", listed);
+            io.github.hafijbge.meshdrop.engine.testutil.Node.Result members = io.github.hafijbge.meshdrop.engine.testutil.Node.run("members", "--home", hubHome.getPath());
+            assertTrue(members.out, members.out.contains("a "));
+        }
+    }
+
+    @Test
     public void stateJsonParsesInNodeWithEveryAppStateKey() throws Exception {
         Node a = make("a");
         File f = new File(tmp.getRoot(), "state.json");

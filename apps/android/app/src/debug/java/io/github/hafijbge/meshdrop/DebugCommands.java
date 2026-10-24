@@ -19,7 +19,7 @@ import java.util.Map;
 
 /**
  * Debug builds only (src/debug): `adb shell am broadcast -n io.github.hafijbge.meshdrop/.DebugCommands
- * -a io.github.hafijbge.meshdrop.debug.PAIR|SEND|STATE …`. Results are appended to
+ * -a io.github.hafijbge.meshdrop.debug.PAIR|SEND|JOIN|STATE …`. Results are appended to
  * <external files>/debug.log, which the e2e script reads.
  */
 public final class DebugCommands extends BroadcastReceiver {
@@ -45,6 +45,11 @@ public final class DebugCommands extends BroadcastReceiver {
                     to.add(intent.getStringExtra("to"));
                     core.controller.send(to, items);
                     log(ctx, "sending " + u);
+                } else if (a.endsWith(".JOIN")) {
+                    // Confirms the join box as the user would: the link the app was opened with.
+                    Object link = core.controller.state().get("joinLink");
+                    if (link == null) throw new IllegalStateException("no meshdrop://join link pending");
+                    log(ctx, "join " + core.controller.join((String) link));
                 } else if (a.endsWith(".STATE")) {
                     log(ctx, core.controller.stateJson());
                 }

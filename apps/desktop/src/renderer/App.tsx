@@ -53,6 +53,11 @@ export function App() {
     setPage('Settings');
   }, [state?.platform, state?.keepAlive]);
 
+  // Android: an invite link opened the app: show the Mesh page with it in the join box.
+  useEffect(() => {
+    if (state?.joinLink) setPage('Mesh');
+  }, [state?.joinLink]);
+
   useEffect(() => {
     const off = window.meshdrop.onState(setState);
     const poll = () =>
@@ -67,7 +72,7 @@ export function App() {
     <div className="app">
       <nav className="sidebar" aria-label="Pages">
         <div className="brand">MeshDrop</div>
-        {PAGES.filter((p) => !(p === 'Mesh' && state?.platform === 'android')).map((p) => (
+        {PAGES.map((p) => (
           <button key={p} className={p === page ? 'nav active' : 'nav'} onClick={() => setPage(p)} aria-current={p === page ? 'page' : undefined}>
             {p}
           </button>

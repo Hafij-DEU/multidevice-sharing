@@ -52,6 +52,11 @@ public final class Join {
 
     /** Redeems `uri`: over the LAN if it has addresses, else (or if that fails) through the hub. */
     public static String join(Identity id, String uri, String alias, File home) throws IOException {
+        return join(id, uri, alias, home, new TrustStore(new File(home, "trust.json")));
+    }
+
+    /** As join(); `manual` is where a provisional join keeps trusting its inviter until the list arrives. */
+    public static String join(Identity id, String uri, String alias, File home, TrustStore manual) throws IOException {
         if (MembershipStore.load(home) != null) throw new JoinError("this device is already in a mesh");
         Invite inv;
         try {
@@ -61,7 +66,7 @@ public final class Join {
         }
         try {
             if (inv.lan.isEmpty()) throw new JoinError("no LAN address");
-            String status = viaLan(id, inv, alias, home);
+            String status = viaLan(id, inv, alias, home, manual);
             if (status.equals("member")) {
                 MembershipStore ms = MembershipStore.load(home);
                 // The inviter answered at this address; if it is the hub, remember where it lives.
@@ -147,7 +152,7 @@ public final class Join {
     }
 
     /** Redeems over the LAN: "member", or "provisional" (call complete() once the hub has signed it in). */
-    static String viaLan(Identity id, Invite inv, String alias, File home) throws IOException {
+    static String viaLan(Identity id, Invite inv, String alias, File home, TrustStore manual) throws IOException {
         Map<String, Object> req = new LinkedHashMap<>();
         req.put("deviceId", id.deviceId());
         req.put("alias", alias);
@@ -187,7 +192,7 @@ public final class Join {
                     throw new JoinError("bad reply");
                 }
                 // The inviter is the device we pinned by id; keep trusting it until the mesh list arrives.
-                new TrustStore(new File(home, "trust.json")).add(inv.inviter, "inviter", TrustStore.pem(inviterKey));
+                manual.add(inv.inviter, "inviter", TrustStore.pem(inviterKey));
                 Map<String, Object> p = new LinkedHashMap<>();
                 p.put("anchorPem", j.get("anchorPem"));
                 p.put("mesh", inv.mesh);

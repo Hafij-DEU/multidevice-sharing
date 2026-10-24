@@ -4,6 +4,9 @@ import io.github.hafijbge.meshdrop.engine.Engine;
 import io.github.hafijbge.meshdrop.engine.EngineDevice;
 import io.github.hafijbge.meshdrop.engine.EngineEvent;
 import io.github.hafijbge.meshdrop.engine.EngineListener;
+import io.github.hafijbge.meshdrop.engine.hub.HubClient;
+import io.github.hafijbge.meshdrop.engine.mesh.Membership;
+import io.github.hafijbge.meshdrop.engine.mesh.MembershipStore;
 import io.github.hafijbge.meshdrop.engine.proto.Chunks;
 import io.github.hafijbge.meshdrop.engine.proto.Manifest;
 import io.github.hafijbge.meshdrop.engine.send.SendItem;
@@ -33,7 +36,7 @@ import java.util.concurrent.TimeUnit;
 public final class AppController {
     private static final long STATE_INTERVAL_MS = 100;
     private static final int MAX_TRANSFERS = 100;
-    private static final String NO_MESH = "Mesh features are not available on Android yet (coming with the next update).";
+    private static final String NO_MESH = "Creating or managing a mesh is not available on Android: do it on the PC. This phone can join a mesh with an invite.";
 
     public interface EngineFactory {
         Engine create(Settings s) throws IOException;
@@ -195,11 +198,31 @@ public final class AppController {
         m.put("self", self);
         m.put("mode", "serving");
         Map<String, Object> hub = new LinkedHashMap<>();
-        hub.put("role", "none");
-        hub.put("online", false);
-        hub.put("version", 0L);
-        hub.put("members", 0L);
-        hub.put("urls", new ArrayList<Object>());
+        List<Object> members = new ArrayList<>();
+        MembershipStore mesh = x.mesh();
+        if (mesh != null) {
+            Membership.ListView l = mesh.list();
+            boolean isHub = l.hubId.equals(x.identity().deviceId());
+            hub.put("role", isHub ? "hub" : "member");
+            hub.put("online", x.hubState() == HubClient.State.ONLINE);
+            hub.put("version", l.version);
+            hub.put("members", (long) l.members.size());
+            hub.put("urls", new ArrayList<Object>(l.urls));
+            for (Membership.Member mm : l.members) {
+                Map<String, Object> o = new LinkedHashMap<>();
+                o.put("deviceId", mm.deviceId);
+                o.put("alias", mm.alias);
+                o.put("role", mm.role);
+                o.put("self", mm.deviceId.equals(x.identity().deviceId()));
+                members.add(o);
+            }
+        } else {
+            hub.put("role", x.joinPending() ? "provisional" : "none");
+            hub.put("online", false);
+            hub.put("version", 0L);
+            hub.put("members", 0L);
+            hub.put("urls", new ArrayList<Object>());
+        }
         hub.put("ingressPort", 0L);
         m.put("hub", hub);
         List<Object> devices = new ArrayList<>();
@@ -227,7 +250,7 @@ public final class AppController {
         m.put("settings", s.toMap());
         m.put("receiving", x.receiving() && error == null);
         if (error != null) m.put("error", error);
-        m.put("members", new ArrayList<Object>());
+        m.put("members", members);
         platform.decorate(m);
         return m;
     }
@@ -308,10 +331,21 @@ public final class AppController {
         try {
             if (ev.source.equals("sender")) onSender(ev);
             else if (ev.source.equals("receiver")) onReceiver(ev);
+            else if (ev.source.equals("mesh")) onMesh(ev);
         } catch (RuntimeException ignored) {
             // never let a bookkeeping error break the engine thread
         }
         changed();
+    }
+
+    private void onMesh(EngineEvent ev) {
+        if (ev.type.equals("held-delivered") || ev.type.equals("held-failed")) refreshOutbox();
+        if (!settings.get().notifications) return;
+        Object to = ev.data.get("to");
+        String who = to instanceof String ? aliasOf((String) to) : "a device";
+        if (ev.type.equals("held-delivered")) platform.notify("Delivered", "The hub delivered your files to " + who + ".", null);
+        else if (ev.type.equals("held-failed")) platform.notify("Delivery failed", "The hub could not deliver your files to " + who + (ev.data.get("error") != null ? " (" + ev.data.get("error") + ")" : "") + ".", null);
+        else if (ev.type.equals("revoked")) platform.notify("Removed from the mesh", "The hub removed this device from the mesh.", null);
     }
 
     /** The outgoing row of an event: by the send()'s tag, else by session (a resume gets a row on its first progress). */
@@ -547,6 +581,17 @@ public final class AppController {
         });
     }
 
+    /** Redeems a QR invite with this phone's alias: "member" or "provisional". */
+    public String join(String uri) throws IOException {
+        try {
+            String r = e().join(uri.trim(), settings.get().alias);
+            changed();
+            return r;
+        } finally {
+            platform.joinHandled();
+        }
+    }
+
     public void sendClipboard(Object targets) {
         String text = platform.readClipboard();
         if (text == null || text.isEmpty()) throw new IllegalArgumentException("The clipboard is empty.");
@@ -693,10 +738,11 @@ public final class AppController {
             case "reveal":
                 reveal(str(a0));
                 return null;
+            case "join":
+                return join(str(a0));
             case "hubInit":
             case "setHubUrls":
             case "createInvite":
-            case "join":
             case "revoke":
             case "exportRecovery":
             case "importRecovery":

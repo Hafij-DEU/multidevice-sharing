@@ -56,7 +56,14 @@ function HubUrls({ urls, run }: { urls: string[]; run: Run }) {
 
 export function Mesh({ state, run }: { state: AppState; run: Run }) {
   const [invite, setInvite] = useState<Invite | null>(null);
-  const [uri, setUri] = useState('');
+  const [uri, setUri] = useState(state.joinLink ?? '');
+  // The phone only joins: creating, inviting, revoking and recovery stay on the PC (the hub).
+  const android = state.platform === 'android';
+  const [link, setLink] = useState(state.joinLink);
+  if (state.joinLink !== link) {
+    setLink(state.joinLink);
+    if (state.joinLink) setUri(state.joinLink);
+  }
   const [revoking, setRevoking] = useState<{ deviceId: string; alias: string } | null>(null);
   const hub = state.hub;
   const isHub = hub.role === 'hub';
@@ -69,12 +76,18 @@ export function Mesh({ state, run }: { state: AppState; run: Run }) {
     return (
       <section>
         <p className="lead">Not in a mesh</p>
-        <p className="muted">A mesh links your devices through this PC so they can reach each other from anywhere, not only on this network.</p>
-        <div className="row">
-          <button className="primary" onClick={() => void run(() => window.meshdrop.hubInit([]), 'Mesh created: this PC is the hub')}>
-            Create a mesh on this PC (make it the hub)
-          </button>
-        </div>
+        {android ? (
+          <p className="muted">A mesh links this phone to your devices through your PC, so they reach each other from anywhere. On the PC, open Mesh → Invite a device, then scan the QR code with this phone&apos;s camera or paste the invite here.</p>
+        ) : (
+          <>
+            <p className="muted">A mesh links your devices through this PC so they can reach each other from anywhere, not only on this network.</p>
+            <div className="row">
+              <button className="primary" onClick={() => void run(() => window.meshdrop.hubInit([]), 'Mesh created: this PC is the hub')}>
+                Create a mesh on this PC (make it the hub)
+              </button>
+            </div>
+          </>
+        )}
         <h2>Join with an invite</h2>
         <div className="row">
           <input aria-label="Invite to join" className="grow" placeholder="meshdrop://join?…" value={uri} onChange={(e) => setUri(e.target.value)} />
@@ -91,9 +104,13 @@ export function Mesh({ state, run }: { state: AppState; run: Run }) {
             Join
           </button>
         </div>
-        <h2>Restore a mesh</h2>
-        <p className="muted">Lost the hub PC? Import its recovery file here to make this PC the new hub.</p>
-        <Recovery mode="import" run={run} />
+        {!android && (
+          <>
+            <h2>Restore a mesh</h2>
+            <p className="muted">Lost the hub PC? Import its recovery file here to make this PC the new hub.</p>
+            <Recovery mode="import" run={run} />
+          </>
+        )}
       </section>
     );
   }
@@ -107,11 +124,15 @@ export function Mesh({ state, run }: { state: AppState; run: Run }) {
         {isHub && hub.ingressPort > 0 && <> · tunnel ingress 127.0.0.1:{hub.ingressPort}</>}
       </p>
 
-      <h2>Hub address on the internet</h2>
-      {isHub ? <HubUrls key={hub.urls.join('\n')} urls={hub.urls} run={run} /> : hub.urls.length === 0 ? <p className="muted">None (LAN only).</p> : <ul className="items">{hub.urls.map((u) => <li key={u}><code>{u}</code></li>)}</ul>}
+      {!android && (
+        <>
+          <h2>Hub address on the internet</h2>
+          {isHub ? <HubUrls key={hub.urls.join('\n')} urls={hub.urls} run={run} /> : hub.urls.length === 0 ? <p className="muted">None (LAN only).</p> : <ul className="items">{hub.urls.map((u) => <li key={u}><code>{u}</code></li>)}</ul>}
 
-      <h2>Invite a device</h2>
-      {invite ? <QrInvite invite={invite} onRenew={() => void newInvite()} run={run} /> : <button onClick={() => void newInvite()}>Invite a device</button>}
+          <h2>Invite a device</h2>
+          {invite ? <QrInvite invite={invite} onRenew={() => void newInvite()} run={run} /> : <button onClick={() => void newInvite()}>Invite a device</button>}
+        </>
+      )}
 
       <h2>Members</h2>
       <ul className="list">
@@ -119,7 +140,7 @@ export function Mesh({ state, run }: { state: AppState; run: Run }) {
           <li key={m.deviceId} className="member row space" data-device={m.deviceId}>
             <span>
               <Peer text={m.alias} /> <span className="muted">· {m.role === 'hub' ? 'Hub' : 'Member'} · <code>{m.deviceId.slice(0, 8)}</code></span>
-              {m.self && <span className="badge">This PC</span>}
+              {m.self && <span className="badge">{android ? 'This phone' : 'This PC'}</span>}
             </span>
             {isHub && !m.self && <button onClick={() => setRevoking({ deviceId: m.deviceId, alias: m.alias })}>Revoke</button>}
           </li>

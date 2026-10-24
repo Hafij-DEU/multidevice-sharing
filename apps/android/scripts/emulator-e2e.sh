@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # End-to-end on the emulator (never a physical phone): the debug APK against the Node engine on the
 # host. PC -> phone (MediaStore Download/MeshDrop), phone -> PC (a MediaStore content URI through
-# UriSource), a name collision, and a receive cut by force-stop that resumes.
+# UriSource), a name collision, a receive cut by force-stop that resumes, and joining a Node hub's
+# mesh from a meshdrop://join link.
 # Usage: scripts/emulator-e2e.sh   (EMU=emulator-5554 by default; the emulator must be running)
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -14,6 +15,7 @@ fail() { echo "emulator-e2e: FAIL: $*" >&2; exit 1; }
 sha() { sha256sum "$1" | cut -d' ' -f1; }
 esha() { $E shell sha256sum "'$1'" | cut -d' ' -f1; }
 until_ok() { local t=$1; shift; for _ in $(seq 1 "$t"); do if "$@"; then return 0; fi; sleep 1; done; return 1; }
+dlog() { $E shell cat "/sdcard/Android/data/$PKG/files/debug.log" 2>/dev/null; }
 
 ~/.local/opt/gradle-8.11.1/bin/gradle --offline -q :app:assembleDebug
 $E uninstall $PKG >/dev/null 2>&1 || true   # fresh install: a release-signed build may be on the emulator
@@ -21,11 +23,13 @@ $E install app/build/outputs/apk/debug/app-debug.apk >/dev/null
 $E shell pm grant $PKG android.permission.POST_NOTIFICATIONS 2>/dev/null || true
 $E shell am force-stop $PKG
 $E shell rm -rf /sdcard/Download/MeshDrop
+# A previous install's debug.log can outlive the uninstall, owned by the old app uid: start clean.
+$E shell rm -f "/sdcard/Android/data/$PKG/files/debug.log" 2>/dev/null || true
 $E shell am start -n $PKG/.MainActivity >/dev/null
 
 H=$(mktemp -d)
 LOG=$H/listen.log
-cleanup() { [ -n "${LP:-}" ] && kill "$LP" 2>/dev/null; $E forward --remove-all >/dev/null 2>&1 || true; rm -rf "$H"; }
+cleanup() { [ -n "${LP:-}" ] && kill "$LP" 2>/dev/null; [ -n "${HP:-}" ] && kill "$HP" 2>/dev/null; $E forward --remove-all >/dev/null 2>&1 || true; rm -rf "$H"; }
 trap cleanup EXIT
 $CLI listen --home "$H/pc" --inbox "$H/inbox" --port 0 --no-discovery --alias pc >"$LOG" 2>&1 &
 LP=$!
@@ -77,4 +81,24 @@ sleep 3
 until_ok 60 $CLI resume --home "$H/pc" >"$H/resume.log" 2>&1 || fail "resume: $(cat "$H/resume.log")"
 [ "$(esha /sdcard/Download/MeshDrop/huge.bin)" = "$(sha "$H/huge.bin")" ] || fail "huge.bin differs after resume"
 echo "emulator-e2e: resume after force-stop ok"
+
+# Join a Node hub's mesh: the camera opens the QR invite as meshdrop://join?…, which pre-fills the
+# Mesh page; the debug JOIN confirms it as the Join button would.
+$CLI hub init --home "$H/hub" --alias hub >/dev/null || fail "hub init"
+$CLI listen --home "$H/hub" --inbox "$H/hubin" --port 0 --no-discovery --alias hub >"$H/hub.log" 2>&1 &
+HP=$!
+until_ok 20 grep -q "listening on port" "$H/hub.log" || fail "hub listen did not start"
+HPORT=$(sed -n 's/.*listening on port \([0-9]*\).*/\1/p' "$H/hub.log" | head -1)
+URI=$($CLI invite --home "$H/hub" | sed -n 1p)   # sed reads it all: head would cut the QR output (EPIPE)
+# The emulator reaches the host as 10.0.2.2: that is the invite's LAN address here.
+URI=$(python3 -c 'import sys; q=sys.argv[1].split("?",1)[1].split("&"); k=[p for p in q if not p.startswith("l=")]; i=[n for n,p in enumerate(k) if p.startswith("r=")][0]; k.insert(i+1,"l=10.0.2.2%3A"+sys.argv[2]); print("meshdrop://join?"+"&".join(k))' "$URI" "$HPORT")
+$E shell "am start -a android.intent.action.VIEW -d '$URI'" >/dev/null
+$E shell am broadcast -n $PKG/.DebugCommands -a $PKG.debug.STATE >/dev/null
+until_ok 20 bash -c "$(declare -f dlog); E='$E'; PKG=$PKG; dlog | grep -q '\"joinLink\":\"meshdrop://join'" || fail "the join link did not reach the app"
+$E shell am broadcast -n $PKG/.DebugCommands -a $PKG.debug.JOIN >/dev/null
+until_ok 30 bash -c "$(declare -f dlog); E='$E'; PKG=$PKG; dlog | grep -q '^join member'" || fail "the phone did not join: $(dlog | grep -E '^(join|error)' | tail -2)"
+until_ok 20 bash -c "$CLI members --home '$H/hub' | grep -q '${PID:0:8}'" || fail "the hub does not list the phone"
+$E shell am broadcast -n $PKG/.DebugCommands -a $PKG.debug.STATE >/dev/null
+until_ok 20 bash -c "$(declare -f dlog); E='$E'; PKG=$PKG; dlog | tail -1 | grep -q '\"role\":\"member\"'" || fail "the phone's state is not member"
+echo "emulator-e2e: join from a meshdrop:// link ok"
 echo "emulator-e2e: OK"

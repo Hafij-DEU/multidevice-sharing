@@ -77,6 +77,8 @@ export interface AppState {
   keepAlive?: { batteryUnrestricted: boolean; rom: 'miui' | 'hios' | 'stock'; steps: { id: string; label: string; done?: boolean }[] };
   /** Android: files shared into MeshDrop from another app, waiting for takeSharedItems(). */
   sharedPending?: number;
+  /** Android: the meshdrop://join link the app was opened with (pre-fills the join box until a join is tried). */
+  joinLink?: string;
   /** Mesh members (for the Mesh page). */
   members: { deviceId: string; alias: string; role: 'hub' | 'member'; self: boolean }[];
 }

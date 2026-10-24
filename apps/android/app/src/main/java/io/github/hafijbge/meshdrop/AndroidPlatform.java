@@ -200,6 +200,13 @@ public class AndroidPlatform implements Platform {
         synchronized (shared) {
             state.put("sharedPending", (long) shared.size());
         }
+        String link = joinLink;
+        if (link != null) state.put("joinLink", link);
+    }
+
+    @Override
+    public void joinHandled() {
+        joinLink = null;
     }
 
     void addShared(List<Map<String, Object>> items) {
@@ -243,9 +250,23 @@ public class AndroidPlatform implements Platform {
     }
 
     /** "Share → MeshDrop": queues the shared files/text for the Devices page. */
+    /** A meshdrop://join link the app was opened with, until a join is attempted. */
+    private volatile String joinLink;
+
     void acceptShare(Activity a, Intent intent) {
         if (intent == null) return;
         String action = intent.getAction();
+        Uri data = intent.getData();
+        if (Intent.ACTION_VIEW.equals(action) && data != null && "meshdrop".equals(data.getScheme()) && "join".equals(data.getHost())) {
+            String link = data.toString();
+            intent.setAction(null); // handled once, not again on recreation
+            // Never joined silently: the link only pre-fills the join box; the user confirms.
+            if (link.length() <= 4096) {
+                joinLink = link;
+                if (controller != null) controller.refresh();
+            }
+            return;
+        }
         List<Map<String, Object>> items = new ArrayList<>();
         if (Intent.ACTION_SEND.equals(action)) {
             Uri u = streamExtra(intent);

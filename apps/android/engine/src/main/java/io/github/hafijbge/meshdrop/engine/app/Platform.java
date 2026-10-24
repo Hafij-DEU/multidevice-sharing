@@ -20,6 +20,9 @@ public interface Platform {
     /** A file or folder the UI picked ("file"/"dir"; a path or a content URI) as a send item. */
     SendItem item(String kind, String pathOrUri) throws IOException;
 
-    /** Adds platform fields to the state (platform, keepAlive, sharedPending). */
+    /** Adds platform fields to the state (platform, keepAlive, sharedPending, joinLink). */
     void decorate(Map<String, Object> state);
+
+    /** A join was attempted: a pending meshdrop://join link has been dealt with. */
+    default void joinHandled() {}
 }
