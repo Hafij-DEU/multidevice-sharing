@@ -630,6 +630,12 @@ export class AppController extends EventEmitter {
     await this.#refreshOutbox();
   }
 
+  async unpair(deviceId: string): Promise<void> {
+    await this.#e.unpair(deviceId);
+    await this.#refreshOutbox();
+    this.#changed();
+  }
+
   async addByAddress(host: string, port: number, alias: string): Promise<void> {
     if (host.trim() === '') throw new Error('Enter an address.');
     await this.#e.pairManual(host.trim(), port, alias.trim() === '' ? host.trim() : alias);

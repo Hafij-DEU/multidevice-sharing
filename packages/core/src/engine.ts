@@ -1206,6 +1206,21 @@ export class Engine extends EventEmitter {
     if (p) void this.maybeAutoResume(p.deviceId);
   }
 
+  /**
+   * Unpairs a manually paired device: it is no longer trusted, its saved address and its unfinished
+   * sends are dropped. While it is on the LAN it shows as nearby again, so Pair re-pairs it. A mesh
+   * member is removed on the hub instead (revoke).
+   */
+  async unpair(query: string): Promise<void> {
+    const id = this.resolveDeviceId(query);
+    if (this.mesh?.isTrusted(id)) throw new Error('This device is in your mesh: remove it on the hub PC (More → Mesh → Revoke).');
+    this.trust.remove(id);
+    writeManual(this.manualFile, readManual(this.manualFile).filter((m) => m.deviceId !== id));
+    for (const o of await this.outbox.list()) if (o.target.deviceId === id) await this.outbox.remove(o.sessionId);
+    const sc = this.syncStore.config();
+    if (sc.partners.includes(id)) this.syncStore.setConfig({ ...sc, partners: sc.partners.filter((p) => p !== id) });
+  }
+
   /** Drops a device from the LAN peer table (it is still trusted; it reappears when seen). */
   forgetPeer(deviceId: string): void {
     this.running?.discovery.forget(deviceId);

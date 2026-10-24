@@ -317,6 +317,7 @@ function wireIpc(): void {
   handle('openSyncFolder', (_e) => ctl().openSyncFolder());
   handle('openInbox', (_e) => ctl().openInbox());
   handle('reveal', (_e, p) => ctl().reveal(str(p)));
+  handle('unpair', (_e, id) => ctl().unpair(str(id, 64)));
   handle('takeSharedItems', (_e) => ctl().takeSharedItems());
   handle('openFile', (_e, p) => ctl().openFile(str(p)));
   handle('thumb', (_e, p) => ctl().thumb(str(p)));

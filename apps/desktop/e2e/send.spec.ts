@@ -34,6 +34,16 @@ test('a nearby device pairs with one click on its card', async () => {
     await card.getByRole('button', { name: 'Pair' }).click();
     await expect(A.win.getByText(/Paired with/)).toBeVisible();
     await expect(card.getByRole('checkbox')).toBeVisible();
+
+    // Unpair from More → Devices (two taps), and it is back under Add a device with Pair.
+    await A.win.getByRole('button', { name: 'More', exact: true }).click();
+    await A.win.getByRole('button', { name: /^Devices/ }).click();
+    const row = A.win.locator(`[data-paired="${b.self.deviceId}"]`);
+    await row.getByRole('button', { name: 'Unpair' }).click();
+    await row.getByRole('button', { name: 'Tap again to unpair' }).click();
+    await expect(A.win.getByText(/Unpaired/)).toBeVisible();
+    await A.win.getByRole('button', { name: 'Send', exact: true }).first().click();
+    await expect(A.win.locator(`.device-card[data-device="${b.self.deviceId}"]`).getByRole('button', { name: 'Pair' })).toBeVisible();
   } finally {
     await A.app.close();
     await B.app.close();

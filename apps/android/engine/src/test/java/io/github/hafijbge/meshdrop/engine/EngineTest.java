@@ -79,6 +79,22 @@ public class EngineTest {
     }
 
     @Test
+    public void unpairForgetsTheDeviceAndPairReTrustsIt() throws Exception {
+        Engine e = engine(null);
+        try (NodeListen pc = NodeListen.start(tmp.newFolder())) {
+            pairBoth(e, pc);
+            e.unpair(pc.deviceId.substring(0, 8));
+            EngineDevice d = e.devices().stream().filter(x -> x.deviceId.equals(pc.deviceId)).findFirst().get();
+            assertEquals("nearby", d.role);
+            assertTrue(!d.trusted);
+            e.pairManual("127.0.0.1", pc.port, "pc again");
+            d = e.devices().stream().filter(x -> x.deviceId.equals(pc.deviceId)).findFirst().get();
+            assertEquals("paired", d.role);
+            assertEquals("pc again", d.alias);
+        }
+    }
+
+    @Test
     public void aBurstOfSightingsAfterARestartAutoResumesOnce() throws Exception {
         List<EngineEvent> events = Collections.synchronizedList(new ArrayList<>());
         Engine e = engine(events);
