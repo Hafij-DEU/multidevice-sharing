@@ -546,7 +546,7 @@ public final class AppController {
                     r.sent = r.bytes;
                 }
             }
-            received(from, (List<Object>) d.get("files"), (String) d.get("text"), Boolean.TRUE.equals(d.get("clipboard")));
+            received(from, (List<Object>) d.get("files"), (String) d.get("text"), Boolean.TRUE.equals(d.get("clipboard")), Boolean.TRUE.equals(d.get("clipboardFiles")));
             return;
         }
         if (r == null) return;
@@ -577,13 +577,13 @@ public final class AppController {
         }
     }
 
-    private void received(String from, List<Object> files, String text, boolean clipboard) {
+    private void received(String from, List<Object> files, String text, boolean clipboard, boolean clipboardFiles) {
         Settings s = settings.get();
         String alias = aliasOf(from);
         List<String> fs = new ArrayList<>();
         for (Object f : files) fs.add((String) f);
         try {
-            history.addReceived(System.currentTimeMillis(), from, alias, fs, text, clipboard);
+            history.addReceived(System.currentTimeMillis(), from, alias, fs, text, clipboard || clipboardFiles);
         } catch (IOException ignored) {
             // the files arrived; only the history entry is lost
         }
@@ -592,9 +592,19 @@ public final class AppController {
             lastClip = text; // shared clipboard: do not send it straight back
             platform.writeClipboard(text);
         }
+        // Copied files / an image: saved in the inbox like any file, and put on the clipboard (never opened).
+        if (clipboardFiles && !fs.isEmpty() && s.clipboardReceive) {
+            platform.writeClipboardFiles(fs);
+            lastClip = "u:" + String.join("\n", platform.clipboardUris());
+        }
         if (!s.notifications) return;
         if (clipboard) {
             platform.notify("Clipboard", s.clipboardReceive ? "Copied text from " + alias : "Text from " + alias + " (see Inbox)", null);
+            return;
+        }
+        if (clipboardFiles) {
+            String what = fs.size() == 1 ? "a file" : fs.size() + " files";
+            platform.notify("Clipboard", s.clipboardReceive ? "Copied " + what + " from " + alias + ": paste it anywhere" : what + " from " + alias + " (see Received)", null);
             return;
         }
         int n = fs.size();
@@ -739,14 +749,29 @@ public final class AppController {
         } catch (RuntimeException e) {
             return;
         }
-        if (text == null || text.isEmpty()) return; // Android: in the background this reads as empty
+        List<String> uris = platform.clipboardUris();
+        // An empty clipboard is a state too: the first look records it, so the next copy counts as new.
+        String sig = !uris.isEmpty() ? "u:" + String.join("\n", uris) : text == null ? "" : text;
         boolean first = lastClip == null;
-        if (text.equals(lastClip)) return;
-        lastClip = text;
-        if (first || !settings.get().clipboardSync || text.trim().isEmpty() || text.getBytes(StandardCharsets.UTF_8).length > 64 * 1024) return;
+        if (sig.equals(lastClip)) return;
+        lastClip = sig;
+        if (first || !settings.get().clipboardSync || sig.isEmpty()) return;
         List<String> ids = new ArrayList<>();
         for (EngineDevice d : x.devices()) if (d.trusted && !d.reach.equals("offline") && !d.role.equals("localsend")) ids.add(d.deviceId);
-        if (!ids.isEmpty()) x.sendClipboard(ids, text, null);
+        if (ids.isEmpty()) return;
+        if (!uris.isEmpty()) {
+            // A copied image or files (content URIs): sent as files the other side puts on its clipboard.
+            try {
+                List<SendItem> items = new ArrayList<>();
+                for (String u : uris) items.add(platform.item("file", u));
+                x.sendClipboardFiles(ids, items, null);
+            } catch (IOException | RuntimeException ignored) {
+                // a URI that cannot be read (its grant ended): nothing to send
+            }
+            return;
+        }
+        if (text.trim().isEmpty() || text.getBytes(StandardCharsets.UTF_8).length > 64 * 1024) return;
+        x.sendClipboard(ids, text, null);
     }
 
     // ---- photo backup (M8b) --------------------------------------------------------------------
@@ -842,7 +867,19 @@ public final class AppController {
         return m;
     }
 
-    public void sendClipboard(Object targets) {
+    public void sendClipboard(Object targets) throws IOException {
+        List<String> uris = platform.clipboardUris();
+        if (!uris.isEmpty()) {
+            List<String> ids = targets(targets);
+            String tag = UUID.randomUUID().toString();
+            List<SendItem> items = new ArrayList<>();
+            for (String u : uris) items.add(platform.item("file", u));
+            List<Row> rs = startRows(ids, tag, items.size(), 0);
+            e().sendClipboardFiles(ids, items, tag).whenComplete((r, x) -> {
+                if (x != null) failRows(rs, x);
+            });
+            return;
+        }
         String text = platform.readClipboard();
         if (text == null || text.isEmpty()) throw new IllegalArgumentException("The clipboard is empty.");
         List<String> ids = targets(targets);

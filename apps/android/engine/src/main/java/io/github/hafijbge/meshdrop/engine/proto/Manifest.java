@@ -48,6 +48,8 @@ public final class Manifest {
     public boolean clipboard;
     /** Photo backup (M8b): the receiver files it in its backup folder, not the inbox. */
     public boolean backup;
+    /** Copied files or an image: the receiver puts them (saved in its inbox) on its clipboard. */
+    public boolean clipboardFiles;
 
     public Map<String, Object> toMap() {
         Map<String, Object> m = new LinkedHashMap<>();
@@ -77,6 +79,7 @@ public final class Manifest {
         if (text != null) m.put("text", text);
         if (clipboard) m.put("clipboard", true);
         if (backup) m.put("backup", true);
+        if (clipboardFiles) m.put("clipboardFiles", true);
         return m;
     }
 
@@ -141,6 +144,10 @@ public final class Manifest {
         if (o.containsKey("backup")) {
             if (!Boolean.TRUE.equals(o.get("backup"))) throw bad("backup");
             m.backup = true;
+        }
+        if (o.containsKey("clipboardFiles")) {
+            if (!Boolean.TRUE.equals(o.get("clipboardFiles")) || files.isEmpty()) throw bad("clipboardFiles");
+            m.clipboardFiles = true;
         }
         Set<Long> ids = new HashSet<>();
         for (Object fo : files) {

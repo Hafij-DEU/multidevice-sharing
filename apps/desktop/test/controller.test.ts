@@ -34,12 +34,21 @@ interface FakePlatform extends Platform {
   clip: string[];
   notes: { title: string; body: string }[];
   clipboardText: string;
+  clipboardFiles: string[];
+  clipFilesWritten: string[][];
 }
 function fakePlatform(): FakePlatform {
   const p: FakePlatform = {
     clip: [],
     notes: [],
     clipboardText: '',
+    clipboardFiles: [],
+    clipFilesWritten: [],
+    readClipboardFiles: () => p.clipboardFiles,
+    writeClipboardFiles: (paths) => {
+      p.clipFilesWritten.push(paths);
+      p.clipboardFiles = paths; // what a real clipboard would then hold
+    },
     notify: (title, body) => void p.notes.push({ title, body }),
     writeClipboard: (t) => void p.clip.push(t),
     readClipboard: () => p.clipboardText,
@@ -239,6 +248,22 @@ describe('AppController', () => {
     expect(B.c.state().sync!.folders.map((f) => [f.name, f.folder])).toEqual([['Shared', fb]]);
     await B.c.syncRemove('Shared');
     expect(B.c.state().sync!.folders).toEqual([]);
+  }, 30_000);
+
+  it('shared clipboard: files copied on one PC are put on the other one\'s clipboard, without echo', async () => {
+    const A = await make('a', { clipboardSync: true });
+    const B = await make('b', { clipboardSync: true });
+    await pair(A.c, B.c);
+    await sleep(1500); // the first look only takes note
+    const f = join(tmpDir(), 'report.pdf');
+    writeFileSync(f, 'pdf');
+    A.p.clipboardFiles = [f];
+    await until(() => B.p.clipFilesWritten.length === 1, 15_000);
+    expect(B.p.clipFilesWritten[0]).toEqual([join(B.inbox, 'report.pdf')]);
+    expect(readFileSync(join(B.inbox, 'report.pdf'), 'utf8')).toBe('pdf');
+    await sleep(2500);
+    expect(A.p.clipFilesWritten).toEqual([]); // B did not send it back
+    expect(B.p.notes.some((n) => n.title === 'Clipboard')).toBe(true);
   }, 30_000);
 
   it('files handed in from Files wait for the Send page, once', async () => {

@@ -3,7 +3,7 @@
 // directly in Node.
 import { randomUUID } from 'node:crypto';
 import { EventEmitter } from 'node:events';
-import { mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { lstat, readdir } from 'node:fs/promises';
 import { createServer } from 'node:net';
 import { homedir, networkInterfaces } from 'node:os';
@@ -21,6 +21,12 @@ export interface Platform {
   notify(title: string, body: string, onClick?: () => void): void;
   writeClipboard(text: string): void;
   readClipboard(): string;
+  /** Files copied in a file manager (absolute paths of regular files), or []. */
+  readClipboardFiles?(): string[];
+  /** A copied image: a cheap key that changes with the picture, and its PNG bytes on demand. */
+  readClipboardImage?(): { key: string; png: () => Buffer } | null;
+  /** Puts received files on the clipboard: one image as an image, otherwise as copied files. */
+  writeClipboardFiles?(paths: string[]): void;
   openPath(p: string): Promise<void>;
   revealPath(p: string): void;
   /** A small preview of an image or video as a data: URL, or null when there is none. */
@@ -42,6 +48,11 @@ const RATE_WINDOW_MS = 500;
 /** Shared clipboard: how often the clipboard is checked, and the most text it sends. */
 const CLIP_POLL_MS = 1000;
 const MAX_CLIP_SYNC = 64 * 1024;
+/** Copied files are shared automatically only up to this much (Send clipboard sends any size). */
+const MAX_CLIP_FILES_SYNC = 100 * 1024 * 1024;
+
+/** What is on the clipboard now, as one comparable signature plus what to send. */
+type ClipNow = { sig: string } & ({ kind: 'text'; text: string } | { kind: 'files'; files: string[] } | { kind: 'image'; png: () => Buffer });
 const MAX_RECOVERY_BYTES = 1024 * 1024;
 /** Settings the engine is created with: changing one restarts it. */
 const ENGINE_KEYS = ['alias', 'inbox', 'port', 'discovery'] as const;
@@ -551,17 +562,27 @@ export class AppController extends EventEmitter {
     this.#history.addReceived({
       at: Date.now(), from: ev.from, alias, files: [...ev.files],
       ...(ev.text !== undefined ? { text: ev.text } : {}),
-      ...(ev.clipboard ? { clipboard: true } : {}),
+      ...(ev.clipboard || ev.clipboardFiles ? { clipboard: true } : {}),
     });
     // Clipboard text is only ever placed on the clipboard: never opened, run or interpreted.
     if (ev.clipboard && ev.text !== undefined && s.clipboardReceive) {
-      this.#lastClip = ev.text; // shared clipboard: do not send it straight back
       this.#platform.writeClipboard(ev.text);
+      this.#lastClip = `t:${ev.text}`; // shared clipboard: do not send it straight back
+    }
+    // Copied files / an image: saved in the inbox like any file, and put on the clipboard (never opened).
+    if (ev.clipboardFiles && ev.files.length > 0 && s.clipboardReceive && this.#platform.writeClipboardFiles) {
+      this.#platform.writeClipboardFiles([...ev.files]);
+      this.#lastClip = this.#clipNow()?.sig;
     }
     if (!s.notifications) return;
     const n = ev.files.length;
     if (ev.clipboard) {
       this.#platform.notify('Clipboard', s.clipboardReceive ? `Copied text from ${alias}` : `Text from ${alias} (see Inbox)`);
+      return;
+    }
+    if (ev.clipboardFiles) {
+      const what = n === 1 ? (/\.(png|jpe?g|webp|gif|bmp)$/i.test(ev.files[0]!) ? 'an image' : 'a file') : `${n} files`;
+      this.#platform.notify('Clipboard', s.clipboardReceive ? `Copied ${what} from ${alias}: paste it anywhere` : `${what} from ${alias} (see Received)`);
       return;
     }
     const body = n > 0 ? `${n} file${n === 1 ? '' : 's'} received${ev.text !== undefined ? ' with a message' : ''}` : `Text: ${(ev.text ?? "").slice(0, 120)}`;
@@ -612,13 +633,53 @@ export class AppController extends EventEmitter {
     this.#e.send(ids, coreItems, { tag }).catch((x: unknown) => this.#failRows(rows, x));
   }
 
+  /** What is on the clipboard: copied files first, then an image, then text (null: nothing readable). */
+  #clipNow(): ClipNow | null {
+    try {
+      const files = this.#platform.readClipboardFiles?.() ?? [];
+      if (files.length > 0) return { sig: `f:${files.join('\n')}`, kind: 'files', files };
+      const img = this.#platform.readClipboardImage?.() ?? null;
+      if (img) return { sig: `i:${img.key}`, kind: 'image', png: img.png };
+      const text = this.#platform.readClipboard();
+      return { sig: `t:${text}`, kind: 'text', text };
+    } catch {
+      return null;
+    }
+  }
+
+  /** A copied image as a file to send (kept a day in <home>/clipboard). */
+  #imageFile(png: Buffer): string {
+    const dir = join(this.#home, 'clipboard');
+    mkdirSync(dir, { recursive: true, mode: 0o700 });
+    for (const n of readdirSync(dir)) {
+      try {
+        if (Date.now() - statSync(join(dir, n)).mtimeMs > 86_400_000) rmSync(join(dir, n), { force: true });
+      } catch {
+        /* gone */
+      }
+    }
+    const d = new Date();
+    const p = (x: number) => String(x).padStart(2, '0');
+    const file = join(dir, `Clipboard ${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}-${p(d.getMinutes())}-${p(d.getSeconds())}.png`);
+    writeFileSync(file, png, { mode: 0o600 });
+    return file;
+  }
+
   async sendClipboard(targets: string[] | 'all'): Promise<void> {
-    const text = this.#platform.readClipboard();
-    if (text === '') throw new Error('The clipboard is empty.');
+    const now = this.#clipNow();
+    if (!now || (now.kind === 'text' && now.text === '')) throw new Error('The clipboard is empty.');
     const ids = this.#targets(targets);
     const tag = randomUUID();
-    const rows = this.#startRows(ids, tag, 0, Buffer.byteLength(text));
-    this.#e.sendClipboard(ids, text, { tag }).catch((x: unknown) => this.#failRows(rows, x));
+    if (now.kind === 'text') {
+      const rows = this.#startRows(ids, tag, 0, Buffer.byteLength(now.text));
+      this.#e.sendClipboard(ids, now.text, { tag }).catch((x: unknown) => this.#failRows(rows, x));
+      return;
+    }
+    const files = now.kind === 'files' ? now.files : [this.#imageFile(now.png())];
+    let bytes = 0;
+    for (const f of files) bytes += statSync(f).size;
+    const rows = this.#startRows(ids, tag, files.length, bytes);
+    this.#e.sendClipboardFiles(ids, files, { tag }).catch((x: unknown) => this.#failRows(rows, x));
   }
 
   async resumeOutbox(): Promise<void> {
@@ -883,23 +944,37 @@ export class AppController extends EventEmitter {
     this.#platform.revealPath(this.#inInbox(path));
   }
 
-  /** Shared clipboard: newly copied text goes to every online trusted device, without rows or toasts. */
+  /**
+   * Shared clipboard: whatever is newly copied (text, an image, files from the file manager) goes to
+   * every online trusted device, without rows or toasts.
+   */
   #clipTick(): void {
     if (!this.#engine || this.#stopped) return;
-    let text: string;
+    const now = this.#clipNow();
+    if (!now) return;
+    const first = this.#lastClip === undefined;
+    if (now.sig === this.#lastClip) return;
+    this.#lastClip = now.sig;
+    // What was on the clipboard when MeshDrop started is not "newly copied"; nor is anything while sharing is off.
+    if (first || !this.#settings.get().clipboardSync) return;
+    const ls = new Set(this.#e.devices().filter((d) => d.role === 'localsend').map((d) => d.deviceId));
+    const ids = this.#allTargets().filter((id) => !ls.has(id));
+    if (ids.length === 0) return;
+    if (now.kind === 'text') {
+      if (now.text.trim() === '' || Buffer.byteLength(now.text) > MAX_CLIP_SYNC) return;
+      this.#e.sendClipboard(ids, now.text).catch(() => {});
+      return;
+    }
+    let files: string[];
     try {
-      text = this.#platform.readClipboard();
+      files = now.kind === 'files' ? now.files : [this.#imageFile(now.png())];
+      let bytes = 0;
+      for (const f of files) bytes += statSync(f).size;
+      if (bytes > MAX_CLIP_FILES_SYNC) return; // big copies go with Send clipboard
     } catch {
       return;
     }
-    const first = this.#lastClip === undefined;
-    if (text === this.#lastClip) return;
-    this.#lastClip = text;
-    // What was on the clipboard when MeshDrop started is not "newly copied"; nor is anything while sharing is off.
-    if (first || !this.#settings.get().clipboardSync || text.trim() === '' || Buffer.byteLength(text) > MAX_CLIP_SYNC) return;
-    const ls = new Set(this.#e.devices().filter((d) => d.role === 'localsend').map((d) => d.deviceId));
-    const ids = this.#allTargets().filter((id) => !ls.has(id));
-    if (ids.length > 0) this.#e.sendClipboard(ids, text).catch(() => {});
+    this.#e.sendClipboardFiles(ids, files).catch(() => {});
   }
 
   /** Files to put on the Send page (from `--send`): files and folders that exist. */

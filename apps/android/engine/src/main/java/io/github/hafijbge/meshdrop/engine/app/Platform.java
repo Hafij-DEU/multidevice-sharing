@@ -37,6 +37,14 @@ public interface Platform {
         }
     }
 
+    /** Copied content other than text (Android: content URIs of a copied image or files), or an empty list. */
+    default java.util.List<String> clipboardUris() {
+        return new java.util.ArrayList<>();
+    }
+
+    /** Puts received files on the clipboard (refs as the inbox located them). */
+    default void writeClipboardFiles(java.util.List<String> refs) {}
+
     /** Photo backup exists on this platform (Android). */
     default boolean supportsBackup() {
         return false;

@@ -30,6 +30,8 @@ public final class Prepared {
     public boolean clipboard;
     /** Photo backup: set by the engine before sending. */
     public boolean backup;
+    /** Copied files: set by the engine before sending (manifest clipboardFiles). */
+    public boolean clipboardFiles;
     public String itemsKey;
     final Map<Long, Source> sources = new HashMap<>();
     final Map<Long, long[]> stats = new HashMap<>(); // size, mtime
@@ -154,6 +156,7 @@ public final class Prepared {
         m.text = text;
         m.clipboard = clipboard;
         m.backup = backup;
+        m.clipboardFiles = clipboardFiles && !files.isEmpty();
         return m;
     }
 }

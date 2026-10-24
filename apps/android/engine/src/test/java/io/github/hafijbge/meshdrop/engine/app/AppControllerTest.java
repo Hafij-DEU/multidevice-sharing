@@ -42,6 +42,19 @@ public class AppControllerTest {
         final List<String> clip = Collections.synchronizedList(new ArrayList<>());
         final List<String> notes = Collections.synchronizedList(new ArrayList<>());
         volatile String clipboardText = "";
+        volatile List<String> clipboardUris = new ArrayList<>();
+        final List<List<String>> clipFilesWritten = Collections.synchronizedList(new ArrayList<>());
+
+        @Override
+        public List<String> clipboardUris() {
+            return clipboardUris;
+        }
+
+        @Override
+        public void writeClipboardFiles(List<String> refs) {
+            clipFilesWritten.add(new ArrayList<>(refs));
+            clipboardUris = new ArrayList<>(refs);
+        }
 
         public void notify(String title, String body, String openRef) {
             notes.add(title + ": " + body);
@@ -249,6 +262,24 @@ public class AppControllerTest {
         Thread.sleep(2500);
         assertFalse(b.p.clip.contains("copied in the background"));
         assertFalse(b.p.clip.contains("before"));
+    }
+
+    @Test
+    public void copiedFilesGoOnTheOtherDevicesClipboardWithoutEcho() throws Exception {
+        Map<String, Object> on = new LinkedHashMap<>();
+        on.put("clipboardSync", true);
+        Node a = make("alpha", on), b = make("beta", on);
+        pair(a.c, b.c);
+        a.c.setForeground(true);
+        b.c.setForeground(true);
+        Thread.sleep(1500);
+        File f = new File(tmp.getRoot(), "photo.jpg");
+        Files.write(f.toPath(), "jpeg".getBytes(StandardCharsets.UTF_8));
+        a.p.clipboardUris = List.of(f.getPath());
+        until(() -> b.p.clipFilesWritten.size() == 1, 15_000);
+        assertEquals(List.of(new File(b.inbox, "photo.jpg").getAbsolutePath()), b.p.clipFilesWritten.get(0));
+        Thread.sleep(2500);
+        assertTrue(a.p.clipFilesWritten.isEmpty()); // b did not send it back
     }
 
     @Test

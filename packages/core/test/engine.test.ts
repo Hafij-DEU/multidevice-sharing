@@ -70,6 +70,16 @@ describe('Engine clipboard and resume progress', () => {
     expect(got).toMatchObject({ text: 'hello', clipboard: true, files: [] });
   });
 
+  it('sendClipboardFiles delivers the files flagged clipboardFiles', async () => {
+    const { a, b } = await pairedPair();
+    const f = join(tmp(), 'shot.png');
+    writeFileSync(f, 'png');
+    const [r] = await a.e.sendClipboardFiles([b.e.identity.deviceId], [f]);
+    expect(r).toMatchObject({ status: 'done' });
+    const got = b.events.find((x) => x.source === 'receiver' && x.type === 'received');
+    expect(got).toMatchObject({ clipboardFiles: true, files: [join(b.inbox, 'shot.png')] });
+  });
+
   it('resumePending emits sender progress events like send', async () => {
     const { a, b } = await pairedPair();
     const f = join(tmp(), 'big.bin');

@@ -75,6 +75,8 @@ export interface SendOptions {
   transport?: (t: Target) => Transport | Promise<Transport>;
   /** Photo backup: the receiver files it in its backup folder (manifest `backup`). */
   backup?: boolean;
+  /** Copied files/image: the receiver puts them on its clipboard (manifest `clipboardFiles`). */
+  clipboardFiles?: boolean;
 }
 
 export const DEFAULT_RETRY_DELAYS_MS: readonly number[] = Object.freeze([500, 1000, 2000]);
@@ -607,6 +609,7 @@ export async function sendPrepared(id: Identity, t: Target, p: PreparedItems, op
     if (!entry) {
       const manifest = manifestFor(p, id.deviceId, t.deviceId);
       if (opts.backup) manifest.backup = true;
+      if (opts.clipboardFiles && manifest.files.length > 0) manifest.clipboardFiles = true;
       sessionId = manifest.sessionId;
       const { offer, ctx } = createOffer(id, t.publicKey, manifest);
       entry = {

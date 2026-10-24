@@ -206,6 +206,39 @@ public class AndroidPlatform implements Platform {
         cm.setPrimaryClip(ClipData.newPlainText("MeshDrop", text));
     }
 
+    /** Copied images or files: the clip's content URIs (readable only while MeshDrop is in front, like text). */
+    @Override
+    public List<String> clipboardUris() {
+        List<String> out = new ArrayList<>();
+        try {
+            ClipboardManager cm = (ClipboardManager) ctx.getSystemService(Context.CLIPBOARD_SERVICE);
+            ClipData c = cm.getPrimaryClip();
+            if (c == null) return out;
+            for (int i = 0; i < c.getItemCount(); i++) {
+                Uri u = c.getItemAt(i).getUri();
+                if (u != null && "content".equals(u.getScheme())) out.add(u.toString());
+            }
+        } catch (RuntimeException e) {
+            // no access now (in the background): nothing copied as far as we can tell
+        }
+        return out;
+    }
+
+    /** Received copied files: their MediaStore items go on the clipboard, so paste works in any app. */
+    @Override
+    public void writeClipboardFiles(List<String> refs) {
+        ClipData clip = null;
+        for (String r : refs) {
+            Uri u = sink == null ? null : sink.uriForLocated(r);
+            if (u == null) continue;
+            if (clip == null) clip = ClipData.newUri(ctx.getContentResolver(), "MeshDrop", u);
+            else clip.addItem(new ClipData.Item(u));
+        }
+        if (clip == null) return;
+        ClipboardManager cm = (ClipboardManager) ctx.getSystemService(Context.CLIPBOARD_SERVICE);
+        cm.setPrimaryClip(clip);
+    }
+
     @Override
     public String readClipboard() {
         ClipboardManager cm = (ClipboardManager) ctx.getSystemService(Context.CLIPBOARD_SERVICE);

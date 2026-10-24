@@ -7,7 +7,7 @@ import { createHash } from 'node:crypto';
 import { existsSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { pathToFileURL } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
 import { configDir } from '@meshdrop/core/src/paths.ts';
 import type { EngineOptions } from '@meshdrop/core/src/engine.ts';
@@ -162,6 +162,40 @@ const platform: Platform = {
   },
   writeClipboard: (text) => clipboard.writeText(text),
   readClipboard: () => clipboard.readText(),
+  readClipboardFiles: () => {
+    // availableFormats() does not list these on Linux, but readBuffer finds them (empty when absent).
+    for (const f of ['x-special/gnome-copied-files', 'text/uri-list']) {
+      const out: string[] = [];
+      for (const line of clipboard.readBuffer(f).toString('utf8').split(/\r?\n/)) {
+        if (!line.startsWith('file://')) continue;
+        try {
+          const p = fileURLToPath(line.trim());
+          if (statSync(p).isFile()) out.push(p);
+        } catch {
+          /* not a local file */
+        }
+      }
+      if (out.length > 0) return out;
+    }
+    return [];
+  },
+  readClipboardImage: () => {
+    if (!clipboard.availableFormats().some((f) => f.startsWith('image/'))) return null;
+    const img = clipboard.readImage();
+    if (img.isEmpty()) return null;
+    return { key: createHash('sha1').update(img.toBitmap()).digest('hex'), png: () => img.toPNG() };
+  },
+  writeClipboardFiles: (paths) => {
+    if (paths.length === 1 && IMAGE_EXT.test(paths[0]!)) {
+      const img = nativeImage.createFromPath(paths[0]!);
+      if (!img.isEmpty()) {
+        clipboard.writeImage(img);
+        return;
+      }
+    }
+    // What GNOME Files (and most Linux file managers) paste as files.
+    clipboard.writeBuffer('x-special/gnome-copied-files', Buffer.from(['copy', ...paths.map((p) => pathToFileURL(p).href)].join('\n')));
+  },
   async openPath(p) {
     const err = await shell.openPath(p);
     if (err) throw new Error(err);

@@ -560,6 +560,7 @@ public final class MeshServer {
             ev.put("files", located);
             if (s.manifest.text != null) ev.put("text", s.manifest.text);
             if (s.manifest.clipboard) ev.put("clipboard", true);
+            if (s.manifest.clipboardFiles) ev.put("clipboardFiles", true);
             emit(ev);
             live.remove(sid);
             try {

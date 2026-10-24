@@ -31,6 +31,8 @@ export interface Manifest {
   clipboard?: true;
   /** Photo backup (M8b): the receiver puts the files in its backup folder, not the inbox. */
   backup?: true;
+  /** Copied files or an image: the receiver puts the files (saved in its inbox) on its clipboard. */
+  clipboardFiles?: true;
 }
 export interface Offer { v: 1; sessionId: string; from: string; to: string; enc: string /*b64*/; sealedManifest: string /*b64*/ }
 export interface HaveMap { [fileId: number]: number[] } // chunk indices already verified by receiver
@@ -93,7 +95,7 @@ const isObj = (x: unknown): x is Record<string, unknown> => typeof x === 'object
 function normalizeManifest(x: unknown): Manifest {
   if (!isObj(x)) bad('not an object');
   if (x.v !== 1) bad('v must be 1');
-  const { sessionId, from, to, createdAt, files, dirs, text, clipboard, backup } = x;
+  const { sessionId, from, to, createdAt, files, dirs, text, clipboard, backup, clipboardFiles } = x;
   if (typeof sessionId !== 'string' || !SESSION_ID_RE.test(sessionId)) bad('sessionId');
   if (typeof from !== 'string' || !DEVICE_ID_HEX.test(from)) bad('from');
   if (typeof to !== 'string' || !DEVICE_ID_HEX.test(to)) bad('to');
@@ -106,6 +108,7 @@ function normalizeManifest(x: unknown): Manifest {
   if (text !== undefined && Buffer.byteLength(text, 'utf8') > MAX_MANIFEST_TEXT_BYTES) bad('text too large');
   if (clipboard !== undefined && (clipboard !== true || text === undefined || files.length > 0 || dirs.length > 0)) bad('clipboard');
   if (backup !== undefined && backup !== true) bad('backup');
+  if (clipboardFiles !== undefined && (clipboardFiles !== true || files.length === 0)) bad('clipboardFiles');
   const seenIds = new Set<number>();
   const outFiles: FileEntry[] = files.map((f: unknown) => {
     if (!isObj(f)) bad('file entry');
@@ -127,6 +130,7 @@ function normalizeManifest(x: unknown): Manifest {
   if (text !== undefined) m.text = text;
   if (clipboard === true) m.clipboard = true;
   if (backup === true) m.backup = true;
+  if (clipboardFiles === true) m.clipboardFiles = true;
   return m;
 }
 
