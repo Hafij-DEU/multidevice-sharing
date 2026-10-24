@@ -80,3 +80,15 @@ export function buildSelfSignedCert(opts: SelfSignedCertOptions): Buffer {
   const signature = sign('sha256', tbs, opts.privateKey); // DER-encoded ECDSA-Sig-Value
   return seq(tbs, sigAlg, bitString(signature));
 }
+
+const OID_EXTENSION_REQUEST = '1.2.840.113549.1.9.14';
+const OID_SUBJECT_ALT_NAME = '2.5.29.17';
+
+/** A PKCS#10 certificate request for `domain` (CN and a dNSName SAN), signed with `privateKey` (P-256). */
+export function buildCsr(domain: string, publicKey: KeyObject, privateKey: KeyObject): Buffer {
+  const name = seq(set(seq(oid(OID_COMMON_NAME), utf8(domain))));
+  const san = seq(oid(OID_SUBJECT_ALT_NAME), octets(seq(tlv(0x82, Buffer.from(domain, 'ascii')))));
+  const attrs = explicit(0, seq(oid(OID_EXTENSION_REQUEST), set(seq(san))));
+  const info = seq(integer(Buffer.from([0])), name, publicKey.export({ type: 'spki', format: 'der' }), attrs);
+  return seq(info, seq(oid(OID_ECDSA_SHA256)), bitString(sign('sha256', info, privateKey)));
+}
