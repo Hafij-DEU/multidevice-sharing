@@ -56,16 +56,34 @@ public final class MembershipStore implements TrustSource {
         return Membership.canonicalPem(pem, "anchor");
     }
 
-    @SuppressWarnings("unchecked")
+    /** True when only one of anchor.pem / membership.json exists (an interrupted write). */
+    public static boolean incomplete(File home) {
+        File d = dir(home);
+        return new File(d, "anchor.pem").exists() != new File(d, "membership.json").exists();
+    }
+
+    /**
+     * Stores a verified mesh. Both files are written into mesh.tmp/ first and the directory is renamed
+     * into place, so a crash never leaves half a mesh state behind.
+     */
     public static MembershipStore init(File home, PublicKey anchor, Map<String, Object> s) throws IOException {
         Membership.ListView l = Membership.verify(s, anchor);
         File d = dir(home);
         if (new File(d, "anchor.pem").exists() && new File(d, "membership.json").exists()) throw new Membership.MembershipError("mesh state already exists");
-        Atomic.write(new File(d, "anchor.pem"), TrustStore.pem(anchor).getBytes(StandardCharsets.UTF_8));
-        File m = new File(d, "membership.json");
+        File tmp = new File(home, "mesh.tmp");
+        deleteDir(tmp);
         Map<String, Object> clean = clean(s);
-        Atomic.write(m, (Json.stringify(clean) + "\n").getBytes(StandardCharsets.UTF_8));
-        return new MembershipStore(m, anchor, clean, l);
+        Atomic.write(new File(tmp, "anchor.pem"), TrustStore.pem(anchor).getBytes(StandardCharsets.UTF_8));
+        Atomic.write(new File(tmp, "membership.json"), (Json.stringify(clean) + "\n").getBytes(StandardCharsets.UTF_8));
+        deleteDir(d); // an interrupted earlier write
+        if (!tmp.renameTo(d)) throw new IOException("cannot move " + tmp + " to " + d);
+        return new MembershipStore(new File(d, "membership.json"), anchor, clean, l);
+    }
+
+    private static void deleteDir(File d) {
+        File[] fs = d.listFiles();
+        if (fs != null) for (File f : fs) f.delete();
+        d.delete();
     }
 
     private static Map<String, Object> clean(Map<String, Object> s) {
@@ -118,9 +136,6 @@ public final class MembershipStore implements TrustSource {
 
     /** Deletes the mesh state (revocation): the identity stays. */
     public static void drop(File home) {
-        File d = dir(home);
-        File[] fs = d.listFiles();
-        if (fs != null) for (File f : fs) f.delete();
-        d.delete();
+        deleteDir(dir(home));
     }
 }

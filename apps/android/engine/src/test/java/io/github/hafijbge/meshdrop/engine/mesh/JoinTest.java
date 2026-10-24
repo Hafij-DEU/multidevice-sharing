@@ -89,6 +89,24 @@ public class JoinTest {
     }
 
     @Test
+    public void aHalfWrittenMeshStateDoesNotBlockAJoin() throws Exception {
+        File hubHome = tmp.newFolder("hub");
+        File phoneHome = tmp.newFolder("phone");
+        NodeMesh.hubInit(hubHome);
+        // A process killed between the two writes of an earlier join: only the anchor is there.
+        File mesh = new File(phoneHome, "mesh");
+        assertTrue(mesh.mkdirs());
+        Files.write(new File(mesh, "anchor.pem").toPath(), "garbage".getBytes(StandardCharsets.UTF_8));
+        try (NodeListen hub = NodeListen.start(hubHome)) {
+            String uri = invite(hub, meshOf(hubHome), 300_000, true);
+            Identity phone = device(phoneHome);
+            assertEquals("member", Join.join(phone, uri, "phone", phoneHome));
+            assertNotNull(MembershipStore.load(phoneHome).list().member(phone.deviceId()));
+            assertFalse(new File(phoneHome, "mesh.tmp").exists());
+        }
+    }
+
+    @Test
     public void joinsThroughTheHubUrl() throws Exception {
         File hubHome = tmp.newFolder("hub");
         File phoneHome = tmp.newFolder("phone");

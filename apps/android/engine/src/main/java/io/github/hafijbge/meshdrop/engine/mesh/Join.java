@@ -57,6 +57,7 @@ public final class Join {
 
     /** As join(); `manual` is where a provisional join keeps trusting its inviter until the list arrives. */
     public static String join(Identity id, String uri, String alias, File home, TrustStore manual) throws IOException {
+        if (MembershipStore.incomplete(home)) MembershipStore.drop(home); // an interrupted earlier write holds nothing usable
         if (MembershipStore.load(home) != null) throw new JoinError("this device is already in a mesh");
         Invite inv;
         try {
