@@ -15,7 +15,7 @@ type G = typeof globalThis & { __meshdropTest: TestHooks };
 async function launch(home: string): Promise<{ app: ElectronApplication; win: Page }> {
   const app = await electron.launch({ args: [MAIN], env: appEnv(home) });
   const win = await app.firstWindow();
-  await expect(win.getByRole('heading', { name: 'Devices' })).toBeVisible();
+  await expect(win.getByRole('heading', { name: 'Send to' })).toBeVisible();
   await expect(win.getByText('Starting…')).toHaveCount(0);
   return { app, win };
 }
@@ -69,11 +69,10 @@ test('pair two apps by address, send a file, see it in the other inbox', async (
     await card.getByRole('checkbox').check();
     await A.win.getByRole('button', { name: 'Add files' }).click();
     await expect(A.win.getByText('big.bin')).toBeVisible();
-    await A.win.getByRole('button', { name: 'Send', exact: true }).click();
+    await A.win.locator('main').getByRole('button', { name: 'Send', exact: true }).click();
 
-    await A.win.getByRole('button', { name: 'Transfers' }).click();
     await expect(A.win.locator('.progress-row .status', { hasText: 'Done' })).toBeVisible({ timeout: 30_000 });
-    await B.win.getByRole('button', { name: 'Inbox' }).click();
+    await B.win.getByRole('button', { name: 'Received', exact: true }).click();
     await expect(B.win.getByText('big.bin')).toBeVisible({ timeout: 30_000 });
 
     const files = Array.from({ length: 2000 }, (_, i) => join(homes[1]!, 'inbox', `seed-${i}.txt`));

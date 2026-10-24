@@ -6,7 +6,7 @@ import { fmtBytes } from '../format.ts';
 
 const fmtLeft = (ms: number) => {
   const m = Math.ceil(ms / 60_000);
-  return m >= 60 ? `${Math.floor(m / 60)} h ${m % 60} min` : `${m} min`;
+  return m >= 60 ? `${Math.floor(m / 60)} h${m % 60 ? ` ${m % 60} min` : ''}` : `${m} min`;
 };
 
 /** LAN guests: a one-time QR link for a browser on this network, the files offered to it. */

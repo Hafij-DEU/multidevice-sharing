@@ -132,7 +132,8 @@ export interface LinkCreateInput {
 }
 
 export interface AppState {
-  self: { deviceId: string; alias: string; port: number };
+  /** addrs: this device's LAN IPv4 addresses (what another device types to add it). */
+  self: { deviceId: string; alias: string; port: number; addrs?: string[] };
   mode: 'serving' | 'client-only';
   hub: { role: 'hub' | 'member' | 'provisional' | 'none'; online: boolean; version: number; members: number; urls: string[]; ingressPort: number };
   devices: DeviceView[];

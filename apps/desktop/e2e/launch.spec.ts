@@ -10,8 +10,10 @@ test('the app starts with its window and the Devices page', async () => {
   try {
     const win = await app.firstWindow();
     await expect(win).toHaveTitle('MeshDrop');
-    await expect(win.getByRole('heading', { name: 'Devices' })).toBeVisible();
-    for (const page of ['Transfers', 'Inbox', 'Mesh', 'Settings']) await expect(win.getByRole('button', { name: page })).toBeVisible();
+    await expect(win.getByRole('heading', { name: 'Send to' })).toBeVisible();
+    for (const tab of ['Send', 'Received', 'More']) await expect(win.getByRole('navigation').getByRole('button', { name: tab, exact: true })).toBeVisible();
+    await win.getByRole('button', { name: 'More', exact: true }).click();
+    for (const page of ['Transfers', 'Mesh', 'Settings']) await expect(win.getByRole('button', { name: page })).toBeVisible();
   } finally {
     await app.close();
     rmSync(home, { recursive: true, force: true });

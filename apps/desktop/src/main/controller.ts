@@ -6,6 +6,7 @@ import { EventEmitter } from 'node:events';
 import { mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { lstat, readdir } from 'node:fs/promises';
 import { createServer } from 'node:net';
+import { networkInterfaces } from 'node:os';
 import { isAbsolute, join, relative, resolve } from 'node:path';
 import QRCode from 'qrcode';
 import { CHUNK_SIZE } from '@meshdrop/core/src/chunk.ts';
@@ -51,6 +52,14 @@ interface Transfer extends TransferView {
 const CLIENT_ONLY = 'Receiving is handled by the MeshDrop background service on this PC. Stop it first (systemctl --user stop meshdrop).';
 /** How often client-only mode checks that the background service is still there. */
 const LISTENER_RECHECK_MS = 30_000;
+
+/** Non-loopback IPv4 addresses, private ones first. */
+function lanIpv4(): string[] {
+  const out: string[] = [];
+  for (const list of Object.values(networkInterfaces())) for (const a of list ?? []) if (a.family === 'IPv4' && !a.internal) out.push(a.address);
+  const priv = (ip: string) => /^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/.test(ip);
+  return [...out.filter(priv), ...out.filter((ip) => !priv(ip))];
+}
 
 function portFree(port: number): Promise<boolean> {
   return new Promise((done) => {
@@ -259,7 +268,7 @@ export class AppController extends EventEmitter {
     const me = e.identity.deviceId;
     const st = e.hubStatus();
     return {
-      self: { deviceId: me, alias: this.#settings.get().alias, port: e.port },
+      self: { deviceId: me, alias: this.#settings.get().alias, port: e.port, addrs: lanIpv4() },
       mode: this.#mode,
       hub: { role: st.role, online: st.online, version: st.version, members: st.members, urls: st.urls, ingressPort: e.hubIngressPort },
       devices: e.devices().map((d): DeviceView => ({ ...d, self: false })),

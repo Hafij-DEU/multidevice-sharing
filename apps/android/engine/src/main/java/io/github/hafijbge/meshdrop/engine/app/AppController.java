@@ -197,6 +197,13 @@ public final class AppController {
         self.put("deviceId", x.identity().deviceId());
         self.put("alias", s.alias);
         self.put("port", (long) x.port());
+        List<Object> addrs = new ArrayList<>();
+        for (Map.Entry<java.net.NetworkInterface, java.net.Inet4Address> a : io.github.hafijbge.meshdrop.engine.disc.Discovery.interfaceAddrs()) {
+            String ip = a.getValue().getHostAddress();
+            if (a.getKey().getName().startsWith("wlan")) addrs.add(0, ip);
+            else addrs.add(ip);
+        }
+        self.put("addrs", addrs);
         m.put("self", self);
         m.put("mode", "serving");
         Map<String, Object> hub = new LinkedHashMap<>();

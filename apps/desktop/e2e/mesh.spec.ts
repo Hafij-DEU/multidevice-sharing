@@ -8,6 +8,7 @@ async function launch(home: string, extra: Record<string, string> = {}): Promise
   const app = await electron.launch({ args: [MAIN], env: appEnv(home, extra) });
   const win = await app.firstWindow();
   await expect(win.getByText('Starting…')).toHaveCount(0);
+  await win.getByRole('button', { name: 'More', exact: true }).click();
   await win.getByRole('button', { name: 'Mesh' }).click();
   return { app, win };
 }

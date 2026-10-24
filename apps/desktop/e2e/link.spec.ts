@@ -14,6 +14,7 @@ test('an internet link opens in a browser, decrypts with the key from its fragme
     const gift = join(home, 'gift for you.txt');
     writeFileSync(gift, 'hello over the internet');
     const l = await win.evaluate((f) => window.meshdrop.linkCreate({ files: [f], days: 1, allowUploads: false }), gift);
+    await win.getByRole('button', { name: 'More', exact: true }).click();
     await win.getByRole('button', { name: 'Guests' }).click();
     await expect(win.locator(`[data-link="${l.id}"]`)).toBeVisible();
 

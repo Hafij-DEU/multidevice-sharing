@@ -10,14 +10,34 @@ import { Mesh } from './pages/Mesh.tsx';
 import { Settings } from './pages/Settings.tsx';
 import { Transfers } from './pages/Transfers.tsx';
 
-const PAGES = ['Devices', 'Transfers', 'Inbox', 'Guests', 'Mesh', 'Settings'] as const;
-type Page = (typeof PAGES)[number];
+/** Three tabs; the rarer pages live under More. */
+const TABS = ['Send', 'Received', 'More'] as const;
+type Tab = (typeof TABS)[number];
+const MORE = ['Guests', 'Mesh', 'Transfers', 'Settings'] as const;
+type Sub = (typeof MORE)[number];
+const ICON: Record<Sub, string> = {
+  Guests: 'M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM4 21a8 8 0 0 1 16 0',
+  Mesh: 'M5 12a2 2 0 1 0 0 .01M19 5a2 2 0 1 0 0 .01M19 19a2 2 0 1 0 0 .01M7 11l10-5M7 13l10 5',
+  Transfers: 'M7 4v14M3 14l4 4 4-4M17 20V6M13 10l4-4 4 4',
+  Settings: 'M4 7h10M18 7h2M4 17h4M12 17h8M16 5v4M10 15v4',
+};
+const MORE_HINT: Record<Sub, string> = {
+  Guests: 'Let someone without the app send or get files from a browser',
+  Mesh: 'Link your devices so they reach each other from anywhere',
+  Transfers: 'Unfinished sends and transfer history',
+  Settings: 'Name, port, notifications',
+};
 
 /** Runs an action; shows its error (or `ok`, or a string it returns) as a toast. Resolves undefined on error. */
 export type Run = <T>(fn: () => Promise<T>, ok?: string) => Promise<T | undefined>;
 
 export function App() {
-  const [page, setPage] = useState<Page>('Devices');
+  const [tab, setTab] = useState<Tab>('Send');
+  const [sub, setSub] = useState<Sub | null>(null);
+  const open = (t: Tab, s: Sub | null = null) => {
+    setTab(t);
+    setSub(s);
+  };
   const [state, setState] = useState<AppState | null>(null);
   const [toasts, setToasts] = useState<ToastItem[]>([]);
   const nextId = useRef(1);
@@ -52,12 +72,12 @@ export function App() {
     } catch {
       return;
     }
-    setPage('Settings');
+    open('More', 'Settings');
   }, [state?.platform, state?.keepAlive]);
 
   // Android: an invite link opened the app: show the Mesh page with it in the join box.
   useEffect(() => {
-    if (state?.joinLink) setPage('Mesh');
+    if (state?.joinLink) open('More', 'Mesh');
   }, [state?.joinLink]);
 
   useEffect(() => {
@@ -70,50 +90,78 @@ export function App() {
     return off;
   }, []);
 
+  const subs = MORE.filter((p) => !(p === 'Guests' && !state?.guest));
+  const status = !state
+    ? ''
+    : state.mode === 'client-only'
+      ? 'Receiving is handled by the MeshDrop background service'
+      : state.error
+        ? 'Not receiving'
+        : state.receiving
+          ? `Receiving as ${state.self.alias}`
+          : 'Receiving paused';
+
   return (
     <div className="app">
-      <nav className="sidebar" aria-label="Pages">
-        <div className="brand">MeshDrop</div>
-        {PAGES.filter((p) => !(p === 'Guests' && !state?.guest)).map((p) => (
-          <button key={p} className={p === page ? 'nav active' : 'nav'} onClick={() => setPage(p)} aria-current={p === page ? 'page' : undefined}>
-            {p}
-          </button>
-        ))}
-        {state && (
-          <div className="self muted">
-            {state.self.alias}
-            <br />
-            {state.mode === 'client-only'
-              ? 'Receiving is handled by the MeshDrop background service'
-              : state.error
-                ? 'Not receiving'
-                : state.receiving
-                  ? `Port ${state.self.port}`
-                  : 'Receiving paused'}
-          </div>
-        )}
-      </nav>
+      <header className="topbar">
+        <span className="brand">MeshDrop</span>
+        <nav className="tabs" aria-label="Pages">
+          {TABS.map((t) => (
+            <button key={t} className={t === tab ? 'tab active' : 'tab'} onClick={() => open(t)} aria-current={t === tab ? 'page' : undefined}>
+              {t}
+            </button>
+          ))}
+        </nav>
+        <span className="self muted">{status}</span>
+      </header>
       <main className="content">
         {state?.error && (
           <div className="banner error" role="alert">
             {state.error}
           </div>
         )}
-        <h1>{page}</h1>
         {!state ? (
           <p className="muted">Starting…</p>
-        ) : page === 'Devices' ? (
+        ) : tab === 'Send' ? (
           <Devices state={state} run={run} />
-        ) : page === 'Transfers' ? (
-          <Transfers state={state} run={run} />
-        ) : page === 'Inbox' ? (
+        ) : tab === 'Received' ? (
           <Inbox state={state} run={run} />
-        ) : page === 'Guests' ? (
-          <Guests state={state} run={run} />
-        ) : page === 'Mesh' ? (
-          <Mesh state={state} run={run} />
+        ) : sub === null ? (
+          <ul className="menu">
+            {subs.map((p) => (
+              <li key={p}>
+                <button className="menu-item" onClick={() => setSub(p)}>
+                  <span className={`menu-icon icon-${p}`} aria-hidden="true">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <path d={ICON[p]} />
+                    </svg>
+                  </span>
+                  <span className="menu-text">
+                    <span className="menu-title">{p}</span>
+                    <span className="muted">{MORE_HINT[p]}</span>
+                  </span>
+                </button>
+              </li>
+            ))}
+          </ul>
         ) : (
-          <Settings key={JSON.stringify(state.settings)} state={state} run={run} />
+          <>
+            <div className="subhead">
+              <button className="link" onClick={() => setSub(null)}>
+                ‹ More
+              </button>
+              <h1>{sub}</h1>
+            </div>
+            {sub === 'Guests' ? (
+              <Guests state={state} run={run} />
+            ) : sub === 'Mesh' ? (
+              <Mesh state={state} run={run} />
+            ) : sub === 'Transfers' ? (
+              <Transfers state={state} run={run} />
+            ) : (
+              <Settings key={JSON.stringify(state.settings)} state={state} run={run} />
+            )}
+          </>
         )}
       </main>
       {state?.guest?.offers[0] && <GuestOffer key={state.guest.offers[0].id} offer={state.guest.offers[0]} run={run} />}

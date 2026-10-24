@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import type { AppState, SendItemInput } from '../../shared/api.ts';
 import { DeviceCard } from '../components/DeviceCard.tsx';
 import { DropZone } from '../components/DropZone.tsx';
+import { ProgressRow } from '../components/ProgressRow.tsx';
 import { baseName } from '../format.ts';
 import type { Run } from '../App.tsx';
 
@@ -28,6 +29,7 @@ export function Devices({ state, run }: { state: AppState; run: Run }) {
   const [addr, setAddr] = useState('');
   const [name, setName] = useState('');
   const [busy, setBusy] = useState(false);
+  const [adding, setAdding] = useState(state.devices.every((d) => !d.trusted && d.role !== 'localsend'));
 
   // LocalSend apps can be sent to (they ask their user), so they sit with the trusted devices.
   const trusted = state.devices.filter((d) => d.trusted || d.role === 'localsend');
@@ -82,16 +84,27 @@ export function Devices({ state, run }: { state: AppState; run: Run }) {
     }
   };
 
+  const recent = state.transfers.filter((t) => t.direction === 'out').slice(0, 5);
+  const pick = (kind: 'file' | 'dir') =>
+    void run(async () => {
+      if (window.meshdrop.pickItems) return add(await window.meshdrop.pickItems(kind));
+      if (kind === 'file') return add((await window.meshdrop.pickFiles()).map((path) => ({ kind: 'file' as const, path })));
+      const p = await window.meshdrop.pickFolder();
+      if (p) add([{ kind: 'dir', path: p }]);
+    });
+
   return (
-    <section>
+    <section className="send">
       <div className="row space">
         <h2>Send to</h2>
-        <label className="toggle">
-          <input type="checkbox" checked={all} onChange={() => setAll(!all)} /> All devices
-        </label>
+        {trusted.length > 1 && (
+          <label className="toggle">
+            <input type="checkbox" checked={all} onChange={() => setAll(!all)} /> All
+          </label>
+        )}
       </div>
       {trusted.length === 0 ? (
-        <p className="muted">{android ? 'No devices yet. Add your PC by address below (its address is in MeshDrop on the PC).' : 'No devices yet. Add one by address below, or join a mesh on the Mesh page.'}</p>
+        <p className="muted">No devices yet. Add one below.</p>
       ) : (
         <div className="cards">
           {trusted.map((d) => (
@@ -100,37 +113,15 @@ export function Devices({ state, run }: { state: AppState; run: Run }) {
         </div>
       )}
 
-      <h2>What</h2>
       {!android && <DropZone onItems={add} />}
       <div className="row">
-        <button
-          onClick={() =>
-            void run(async () =>
-              add(window.meshdrop.pickItems ? await window.meshdrop.pickItems('file') : (await window.meshdrop.pickFiles()).map((path) => ({ kind: 'file' as const, path }))),
-            )
-          }
-        >
-          Add files
-        </button>
-        <button
-          onClick={() =>
-            void run(async () => {
-              if (window.meshdrop.pickItems) {
-                add(await window.meshdrop.pickItems('dir'));
-                return;
-              }
-              const p = await window.meshdrop.pickFolder();
-              if (p) add([{ kind: 'dir', path: p }]);
-            })
-          }
-        >
-          Add folder
-        </button>
+        <button onClick={() => pick('file')}>Add files</button>
+        <button onClick={() => pick('dir')}>Add folder</button>
         <button onClick={() => setText(text === null ? '' : null)} aria-pressed={text !== null}>
           Text
         </button>
         <button onClick={() => void run(() => window.meshdrop.sendClipboard(all ? 'all' : targets), 'Clipboard sent')} disabled={targets.length === 0}>
-          Send clipboard
+          Clipboard
         </button>
       </div>
       {text !== null && <textarea aria-label="Text to send" value={text} onChange={(e) => setText(e.target.value)} rows={3} placeholder="Type a message or paste a link" />}
@@ -146,43 +137,65 @@ export function Devices({ state, run }: { state: AppState; run: Run }) {
           ))}
         </ul>
       )}
-      <div className="row">
-        <button className="primary" disabled={!canSend} onClick={() => void send()}>
-          Send
-        </button>
-      </div>
+      <button className="primary big" disabled={!canSend} onClick={() => void send()}>
+        Send
+      </button>
+      {targets.length === 0 && trusted.length > 0 && <p className="muted hint">Pick a device above. An offline one gets it when it is back.</p>}
 
-      <h2>Nearby</h2>
-      <div className="row">
-        <input aria-label="Address" placeholder="192.168.1.20:53318" value={addr} onChange={(e) => setAddr(e.target.value)} />
-        <input aria-label="Name" placeholder="Name (optional)" value={name} onChange={(e) => setName(e.target.value)} maxLength={64} />
-        <button onClick={() => void addByAddress()} disabled={addr.trim() === ''}>
-          Add by address
-        </button>
-        <button onClick={() => void run(async () => `${await window.meshdrop.scanSubnet()} new device(s) found`)}>Scan network</button>
-      </div>
-      {nearby.length === 0 ? (
-        <p className="muted">No other MeshDrop devices seen on this network.</p>
-      ) : (
-        <div className="cards">
-          {nearby.map((d) => (
-            <DeviceCard
-              key={d.deviceId}
-              d={d}
-              checked={false}
-              {...(d.host && d.port
-                ? {
-                    onPair: () =>
-                      void run(
-                        () => window.meshdrop.addByAddress(d.host!, d.port!, d.alias),
-                        `Paired with ${d.alias}. Now press Pair for this ${android ? 'phone' : 'PC'} on ${d.alias} too: both sides must trust each other.`,
-                      ),
-                  }
-                : {})}
-            />
+      {recent.length > 0 && (
+        <>
+          <h2>Sent</h2>
+          {recent.map((t) => (
+            <ProgressRow key={t.key} t={t} />
           ))}
-        </div>
+        </>
       )}
+
+      <details className="add-device" open={adding} onToggle={(e) => setAdding((e.target as HTMLDetailsElement).open)}>
+        <summary>Add a device</summary>
+        <p className="muted">Open MeshDrop on the other device too. Press Pair on both: each side must trust the other.</p>
+        {nearby.length === 0 ? (
+          <p className="muted">No other MeshDrop devices seen on this network yet.</p>
+        ) : (
+          <div className="cards">
+            {nearby.map((d) => (
+              <DeviceCard
+                key={d.deviceId}
+                d={d}
+                checked={false}
+                {...(d.host && d.port
+                  ? {
+                      onPair: () =>
+                        void run(
+                          () => window.meshdrop.addByAddress(d.host!, d.port!, d.alias),
+                          `Paired with ${d.alias}. Now press Pair for this ${android ? 'phone' : 'PC'} on ${d.alias} too: both sides must trust each other.`,
+                        ),
+                    }
+                  : {})}
+              />
+            ))}
+          </div>
+        )}
+        <div className="row">
+          <button onClick={() => void run(async () => `${await window.meshdrop.scanSubnet()} new device(s) found`)}>Scan network</button>
+        </div>
+        <p className="muted">
+          Not found? Type its address.
+          {state.self.addrs?.[0] && (
+            <>
+              {' '}
+              This {android ? 'phone' : 'PC'} is <code>{`${state.self.addrs[0]}:${state.self.port}`}</code>
+            </>
+          )}
+        </p>
+        <div className="row">
+          <input aria-label="Address" placeholder="192.168.1.20:53318" value={addr} onChange={(e) => setAddr(e.target.value)} />
+          <input aria-label="Name" placeholder="Name (optional)" value={name} onChange={(e) => setName(e.target.value)} maxLength={64} />
+          <button onClick={() => void addByAddress()} disabled={addr.trim() === ''}>
+            Add by address
+          </button>
+        </div>
+      </details>
     </section>
   );
 }

@@ -15,6 +15,7 @@ test('a guest browser sends after the owner accepts, and downloads what the owne
   try {
     const win = await app.firstWindow();
     await expect(win.getByText('Starting…')).toHaveCount(0);
+    await win.getByRole('button', { name: 'More', exact: true }).click();
     await win.getByRole('button', { name: 'Guests' }).click();
     await win.getByRole('button', { name: 'Show a guest QR code' }).click();
     await expect(win.getByAltText('Guest QR code')).toBeVisible();
@@ -75,7 +76,7 @@ test('a guest browser sends after the owner accepts, and downloads what the owne
     }, href);
     expect(sha(Buffer.from(b64, 'base64'))).toBe(sha(giftData));
 
-    await win.getByRole('button', { name: 'End' }).click();
+    await win.getByRole('button', { name: 'End', exact: true }).click();
     await expect(win.getByRole('button', { name: 'Show a guest QR code' })).toBeVisible();
     await guest.reload();
     await expect(guest.getByText('link has expired')).toBeVisible();
