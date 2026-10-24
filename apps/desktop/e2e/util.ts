@@ -13,6 +13,9 @@ export function appEnv(home: string, extra: Record<string, string> = {}): Record
     MESHDROP_INBOX: join(home, 'inbox'),
     MESHDROP_PORT: '0',
     MESHDROP_TEST: '1',
+    // Ephemeral hub ingress and LAN guest ports: a real MeshDrop on this PC keeps the defaults.
+    MESHDROP_INGRESS_PORT: '0',
+    MESHDROP_GUEST_PORT: '0',
     ...extra,
   };
 }

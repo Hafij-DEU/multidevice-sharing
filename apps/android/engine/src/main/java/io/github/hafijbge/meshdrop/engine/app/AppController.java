@@ -235,6 +235,10 @@ public final class AppController {
             dm.put("reach", d.reach);
             if (d.deviceType != null) dm.put("deviceType", d.deviceType);
             if (d.lastSeen > 0) dm.put("lastSeen", d.lastSeen);
+            if (d.host != null && d.port > 0) {
+                dm.put("host", d.host);
+                dm.put("port", (long) d.port);
+            }
             dm.put("self", false);
             devices.add(dm);
         }

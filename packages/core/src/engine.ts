@@ -227,6 +227,9 @@ export interface EngineDevice {
   reach: 'lan' | 'hub' | 'offline';
   deviceType?: string;
   lastSeen?: number;
+  /** Nearby devices: where they announced themselves (to pair with one click). */
+  host?: string;
+  port?: number;
 }
 
 /** A device id prefix that is not a unique prefix (>= 4 hex chars) of exactly one trusted device. */
@@ -1137,7 +1140,7 @@ export class Engine extends EventEmitter {
         cur.deviceType = p.deviceType;
         cur.lastSeen = p.lastSeen;
       } else if (!this.mesh?.isRevoked(p.deviceId)) {
-        out.set(p.deviceId, { deviceId: p.deviceId, alias: p.alias, role: 'nearby', trusted: false, reach: 'lan', deviceType: p.deviceType, lastSeen: p.lastSeen });
+        out.set(p.deviceId, { deviceId: p.deviceId, alias: p.alias, role: 'nearby', trusted: false, reach: 'lan', deviceType: p.deviceType, lastSeen: p.lastSeen, host: p.host, port: p.port });
       }
     }
     for (const [id, d] of out) if (d.lastSeen === undefined && dir.get(id)?.lastSeen) d.lastSeen = dir.get(id)!.lastSeen;

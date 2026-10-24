@@ -6,6 +6,7 @@ import { execFile } from 'node:child_process';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { configDir } from '@meshdrop/core/src/paths.ts';
+import type { EngineOptions } from '@meshdrop/core/src/engine.ts';
 import type { AppState, LinkCreateInput, ReachInput, ReceivedRecord, SendItemInput, Settings } from '../shared/api.ts';
 import { AppController, type Platform } from './controller.ts';
 import { autostartDir, gnomeShortcutCommands, parseStrList, READ_KEYBINDINGS, setAutostart, validBinding } from './desktop.ts';
@@ -302,7 +303,10 @@ async function startController(): Promise<void> {
   const history = new HistoryStore(join(HOME, 'desktop-history.json'));
   // MESHDROP_GUEST_PORT moves the LAN guest server off 53320 (e2e uses 0: any free port).
   const guestPort = process.env.MESHDROP_GUEST_PORT !== undefined ? Number(process.env.MESHDROP_GUEST_PORT) : undefined;
-  const engineOptions = guestPort !== undefined && Number.isInteger(guestPort) && guestPort >= 0 && guestPort <= 65535 ? { guest: { port: guestPort } } : {};
+  const engineOptions: EngineOptions = guestPort !== undefined && Number.isInteger(guestPort) && guestPort >= 0 && guestPort <= 65535 ? { guest: { port: guestPort } } : {};
+  // MESHDROP_INGRESS_PORT moves the hub's tunnel ingress off 53319 (e2e: 0, next to a real hub).
+  const ingress = process.env.MESHDROP_INGRESS_PORT !== undefined ? Number(process.env.MESHDROP_INGRESS_PORT) : undefined;
+  if (ingress !== undefined && Number.isInteger(ingress) && ingress >= 0 && ingress <= 65535) engineOptions.hub = { ingressPort: ingress };
   controller = new AppController({ home: HOME, settings: settings!, history, platform, engineOptions });
   if (TEST) {
     // Test-only hooks, reachable from Playwright's app.evaluate (main process), never from the page.
@@ -310,6 +314,7 @@ async function startController(): Promise<void> {
       setPicked: (p: string[]) => {
         picked = p;
       },
+      addNearby: (host: string, port: number) => controller!.addNearby(host, port),
       seedHistory: (r: ReceivedRecord) => {
         history.addReceived(r);
         controller?.refresh();

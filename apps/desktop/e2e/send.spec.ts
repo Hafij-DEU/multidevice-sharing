@@ -21,6 +21,26 @@ async function launch(home: string): Promise<{ app: ElectronApplication; win: Pa
 }
 const stateOf = (win: Page) => win.evaluate(() => window.meshdrop.getState()) as Promise<AppState>;
 
+test('a nearby device pairs with one click on its card', async () => {
+  const homes = [mkdtempSync(join(tmpdir(), 'md-e2e-a-')), mkdtempSync(join(tmpdir(), 'md-e2e-b-'))];
+  const A = await launch(homes[0]!);
+  const B = await launch(homes[1]!);
+  try {
+    const b = await stateOf(B.win);
+    // A finds B (as discovery or Scan network would): B is "Nearby" with its address.
+    await A.app.evaluate(async (_e, port) => (globalThis as unknown as { __meshdropTest: { addNearby(h: string, p: number): Promise<void> } }).__meshdropTest.addNearby('127.0.0.1', port), b.self.port);
+    const card = A.win.locator(`.device-card[data-device="${b.self.deviceId}"]`);
+    await expect(card.getByRole('button', { name: 'Pair' })).toBeVisible();
+    await card.getByRole('button', { name: 'Pair' }).click();
+    await expect(A.win.getByText(/Paired with/)).toBeVisible();
+    await expect(card.getByRole('checkbox')).toBeVisible();
+  } finally {
+    await A.app.close();
+    await B.app.close();
+    for (const h of homes) rmSync(h, { recursive: true, force: true });
+  }
+});
+
 test('pair two apps by address, send a file, see it in the other inbox', async () => {
   const homes = [mkdtempSync(join(tmpdir(), 'md-e2e-a-')), mkdtempSync(join(tmpdir(), 'md-e2e-b-'))];
   const A = await launch(homes[0]!);

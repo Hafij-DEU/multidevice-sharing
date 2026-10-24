@@ -166,7 +166,20 @@ export function Devices({ state, run }: { state: AppState; run: Run }) {
       ) : (
         <div className="cards">
           {nearby.map((d) => (
-            <DeviceCard key={d.deviceId} d={d} checked={false} />
+            <DeviceCard
+              key={d.deviceId}
+              d={d}
+              checked={false}
+              {...(d.host && d.port
+                ? {
+                    onPair: () =>
+                      void run(
+                        () => window.meshdrop.addByAddress(d.host!, d.port!, d.alias),
+                        `Paired with ${d.alias}. Now press Pair for this ${android ? 'phone' : 'PC'} on ${d.alias} too: both sides must trust each other.`,
+                      ),
+                  }
+                : {})}
+            />
           ))}
         </div>
       )}

@@ -567,6 +567,12 @@ export class AppController extends EventEmitter {
     this.#changed();
   }
 
+  /** A device seen at host:port (it shows as Nearby until paired). */
+  async addNearby(host: string, port: number): Promise<void> {
+    await this.#e.addNearby(host, port);
+    this.#changed();
+  }
+
   async scanSubnet(): Promise<number> {
     const n = await this.#e.scanSubnet();
     this.#changed();

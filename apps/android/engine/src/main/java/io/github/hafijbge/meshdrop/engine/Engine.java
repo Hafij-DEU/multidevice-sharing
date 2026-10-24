@@ -724,7 +724,7 @@ public final class Engine {
         }
         for (Discovery.PeerInfo p : peers.values()) {
             if (!seen.add(p.deviceId)) continue;
-            out.add(new EngineDevice(p.deviceId, p.alias, "nearby", false, "lan", p.deviceType, p.lastSeen));
+            out.add(new EngineDevice(p.deviceId, p.alias, "nearby", false, "lan", p.deviceType, p.lastSeen, p.host, p.port));
         }
         return out;
     }
