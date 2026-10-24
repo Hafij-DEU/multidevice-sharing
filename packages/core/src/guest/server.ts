@@ -4,7 +4,7 @@
 //   GET  /g/app.js, /g/app.css         page assets
 //   GET  /g/api/session                {expiresAt, owner}
 //   GET  /g/api/shared                 [{id, name, size}]   files the owner offers
-//   GET  /g/api/shared/<id>            one of them (single-range Range supported)
+//   GET  /g/api/shared/<id>            one of them (single-range Range supported; ?t=<token> allowed)
 //   POST /g/api/offers                 {files:[{name,size,type?,thumb?}], text?} -> 201 {id, status}
 //   GET  /g/api/offers/<id>            {status, files:[{name,size,received}]}
 //   PUT  /g/api/offers/<id>/<i>?offset=N   one slice (at most 4 MiB) -> {received}
@@ -134,7 +134,9 @@ export function createGuestServer(o: GuestServerOptions): Server {
       });
     }
     if (seg[1] !== 'api') return json(res, 404, { error: 'not-found' });
-    const token = req.headers['x-guest-token'];
+    // A plain download link cannot send a header: downloads also take the token as ?t= (cookie still required).
+    const isDownload = method === 'GET' && seg.length === 4 && seg[2] === 'shared';
+    const token = req.headers['x-guest-token'] ?? (isDownload ? (url.searchParams.get('t') ?? undefined) : undefined);
     const st = typeof token === 'string' ? o.book.check(token, cookieOf(req)) : 'unknown';
     if (st !== 'ok') return json(res, st === 'unknown' ? 404 : 410, { error: st === 'unknown' ? 'not-found' : st });
     const uploads = o.uploads();
