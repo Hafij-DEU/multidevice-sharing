@@ -320,6 +320,10 @@ function wireIpc(): void {
   handle('scanSubnet', (_e) => ctl().scanSubnet());
   handle('hubInit', (_e, u) => ctl().hubInit(strs(u, 16)));
   handle('setHubUrls', (_e, u) => ctl().setHubUrls(strs(u, 16)));
+  handle('relaysSet', (_e, rs) => {
+    if (!Array.isArray(rs) || rs.length > 8) throw new Error('bad relay list');
+    return ctl().relaysSet(rs.map((r: unknown) => ({ deviceId: str((r as { deviceId?: unknown })?.deviceId, 64), urls: strs((r as { urls?: unknown })?.urls, 4) })));
+  });
   handle('createInvite', async (_e, group) => {
     const r = await ctl().createInvite(group === true);
     // MESHDROP_TEST only: a short countdown so e2e can watch an invite expire (the core invite keeps its 5 min).

@@ -14,7 +14,7 @@ const api = {
   ...Object.fromEntries(
     [
       'pickFiles', 'pickFolder', 'pickSavePath', 'pickOpenPath', 'send', 'sendClipboard', 'resumeOutbox', 'removeOutbox',
-      'pairProbe', 'addByAddress', 'scanSubnet', 'hubInit', 'setHubUrls', 'createInvite', 'join', 'revoke', 'exportRecovery',
+      'pairProbe', 'addByAddress', 'scanSubnet', 'hubInit', 'setHubUrls', 'relaysSet', 'createInvite', 'join', 'revoke', 'exportRecovery',
       'importRecovery', 'setSettings', 'openInbox', 'reveal', 'openFile', 'thumb', 'unpair', 'takeSharedItems', 'registerClipboardShortcut', 'openConfigFolder',
       'guestStart', 'guestEnd', 'guestShare', 'guestUnshare', 'guestAccept', 'guestReject', 'linkCreate', 'linkRevoke', 'reachDetect', 'reachSet', 'syncPut', 'syncRemove', 'syncNow', 'openSyncFolder',
     ].map((m) => [m, call(m)]),

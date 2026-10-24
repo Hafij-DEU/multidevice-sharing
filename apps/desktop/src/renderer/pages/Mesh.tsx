@@ -55,6 +55,48 @@ function HubUrls({ urls, run }: { urls: string[]; run: Run }) {
   );
 }
 
+/**
+ * Main hub: members that also run a hub (a VPS, a backup PC). Devices use them while this PC is off;
+ * joins and revokes still need this PC.
+ */
+function RelayHubs({ state, run }: { state: AppState; run: Run }) {
+  const relays = state.relays ?? [];
+  const init = () => Object.fromEntries(relays.map((r) => [r.deviceId, r.urls.join(' ')]));
+  const [urls, setUrls] = useState<Record<string, string>>(init);
+  const others = state.members.filter((m) => !m.self);
+  const next = Object.entries(urls)
+    .map(([deviceId, u]) => ({ deviceId, urls: u.split(/\s+/).filter(Boolean) }))
+    .filter((r) => r.urls.length > 0);
+  const changed = JSON.stringify(next) !== JSON.stringify(relays.map((r) => ({ deviceId: r.deviceId, urls: r.urls })));
+  return (
+    <div>
+      <p className="muted">
+        A member that is always on (a VPS, a second PC) can stand in for this PC: sends over the internet and files for offline devices keep working while this
+        PC is off. Enter its public address (wss://…); leave empty for no relay. Adding or removing devices still needs this PC.
+      </p>
+      <ul className="list">
+        {others.map((m) => (
+          <li key={m.deviceId} className="row space">
+            <Peer text={m.alias} />
+            <input
+              aria-label={`Relay address of ${m.alias}`}
+              className="grow"
+              placeholder="wss://relay.example.com/mesh/v1/hub"
+              value={urls[m.deviceId] ?? ''}
+              onChange={(e) => setUrls({ ...urls, [m.deviceId]: e.target.value })}
+            />
+          </li>
+        ))}
+      </ul>
+      <div className="row">
+        <button disabled={!changed} onClick={() => void run(() => window.meshdrop.relaysSet(next), 'Relay hubs saved')}>
+          Save relay hubs
+        </button>
+      </div>
+    </div>
+  );
+}
+
 export function Mesh({ state, run }: { state: AppState; run: Run }) {
   const [invite, setInvite] = useState<Invite | null>(null);
   const [uri, setUri] = useState(state.joinLink ?? '');
@@ -136,7 +178,10 @@ export function Mesh({ state, run }: { state: AppState; run: Run }) {
       <p className="lead">{ROLE[hub.role]}</p>
       <p className="muted">
         List version {hub.version} · {hub.members} device{hub.members === 1 ? '' : 's'} ·{' '}
-        <span className={hub.online ? 'ok-text' : 'error-text'}>{isHub ? (hub.online ? 'Hub running' : 'Hub stopped') : hub.online ? 'Connected to the hub' : 'Hub not reachable'}</span>
+        <span className={hub.online ? 'ok-text' : 'error-text'}>
+          {isHub ? (hub.online ? 'Hub running' : 'Hub stopped') : hub.online ? (hub.linkedTo === 'relay' ? 'Connected to a relay hub (the main hub is away)' : 'Connected to the hub') : 'Hub not reachable'}
+        </span>
+        {hub.relayHub && <> · this {android ? 'phone' : 'PC'} is a relay hub</>}
         {isHub && hub.ingressPort > 0 && <> · tunnel ingress 127.0.0.1:{hub.ingressPort}</>}
       </p>
 
@@ -153,6 +198,25 @@ export function Mesh({ state, run }: { state: AppState; run: Run }) {
 
           <h2>Invite a device</h2>
           {invite ? <QrInvite invite={invite} onRenew={() => void newInvite()} run={run} /> : <button onClick={() => void newInvite()}>Invite a device</button>}
+        </>
+      )}
+
+      {isHub && !android && state.members.length > 1 && (
+        <>
+          <h2>Relay hubs</h2>
+          <RelayHubs key={JSON.stringify(state.relays ?? [])} state={state} run={run} />
+        </>
+      )}
+      {!isHub && (state.relays ?? []).length > 0 && (
+        <>
+          <h2>Relay hubs</h2>
+          <ul className="items">
+            {(state.relays ?? []).map((r) => (
+              <li key={r.deviceId}>
+                <Peer text={r.alias} /> <code>{r.urls[0]}</code>
+              </li>
+            ))}
+          </ul>
         </>
       )}
 

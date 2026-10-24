@@ -155,7 +155,15 @@ export interface AppState {
   /** addrs: this device's LAN IPv4 addresses (what another device types to add it). */
   self: { deviceId: string; alias: string; port: number; addrs?: string[] };
   mode: 'serving' | 'client-only';
-  hub: { role: 'hub' | 'member' | 'provisional' | 'none'; online: boolean; version: number; members: number; urls: string[]; ingressPort: number };
+  hub: {
+    role: 'hub' | 'member' | 'provisional' | 'none'; online: boolean; version: number; members: number; urls: string[]; ingressPort: number;
+    /** The link is on the main hub, or on a relay hub while the main one is away. */
+    linkedTo?: 'main' | 'relay' | null;
+    /** This device runs a relay hub. */
+    relayHub?: boolean;
+  };
+  /** Relay hubs of the mesh (M9): devices fail over to them while the main hub is off. */
+  relays?: { deviceId: string; alias: string; urls: string[] }[];
   devices: DeviceView[];
   transfers: TransferView[];
   /** waiting: sends on its own when the device is seen; else it stopped on `error`. */
@@ -207,6 +215,8 @@ export interface DesktopApi {
   scanSubnet(): Promise<number>;
   hubInit(urls: string[]): Promise<void>;
   setHubUrls(urls: string[]): Promise<void>;
+  /** Main hub: the members that run a relay hub, with their public wss:// addresses. */
+  relaysSet(relays: { deviceId: string; urls: string[] }[]): Promise<void>;
   /** `group`: one QR any of your devices can scan (up to 20, 15 min); default single use (5 min). */
   createInvite(group?: boolean): Promise<{ uri: string; qrSvg: string; expiresAt: number }>;
   join(uri: string): Promise<'member' | 'provisional'>;

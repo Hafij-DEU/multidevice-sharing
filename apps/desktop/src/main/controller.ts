@@ -312,7 +312,8 @@ export class AppController extends EventEmitter {
     return {
       self: { deviceId: me, alias: this.#settings.get().alias, port: e.port, addrs: lanIpv4() },
       mode: this.#mode,
-      hub: { role: st.role, online: st.online, version: st.version, members: st.members, urls: st.urls, ingressPort: e.hubIngressPort },
+      hub: { role: st.role, online: st.online, version: st.version, members: st.members, urls: st.urls, ingressPort: e.hubIngressPort, linkedTo: st.linkedTo ?? null, relayHub: st.relayHub === true },
+      relays: e.relays(),
       devices: e.devices().map((d): DeviceView => ({ ...d, self: false })),
       transfers: [...this.#transfers.values()].reverse().map(({ done: _d, sizes: _s, rateAt: _a, rateSent: _r, ...t }) => t),
       outbox: this.#outbox.map((o) => ({ ...o })),
@@ -745,6 +746,12 @@ export class AppController extends EventEmitter {
   async setHubUrls(urls: string[]): Promise<void> {
     this.#notClientOnly();
     await this.#e.setHubUrls(urls);
+    this.#changed();
+  }
+
+  async relaysSet(relays: { deviceId: string; urls: string[] }[]): Promise<void> {
+    this.#notClientOnly();
+    await this.#e.relaysSet(relays.map((r) => ({ deviceId: r.deviceId, urls: r.urls.map((u) => u.trim()).filter(Boolean) })));
     this.#changed();
   }
 
