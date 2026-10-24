@@ -101,3 +101,17 @@ button.danger { background: var(--bad); color: #fff; border-color: var(--bad); }
 .guest-offer .files li { gap: 10px; padding: 4px 0; }
 .thumb { width: 48px; height: 48px; object-fit: cover; border-radius: 6px; flex: none; background: color-mix(in srgb, var(--muted) 15%, transparent); }
 .guest-text { margin: 10px 0; padding: 8px 12px; border-left: 3px solid var(--border); white-space: pre-wrap; word-break: break-word; }
+
+/* Phones (and narrow windows): the page list becomes a top bar and the content takes the full width. */
+@media (max-width: 720px) {
+  .app { flex-direction: column; height: auto; min-height: 100%; }
+  .sidebar { width: auto; flex-direction: row; flex-wrap: wrap; align-items: center; gap: 2px; padding: 6px 8px; border-right: 0; border-bottom: 1px solid var(--border); position: sticky; top: 0; z-index: 5; }
+  .brand { padding: 4px 8px; font-size: 15px; }
+  .nav { padding: 8px 10px; }
+  .self { display: none; }
+  .content { padding: 12px 14px; overflow: visible; }
+  .cards { grid-template-columns: 1fr; }
+  .row > input, .row > select, .row > textarea { flex: 1 1 160px; min-width: 0; }
+  .toasts { left: 12px; right: 12px; max-width: none; }
+  .modal { max-width: calc(100vw - 24px); }
+}
