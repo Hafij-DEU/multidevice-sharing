@@ -36,6 +36,12 @@ public final class MainActivity extends Activity {
     }
 
     @Override
+    protected void onResume() {
+        super.onResume();
+        ((MeshApp) getApplication()).core().controller.refresh(); // a keep-alive step may have changed
+    }
+
+    @Override
     protected void onNewIntent(Intent intent) {
         super.onNewIntent(intent);
         handleShare(intent);

@@ -41,6 +41,18 @@ export function App() {
     [toast],
   );
 
+  // Android: show the keep-alive checklist once, on first run, while a step is still open.
+  useEffect(() => {
+    if (state?.platform !== 'android' || !state.keepAlive?.steps.some((s) => !s.done)) return;
+    try {
+      if (localStorage.getItem('md.keepAliveShown')) return;
+      localStorage.setItem('md.keepAliveShown', '1');
+    } catch {
+      return;
+    }
+    setPage('Settings');
+  }, [state?.platform, state?.keepAlive]);
+
   useEffect(() => {
     const off = window.meshdrop.onState(setState);
     const poll = () =>

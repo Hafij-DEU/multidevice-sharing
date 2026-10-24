@@ -5,8 +5,8 @@ end-to-end encrypted. Devices on the same Wi-Fi talk directly. Away from home, t
 runs on your own PC (reachable through Tailscale Funnel, a Cloudflare tunnel or a forwarded port). No
 account and no third-party server.
 
-Status: the core engine (M1), the hub (M2) and the Ubuntu desktop app (M3) are done; the Android app (M4)
-is next. The wire protocol is in [docs/protocol.md](docs/protocol.md).
+Status: the core engine (M1), the hub (M2), the Ubuntu desktop app (M3) and the Android app for the local
+network (M4a) are done; mesh features on Android (QR join, the hub over the internet) come next (M4b). The wire protocol is in [docs/protocol.md](docs/protocol.md).
 
 ## Install (Ubuntu)
 
@@ -39,6 +39,27 @@ in `/usr/bin`.
 Closing the window keeps MeshDrop running in the tray, so it keeps receiving. Settings has autostart at
 login and a GNOME keyboard shortcut (default Ctrl+Alt+C) that sends your clipboard.
 
+## Android
+
+Android 10 or newer. Build the signed APK (needs the Android SDK in `~/Android/Sdk` and Gradle 8.11.1):
+
+```bash
+bash apps/android/scripts/release.sh
+```
+
+It writes `apps/android/dist-apk/MeshDrop-0.1.0.apk` (the signing key is created once in `~/.android`;
+keep it, every update must be signed with it). Install it from the phone's file manager (MIUI blocks
+`adb install`).
+
+1. Open MeshDrop. It starts a background service with a small notification, so it keeps receiving.
+2. Settings → "Keep MeshDrop alive": allow the battery exemption and notifications; on Xiaomi and Tecno
+   phones also the Autostart steps.
+3. Pair with the PC: on Devices, "Add by address" with the PC's address (shown in MeshDrop on the PC),
+   and on the PC add the phone the same way.
+4. Send from Devices (Add files / Add folder / Text), from any app's Share menu, or send the clipboard
+   with the notification's "Send clipboard" button or the quick-settings tile. Received files land in
+   `Download/MeshDrop`.
+
 ## Command line
 
 ```text
@@ -59,6 +80,8 @@ pnpm test               # core + desktop unit tests
 pnpm typecheck
 pnpm desktop:e2e        # builds the app and runs the Playwright Electron tests
 pnpm desktop:dev        # build and start the app
+cd apps/android && ~/.local/opt/gradle-8.11.1/bin/gradle --offline :engine:test   # Java engine + Node interop
+bash apps/android/scripts/emulator-e2e.sh   # the APK on the emulator against the Node engine
 ```
 
 License: GPL-3.0-only.

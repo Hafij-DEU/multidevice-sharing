@@ -540,6 +540,19 @@ Not part of the protocol; platform constraints found while specifying it.
 - **Certificates:** any self-signed P-256 certificate works (see Identity); the device id is SHA-256 of
   whatever DER the platform produced, so it must be stored and re-presented byte-identically forever.
 
+What the M4a Java engine (`apps/android/engine`) chose:
+
+- **minSdk 29**: platform TLS 1.3 (Conscrypt), no bundled provider.
+- **Identity key**: a software P-256 key (HPKE needs raw ECDH), stored PKCS#8 sealed with an AES-256-GCM key
+  in AndroidKeyStore; the certificate is the Node profile, built by the engine (`identity/X509.java`).
+- **Pinning inside the handshake**: the pinned client checks the server certificate in
+  `X509ExtendedTrustManager.checkServerTrusted`, before its own certificate is sent.
+- **HTTP**: one request per connection, `Connection: close`; Content-Length or chunked bodies; head at most
+  16 KiB / 100 headers (431 otherwise); 30 s idle timeout; 64 concurrent connections.
+- **Received files**: partial data in app storage; finished files are published to MediaStore
+  `Download/MeshDrop/<path>`. Empty folders are created where the platform allows it (Android 11+).
+- **Pause receiving**: offers get `503 {"error":"paused"}`, like the desktop.
+
 ## Test vectors
 
 Frozen files in `protocol/vectors/`. A conforming engine must reproduce `hpke-auth-p256.json`,

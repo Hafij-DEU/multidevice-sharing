@@ -150,9 +150,30 @@ public class AndroidPlatform implements Platform {
         return kind.equals("dir") ? SendItem.dir(PathSource.tree(p)) : SendItem.file(PathSource.file(p));
     }
 
+    private static String prop(String k) {
+        try {
+            return (String) Class.forName("android.os.SystemProperties").getMethod("get", String.class).invoke(null, k);
+        } catch (ReflectiveOperationException | RuntimeException e) {
+            return "";
+        }
+    }
+
+    String rom() {
+        Map<String, String> props = new LinkedHashMap<>();
+        for (String k : new String[] {"ro.miui.ui.version.name", "ro.mi.os.version.name", "ro.tranos.type", "ro.os.hios.version"}) props.put(k, prop(k));
+        return io.github.hafijbge.meshdrop.engine.app.KeepAlive.rom(props, android.os.Build.MANUFACTURER);
+    }
+
+    boolean batteryUnrestricted() {
+        android.os.PowerManager pm = ctx.getSystemService(android.os.PowerManager.class);
+        return pm != null && pm.isIgnoringBatteryOptimizations(ctx.getPackageName());
+    }
+
     @Override
     public void decorate(Map<String, Object> state) {
         state.put("platform", "android");
+        android.app.NotificationManager nm = ctx.getSystemService(android.app.NotificationManager.class);
+        state.put("keepAlive", io.github.hafijbge.meshdrop.engine.app.KeepAlive.state(rom(), batteryUnrestricted(), nm != null && nm.areNotificationsEnabled()));
         synchronized (shared) {
             state.put("sharedPending", (long) shared.size());
         }
@@ -231,8 +252,39 @@ public class AndroidPlatform implements Platform {
         return i.getParcelableArrayListExtra(Intent.EXTRA_STREAM);
     }
 
-    /** Opens the system screen for one keep-alive step (Task 11). */
+    /** Opens the system screen for one keep-alive step; falls back to the app's settings page. */
+    @android.annotation.SuppressLint("BatteryLife") // keeping a file receiver reachable is the point of this step
     void keepAliveAction(Activity a, String id) {
-        throw new IllegalStateException("not available yet");
+        String pkg = ctx.getPackageName();
+        Intent i;
+        switch (id) {
+            case "battery":
+                i = new Intent(android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:" + pkg));
+                break;
+            case "notifications":
+                i = new Intent(android.provider.Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(android.provider.Settings.EXTRA_APP_PACKAGE, pkg);
+                break;
+            case "autostart":
+                i = rom().equals("miui")
+                        ? new Intent().setClassName("com.miui.securitycenter", "com.miui.permcenter.autostart.AutoStartManagementActivity")
+                        : new Intent().setClassName("com.transsion.phonemaster", "com.cyin.himgr.autostart.AutoStartActivity");
+                break;
+            case "battery-saver":
+                i = new Intent().setClassName("com.miui.powerkeeper", "com.miui.powerkeeper.ui.HiddenAppsConfigActivity")
+                        .putExtra("package_name", pkg).putExtra("package_label", "MeshDrop");
+                break;
+            default:
+                throw new IllegalArgumentException("unknown step " + id);
+        }
+        Intent fallback = new Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:" + pkg));
+        Intent chosen = i;
+        a.runOnUiThread(() -> {
+            try {
+                a.startActivity(chosen);
+            } catch (RuntimeException e) {
+                a.startActivity(fallback); // the ROM moved that screen: the app page is the closest
+            }
+            if (controller != null) controller.refresh();
+        });
     }
 }
