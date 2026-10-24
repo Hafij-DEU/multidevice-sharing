@@ -11,7 +11,7 @@
 // Close codes: 4401 authentication failed, 4403 revoked or not a member, 4409 replaced by a newer link.
 import { X509Certificate, createPublicKey, randomBytes, type KeyObject } from 'node:crypto';
 import { EventEmitter } from 'node:events';
-import { createServer as createHttpServer, type IncomingMessage, type Server as HttpServer } from 'node:http';
+import { createServer as createHttpServer, type IncomingMessage, type Server as HttpServer, type ServerResponse } from 'node:http';
 import type { Server as HttpsServer } from 'node:https';
 import type { Duplex } from 'node:stream';
 import type { TLSSocket } from 'node:tls';
@@ -65,6 +65,8 @@ export interface HubServerOptions {
   held?: HeldStore;
   /** Observes every frame the hub forwards (tests, diagnostics). */
   onRelay?: (frame: Buffer) => void;
+  /** Plain HTTP requests on the ingress (internet guest links); return true when handled. */
+  ingressHttp?: (req: IncomingMessage, res: ServerResponse) => boolean;
   now?: () => number;
 }
 
@@ -147,10 +149,13 @@ export class HubServer extends EventEmitter {
 
   /** Plain-HTTP ingress for tunnels, bound to 127.0.0.1 only; authentication is application-level. */
   listenIngress(port = DEFAULT_INGRESS_PORT): Promise<number> {
-    const srv = createHttpServer((_req, res) => {
+    const srv = createHttpServer((req, res) => {
+      if (this.#opts.ingressHttp?.(req, res)) return; // internet guest links (M5b)
       res.writeHead(404);
       res.end();
     });
+    srv.headersTimeout = 10_000;
+    srv.requestTimeout = 300_000;
     srv.on('upgrade', (req: IncomingMessage, socket: Duplex, head: Buffer) => this.#upgrade(req, socket, head, null));
     this.#ingress = srv;
     return new Promise((resolve, reject) => {
