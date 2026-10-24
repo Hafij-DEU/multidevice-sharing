@@ -4,6 +4,7 @@ import io.github.hafijbge.meshdrop.engine.crypto.Hpke;
 import io.github.hafijbge.meshdrop.engine.identity.Identity;
 import io.github.hafijbge.meshdrop.engine.net.Http;
 import io.github.hafijbge.meshdrop.engine.net.Tls;
+import io.github.hafijbge.meshdrop.engine.net.TrustSource;
 import io.github.hafijbge.meshdrop.engine.net.TrustStore;
 import io.github.hafijbge.meshdrop.engine.proto.Chunks;
 import io.github.hafijbge.meshdrop.engine.proto.Manifest;
@@ -83,7 +84,7 @@ public final class MeshServer {
     }
 
     private final Identity id;
-    private final TrustStore trust;
+    private final TrustSource trust;
     private final Inbox inbox;
     private final Events events;
     private final Options opts;
@@ -99,7 +100,7 @@ public final class MeshServer {
     private ExecutorService pool;
     private Thread acceptor;
 
-    public MeshServer(Identity id, TrustStore trust, Inbox inbox, Events events, Options opts) {
+    public MeshServer(Identity id, TrustSource trust, Inbox inbox, Events events, Options opts) {
         this.id = id;
         this.trust = trust;
         this.inbox = inbox;

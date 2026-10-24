@@ -17,7 +17,7 @@ import java.util.List;
 import java.util.Map;
 
 /** Manually paired devices, <home>/trust.json: {"devices":[{deviceId, alias, publicKeyPem, addedAt}]} (Node's format). */
-public final class TrustStore {
+public final class TrustStore implements TrustSource {
     public static final class Device {
         public final String deviceId;
         public final String alias;
@@ -25,7 +25,7 @@ public final class TrustStore {
         public final long addedAt;
         public final PublicKey key;
 
-        Device(String deviceId, String alias, String publicKeyPem, long addedAt) {
+        public Device(String deviceId, String alias, String publicKeyPem, long addedAt) {
             this.deviceId = deviceId;
             this.alias = alias;
             this.publicKeyPem = publicKeyPem;
@@ -86,11 +86,13 @@ public final class TrustStore {
         }
     }
 
+    @Override
     public synchronized Device get(String deviceId) {
         fresh();
         return devices.get(deviceId);
     }
 
+    @Override
     public synchronized boolean isTrusted(String deviceId) {
         return get(deviceId) != null;
     }
