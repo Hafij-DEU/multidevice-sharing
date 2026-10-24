@@ -66,6 +66,21 @@ keep it, every update must be signed with it). Install it from the phone's file 
    devices through it when they are not on the same Wi-Fi; files for a device that is off wait on the
    hub until it comes back. Creating the mesh, inviting, revoking and recovery stay on the PC.
 
+## Guests
+
+Let a friend send you files from their phone's browser, no app needed. On the PC, open Guests →
+"Show a guest QR code" and let them scan it on the same Wi-Fi. Their browser gets a page where they can
+send you files and a message, and download files you offer ("Offer files…"). They see nothing else.
+
+- Every send asks you first: you see the names, sizes and photo thumbnails, then Accept or Decline.
+  Nothing is saved before you accept; accepted files land in your inbox.
+- The link works for one browser only, for 1 hour by default (Settings → "A guest link works for",
+  5 minutes to 24 hours). "End" stops it at once.
+- The page is plain HTTP on your network (browsers reject self-signed certificates), so use it on Wi-Fi
+  you trust. Guests over the internet come with M5b.
+
+From a terminal: `meshdrop guest [--share FILE]... [--minutes N] [--accept-all]`.
+
 ## Command line
 
 ```text
@@ -74,6 +89,7 @@ meshdrop listen                     receive until Ctrl-C (or run it as a service
 meshdrop pair <host[:port]> <name>  trust a device by address (both sides)
 meshdrop send <device|all> <path…>  send files or folders (--text "..." for text)
 meshdrop outbox / resume            unfinished sends
+meshdrop guest                      a guest QR link for a browser on this network
 meshdrop hub init / invite / join / members / hub revoke / hub recovery-export
 ```
 

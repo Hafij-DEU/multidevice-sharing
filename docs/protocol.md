@@ -526,6 +526,47 @@ quietly instead of fighting it.
 Add devices with `meshdrop invite` (QR) and `meshdrop join <uri>` on the new device (or the Mesh page); list
 them with `meshdrop members`. Export the recovery file once and keep it offline.
 
+## Guest tier (LAN, M5a)
+
+A browser on the LAN talks to the owner device's guest server: plain HTTP (browsers reject the devices'
+self-signed certificates), default port **53320**, gated by a one-time token. Not part of the device
+protocol; any engine may implement it.
+
+- **Token**: 16 random bytes, base64url (22 characters), in the QR as `http://<lan ip>:<port>/g/<token>`.
+  Compared in constant time. One live session per device; it ends after its length (owner's choice,
+  5 min to 24 h, default 1 h), when the owner ends it, or when a new one opens. Ended tokens answer
+  `410 {"error":"expired"}`.
+- **One browser**: `GET /g/<token>` by the first browser sets `mdg=<32 random bytes, base64url>; Path=/g;
+  HttpOnly; SameSite=Strict`. Without that cookie the token answers `410 used`.
+- **API** (`/g/api/…`): the token in `X-Guest-Token` plus the cookie. A custom header means a page on another
+  site cannot call it without a CORS preflight, which is never granted. Downloads also take `?t=<token>`
+  (a plain link cannot send headers), still with the cookie. No token at all: `404`.
+
+| Route | Answer |
+|---|---|
+| `GET /g/<token>` | the page; `410` used/expired (text) |
+| `GET /g/app.js`, `/g/app.css` | page assets |
+| `GET /g/api/session` | `{expiresAt, owner}` |
+| `GET /g/api/shared` | `[{id, name, size}]` |
+| `GET /g/api/shared/<id>` | the file; `Content-Disposition: attachment; filename*=UTF-8''…`; one `Range` |
+| `POST /g/api/offers` | `{files:[{name, size, type?, thumb?}], text?}` → `201 {id, status:"pending"}` |
+| `GET /g/api/offers/<id>` | `{status: pending\|accepted\|rejected\|done, files:[{name, size, received}]}` |
+| `PUT /g/api/offers/<id>/<i>?offset=N` | one slice → `{received}` |
+
+- **Accept first**: nothing is stored until the owner accepts. Writes before that get `409 not-accepted`;
+  after a reject or the end of the session, `410 rejected`.
+- **Slices**: at most 4 MiB (`413`), written exactly at the stored offset; any other offset gets
+  `409 {"error":"offset", received}`, which is how a cut upload resumes. Bytes past the declared size get
+  `400 too-large`.
+- **Limits**: 1000 files and 64 KiB of text per offer; names must pass the relative-path rules (`400
+  bad-offer`); a thumbnail is a `data:image/(png|jpeg|webp);base64,` URL of at most 48 KiB; at most 4
+  unanswered offers (`429 too-many`).
+- **Storage**: partial data under `<home>/guest-partial/`; a complete file moves into the inbox under a free
+  name (`x (1).txt`), never over an existing file.
+- **Every response**: `Cache-Control: no-store`, `X-Content-Type-Options: nosniff`, `Referrer-Policy:
+  no-referrer`, `Content-Security-Policy: default-src 'self'; img-src 'self' data: blob:; style-src 'self';
+  script-src 'self'; frame-ancestors 'none'`. Anything outside `/g/` is `404`.
+
 ## Notes for other engines (M4 Android)
 
 Not part of the protocol; platform constraints found while specifying it.
