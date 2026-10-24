@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="guest-token" content="{{TOKEN}}">
+<title>MeshDrop</title>
+<link rel="stylesheet" href="/g/app.css">
+</head>
+<body>
+<main>
+  <header>
+    <h1>MeshDrop</h1>
+    <p class="muted">Sharing with <strong id="owner">…</strong> · <span id="left"></span></p>
+  </header>
+  <p id="status" role="status"></p>
+  <section>
+    <h2>Send</h2>
+    <label class="pick">Choose files<input id="files" type="file" multiple></label>
+    <ul id="chosen" class="list"></ul>
+    <textarea id="text" rows="3" maxlength="60000" placeholder="Or type a message"></textarea>
+    <button id="send" class="primary" type="button">Send</button>
+    <progress id="progress" max="1" value="0" hidden></progress>
+  </section>
+  <section>
+    <h2>Files for you</h2>
+    <ul id="shared" class="list"></ul>
+    <p id="none" class="muted">Nothing shared yet.</p>
+  </section>
+</main>
+<script src="/g/app.js"></script>
+</body>
+</html>

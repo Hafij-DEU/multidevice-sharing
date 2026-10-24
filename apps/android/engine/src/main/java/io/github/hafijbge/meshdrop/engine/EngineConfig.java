@@ -40,6 +40,8 @@ public final class EngineConfig {
     /** Look for a device at the LAN addresses the hub's directory lists for it before relaying (tests turn it off to force the relay). */
     public boolean probeDirectoryAddrs = true;
     public long[] hubBackoffMs = io.github.hafijbge.meshdrop.engine.hub.HubClient.DEFAULT_BACKOFF_MS;
+    /** The LAN guest server's port (plain HTTP; 0: any free port, tests); -1: no guest server. */
+    public int guestPort = 53320;
 
     public interface ActivityListener {
         void onBusy(boolean busy);

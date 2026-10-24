@@ -80,6 +80,12 @@ public final class SettingsStore {
                 else if (k.equals("clipboardReceive")) s.clipboardReceive = b;
                 else s.notifications = b;
                 break;
+            case "guestMinutes":
+                if (!(v instanceof Long) && !(v instanceof Integer)) throw new SettingsError("Invalid value for guestMinutes.");
+                long gm = ((Number) v).longValue();
+                if (gm < 5 || gm > 1440) throw new SettingsError("A guest link works for 5 minutes to 24 hours.");
+                s.guestMinutes = (int) gm;
+                break;
             default:
                 throw new SettingsError("Unknown setting " + k + ".");
         }

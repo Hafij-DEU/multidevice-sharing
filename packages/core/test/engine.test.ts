@@ -230,7 +230,7 @@ describe('Engine', () => {
 
     const a2 = await mk({ home: a.home });
     expect(await a2.e.listOutbox()).toEqual([
-      { sessionId: sid, deviceId: b.e.identity.deviceId, alias: 'bee', createdAt: expect.any(Number), files: 1, bytes: data.length, text: true },
+      { sessionId: sid, deviceId: b.e.identity.deviceId, alias: 'bee', createdAt: expect.any(Number), files: 1, bytes: data.length, text: true, lastError: 'cancelled', waiting: true },
     ]);
     await expect(a2.e.removeOutbox('zzzzzz')).rejects.toThrow(/no outbox entry/);
     const removed = await a2.e.removeOutbox(sid.slice(0, 6));

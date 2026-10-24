@@ -41,7 +41,7 @@
     'getState', 'pickFiles', 'pickFolder', 'pickSavePath', 'pickOpenPath', 'pickItems', 'scanQr', 'send', 'sendClipboard', 'resumeOutbox',
     'removeOutbox', 'addByAddress', 'scanSubnet', 'hubInit', 'setHubUrls', 'createInvite', 'join', 'revoke', 'exportRecovery',
     'importRecovery', 'setSettings', 'openInbox', 'reveal', 'registerClipboardShortcut', 'openConfigFolder', 'takeSharedItems',
-    'keepAliveAction',
+    'keepAliveAction', 'guestStart', 'guestEnd', 'guestShare', 'guestUnshare', 'guestAccept', 'guestReject',
   ]) {
     api[m] = call(m);
   }

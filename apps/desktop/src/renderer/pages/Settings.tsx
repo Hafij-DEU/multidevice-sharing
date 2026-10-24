@@ -84,18 +84,16 @@ export function Settings({ state, run }: { state: AppState; run: Run }) {
         <span>Port</span>
         <input aria-label="Port" type="number" min={0} max={65535} value={draft.port} onChange={(e) => set('port', Number(e.target.value))} />
       </label>
-      {!android && (
-        <label className="field">
-          <span>A guest link works for</span>
-          <select aria-label="Guest link length" value={draft.guestMinutes} onChange={(e) => set('guestMinutes', Number(e.target.value))}>
-            {[...new Set([15, 30, 60, 120, 240, 480, 1440, draft.guestMinutes])].sort((a, b) => a - b).map((m) => (
-              <option key={m} value={m}>
-                {m < 60 ? `${m} minutes` : m === 60 ? '1 hour' : `${m / 60} hours`}
-              </option>
-            ))}
-          </select>
-        </label>
-      )}
+      <label className="field">
+        <span>A guest link works for</span>
+        <select aria-label="Guest link length" value={draft.guestMinutes} onChange={(e) => set('guestMinutes', Number(e.target.value))}>
+          {[...new Set([15, 30, 60, 120, 240, 480, 1440, draft.guestMinutes])].sort((a, b) => a - b).map((m) => (
+            <option key={m} value={m}>
+              {m < 60 ? `${m} minutes` : m === 60 ? '1 hour' : `${m / 60} hours`}
+            </option>
+          ))}
+        </select>
+      </label>
       {SWITCHES.filter(([k]) => !(android && DESKTOP_ONLY.includes(k))).map(([k, label]) => (
         <label key={k} className="row">
           <input type="checkbox" checked={draft[k] as boolean} onChange={(e) => set(k, e.target.checked as never)} /> {label}

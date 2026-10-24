@@ -102,6 +102,8 @@ public final class AppController {
     private volatile String error;
     private volatile boolean paused;
     private volatile List<Map<String, Object>> outbox = new ArrayList<>();
+    /** The guest link's QR code (the engine keeps the rest of the session). */
+    private volatile String guestQr;
     private ScheduledFuture<?> pending;
     private long lastEmit;
     private volatile boolean stopped;
@@ -255,6 +257,9 @@ public final class AppController {
         m.put("receiving", x.receiving() && error == null);
         if (error != null) m.put("error", error);
         m.put("members", members);
+        Map<String, Object> guest = x.guestState();
+        if (guestQr != null && Boolean.TRUE.equals(guest.get("active"))) guest.put("qrSvg", guestQr);
+        m.put("guest", guest);
         platform.decorate(m);
         return m;
     }
@@ -309,8 +314,8 @@ public final class AppController {
             out.add(m);
         }
         outbox = out;
-        // A failed send the engine kept for auto-resume (the device was away) is waiting, not failed.
-        // One the owner cancelled (removed from the outbox) stops waiting.
+        // A failed send the engine kept for auto-resume because the device was away (not one the device
+        // answered, e.g. "http-503 paused") is waiting, not failed. One the owner cancelled stops waiting.
         java.util.Set<String> all = new java.util.HashSet<>();
         java.util.Set<String> waiting = new java.util.HashSet<>();
         for (Map<String, Object> m : out) {
@@ -320,7 +325,7 @@ public final class AppController {
         synchronized (rows) {
             for (Row r : rows.values()) {
                 if (!"out".equals(r.direction) || r.sessionId == null) continue;
-                if ("failed".equals(r.status) && waiting.contains(r.sessionId)) {
+                if ("failed".equals(r.status) && waiting.contains(r.sessionId) && (r.error == null || !r.error.startsWith("http-"))) {
                     r.status = "waiting";
                     r.error = r.alias + " is not reachable now. It gets this when it is back online (or cancel it under Unfinished sends).";
                 } else if ("waiting".equals(r.status) && !all.contains(r.sessionId)) {
@@ -358,10 +363,34 @@ public final class AppController {
             if (ev.source.equals("sender")) onSender(ev);
             else if (ev.source.equals("receiver")) onReceiver(ev);
             else if (ev.source.equals("mesh")) onMesh(ev);
+            else if (ev.source.equals("guest")) onGuest(ev);
         } catch (RuntimeException ignored) {
             // never let a bookkeeping error break the engine thread
         }
         changed();
+    }
+
+    @SuppressWarnings("unchecked")
+    private void onGuest(EngineEvent ev) {
+        Settings s = settings.get();
+        if (ev.type.equals("ended")) guestQr = null;
+        if (ev.type.equals("offer") && s.notifications) {
+            List<Object> files = (List<Object>) ev.data.get("files");
+            int n = files == null ? 0 : files.size();
+            String what = n > 0 ? n + " file" + (n == 1 ? "" : "s") + (ev.data.get("text") != null ? " and a message" : "") : "a message";
+            platform.notify("A guest wants to send", what + ": open MeshDrop to accept or decline.", null);
+        }
+        if (ev.type.equals("failed") && s.notifications) platform.notify("A guest send could not be saved", "The files were uploaded but could not be saved (" + ev.data.get("error") + ").", null);
+        if (ev.type.equals("received")) {
+            List<String> files = new ArrayList<>();
+            for (Object f : (List<Object>) ev.data.get("files")) files.add((String) f);
+            try {
+                history.addReceived(System.currentTimeMillis(), "guest", "Guest", files, (String) ev.data.get("text"), false);
+            } catch (IOException ignored) {
+                // the files are in the inbox either way
+            }
+            if (s.notifications) platform.notify("From a guest", files.size() + " file" + (files.size() == 1 ? "" : "s") + " received", files.isEmpty() ? null : files.get(0));
+        }
     }
 
     private void onMesh(EngineEvent ev) {
@@ -766,6 +795,40 @@ public final class AppController {
                 return null;
             case "join":
                 return join(str(a0));
+            case "guestStart": {
+                Map<String, Object> g = e().guestStart(settings.get().guestMinutes, 0);
+                guestQr = (String) g.get("qrSvg");
+                changed();
+                return g;
+            }
+            case "guestEnd":
+                e().guestEnd();
+                guestQr = null;
+                changed();
+                return null;
+            case "guestShare": {
+                List<io.github.hafijbge.meshdrop.engine.send.Source> sources = new ArrayList<>();
+                for (Object ref : (List<Object>) a0) {
+                    io.github.hafijbge.meshdrop.engine.send.SendItem it = platform.item("file", str(ref));
+                    if (it.source == null) throw new IllegalArgumentException("Only files can be offered to a guest.");
+                    sources.add(it.source);
+                }
+                e().guestShare(sources);
+                changed();
+                return null;
+            }
+            case "guestUnshare":
+                e().guestUnshare(str(a0));
+                changed();
+                return null;
+            case "guestAccept":
+                e().guestAccept(str(a0));
+                changed();
+                return null;
+            case "guestReject":
+                e().guestReject(str(a0));
+                changed();
+                return null;
             case "hubInit":
             case "setHubUrls":
             case "createInvite":

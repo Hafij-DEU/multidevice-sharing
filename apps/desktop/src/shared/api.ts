@@ -66,7 +66,7 @@ export interface Settings {
 
 export interface GuestFileView { name: string; size: number; type?: string; thumb?: string }
 
-/** The LAN guest session (desktop only for now). */
+/** The LAN guest session (the desktop and Android apps). */
 export interface GuestView {
   active: boolean;
   /** False when the guest server could not start (its port is taken, or this window is client-only). */
@@ -155,7 +155,7 @@ export interface AppState {
   joinLink?: string;
   /** Mesh members (for the Mesh page). */
   members: { deviceId: string; alias: string; role: 'hub' | 'member'; self: boolean }[];
-  /** LAN guests (absent where the platform has no guest server, e.g. Android). */
+  /** LAN guests (absent where the platform has no guest server). */
   guest?: GuestView;
   /** Internet guest links (present on the hub PC). */
   links?: LinkView[];

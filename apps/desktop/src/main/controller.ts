@@ -327,12 +327,12 @@ export class AppController extends EventEmitter {
     } catch {
       return;
     }
-    // A failed send the engine kept for auto-resume (the device was away) is waiting, not failed.
-    // One the owner cancelled (removed from the outbox) stops waiting.
+    // A failed send the engine kept for auto-resume because the device was away (not one the device
+    // answered, e.g. 'http-503 paused') is waiting, not failed. One the owner cancelled stops waiting.
     const waiting = new Set(this.#outbox.filter((o) => o.waiting).map((o) => o.sessionId));
     for (const t of this.#transfers.values()) {
       if (t.direction !== 'out' || t.sessionId === undefined) continue;
-      if (t.status === 'failed' && waiting.has(t.sessionId)) {
+      if (t.status === 'failed' && waiting.has(t.sessionId) && !/^http-/.test(t.error ?? '')) {
         t.status = 'waiting';
         t.error = `${t.alias} is not reachable now. It gets this when it is back online (or cancel it under Unfinished sends).`;
       } else if (t.status === 'waiting' && !this.#outbox.some((o) => o.sessionId === t.sessionId)) {

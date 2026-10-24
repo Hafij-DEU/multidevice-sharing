@@ -19,6 +19,7 @@ import io.github.hafijbge.meshdrop.engine.send.SendItem;
 import io.github.hafijbge.meshdrop.engine.send.SendResult;
 import io.github.hafijbge.meshdrop.engine.send.Sender;
 import io.github.hafijbge.meshdrop.engine.send.Transport;
+import io.github.hafijbge.meshdrop.engine.util.B64;
 import io.github.hafijbge.meshdrop.engine.util.Atomic;
 import io.github.hafijbge.meshdrop.engine.util.Json;
 import io.github.hafijbge.meshdrop.engine.util.Io;
@@ -113,6 +114,14 @@ public final class Engine {
     private volatile ExecutorService exec;
     private volatile int port;
     private volatile java.util.concurrent.ScheduledExecutorService ticker;
+    // LAN guests (the desktop's M5a): a one-time QR link for a browser on this network.
+    private final io.github.hafijbge.meshdrop.engine.guest.GuestBook guestBook = new io.github.hafijbge.meshdrop.engine.guest.GuestBook();
+    private volatile io.github.hafijbge.meshdrop.engine.guest.GuestServer guestServer;
+    private volatile int guestPort;
+    private volatile io.github.hafijbge.meshdrop.engine.guest.GuestUploads guestUploads;
+    private volatile List<io.github.hafijbge.meshdrop.engine.guest.GuestServer.SharedFile> guestShared = new ArrayList<>();
+    private volatile String guestUrl;
+    private volatile java.util.concurrent.ScheduledFuture<?> guestTimer;
     /** Transfer activity, for wake/Wi-Fi locks: active sends, the last send/receive event, and the reported state. */
     private final Object act = new Object();
     private int activeSends;
@@ -243,6 +252,7 @@ public final class Engine {
         });
         exec.execute(this::reprobeManual);
         startHub();
+        startGuestServer();
         ticker = java.util.concurrent.Executors.newSingleThreadScheduledExecutor(r -> {
             Thread t = new Thread(r, "meshdrop-ticker");
             t.setDaemon(true);
@@ -548,6 +558,10 @@ public final class Engine {
         server = null;
         for (Sender.Control c : controls) c.pause();
         stopHub();
+        endGuest(false);
+        io.github.hafijbge.meshdrop.engine.guest.GuestServer gs = guestServer;
+        guestServer = null;
+        if (gs != null) gs.stop();
         if (s != null) s.stop();
         Discovery d = discovery;
         discovery = null;
@@ -584,6 +598,179 @@ public final class Engine {
         Discovery d = discovery;
         if (d == null || server == null) throw new IllegalStateException("engine not started");
         return d;
+    }
+
+    // ---- LAN guests ---------------------------------------------------------------------------
+
+    public static final int MIN_GUEST_MINUTES = 5;
+    public static final int MAX_GUEST_MINUTES = 24 * 60;
+
+    /** The guest server answers only while a session is open; a port that is taken leaves guests unavailable. */
+    private void startGuestServer() {
+        if (cfg.guestPort < 0) return;
+        io.github.hafijbge.meshdrop.engine.guest.GuestServer.Options go = new io.github.hafijbge.meshdrop.engine.guest.GuestServer.Options();
+        go.book = guestBook;
+        go.uploads = () -> guestUploads;
+        go.shared = () -> guestShared;
+        go.alias = () -> cfg.alias;
+        go.html = io.github.hafijbge.meshdrop.engine.guest.GuestPage.HTML;
+        go.js = io.github.hafijbge.meshdrop.engine.guest.GuestPage.JS;
+        go.css = io.github.hafijbge.meshdrop.engine.guest.GuestPage.CSS;
+        go.onClaim = () -> emit("guest", "claimed", new LinkedHashMap<>());
+        io.github.hafijbge.meshdrop.engine.guest.GuestServer gs = new io.github.hafijbge.meshdrop.engine.guest.GuestServer(go);
+        try {
+            guestPort = gs.start(cfg.guestPort);
+            guestServer = gs;
+        } catch (IOException e) {
+            guestServer = null; // e.g. the port is taken: guestState() says unavailable
+        }
+    }
+
+    /** The address a guest's browser on this network reaches: Wi-Fi first, then any private IPv4. */
+    private String guestHost() {
+        if (cfg.lanAddrs != null) {
+            List<HubClient.LanAddr> a = cfg.lanAddrs.get();
+            if (a != null && !a.isEmpty()) return a.get(0).host;
+        }
+        String best = null;
+        for (Map.Entry<NetworkInterface, java.net.Inet4Address> a : Discovery.interfaceAddrs()) {
+            String host = a.getValue().getHostAddress();
+            String name = a.getKey().getName();
+            if (name.startsWith("wlan") || name.startsWith("ap") || name.startsWith("swlan")) return host;
+            if (best == null && a.getValue().isSiteLocalAddress()) best = host;
+        }
+        return best != null ? best : "127.0.0.1";
+    }
+
+    /**
+     * Opens a guest session (ending any earlier one): a one-time link for a browser on the LAN, shown
+     * as a QR code: {url, qrSvg, expiresAt}. The guest can send to this device (after guestAccept) and
+     * download what guestShare offers. `ttlMs` > 0 overrides `minutes` (tests).
+     */
+    public Map<String, Object> guestStart(int minutes, long ttlMs) {
+        requireRunning();
+        if (guestServer == null) throw new IllegalStateException("Guest links are not available: port " + cfg.guestPort + " is used by another app.");
+        endGuest(false);
+        int m = Math.min(MAX_GUEST_MINUTES, Math.max(MIN_GUEST_MINUTES, minutes));
+        long ttl = ttlMs > 0 ? Math.max(100, ttlMs) : m * 60_000L;
+        io.github.hafijbge.meshdrop.engine.guest.GuestBook.Current cur = guestBook.open(ttl);
+        guestUploads = new io.github.hafijbge.meshdrop.engine.guest.GuestUploads(new File(cfg.home, "guest-partial"), cfg.sink, this::onGuest);
+        java.util.concurrent.ScheduledExecutorService t = ticker;
+        // At the end of its time the session ends for real: unfinished uploads are deleted now, not later.
+        if (t != null) guestTimer = t.schedule(() -> endGuest(true), ttl, java.util.concurrent.TimeUnit.MILLISECONDS);
+        String host = guestHost();
+        guestUrl = "http://" + (host.contains(":") ? "[" + host + "]" : host) + ":" + guestPort + "/g/" + cur.token;
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("url", guestUrl);
+        out.put("qrSvg", io.github.hafijbge.meshdrop.engine.guest.GuestPage.qrSvg(guestUrl));
+        out.put("expiresAt", cur.expiresAt);
+        return out;
+    }
+
+    /** Ends the guest session: the link stops working, unfinished uploads are deleted, shares are cleared. */
+    public void guestEnd() {
+        endGuest(true);
+    }
+
+    private synchronized void endGuest(boolean announce) {
+        java.util.concurrent.ScheduledFuture<?> t = guestTimer;
+        guestTimer = null;
+        if (t != null) t.cancel(false);
+        boolean had = guestBook.current() != null || guestUploads != null;
+        guestBook.end();
+        io.github.hafijbge.meshdrop.engine.guest.GuestUploads u = guestUploads;
+        guestUploads = null;
+        guestShared = new ArrayList<>();
+        guestUrl = null;
+        if (u != null) u.cancelAll();
+        if (announce && had) emit("guest", "ended", new LinkedHashMap<>());
+    }
+
+    private void onGuest(Map<String, Object> ev) {
+        Map<String, Object> d = new LinkedHashMap<>(ev);
+        String type = ((String) d.remove("type")).substring("guest-".length());
+        if (type.equals("received") || type.equals("file")) touch();
+        emit("guest", type, d);
+    }
+
+    /** Offers files to the guest; returns the new entries [{id, name, size}]. */
+    public List<Map<String, Object>> guestShare(List<io.github.hafijbge.meshdrop.engine.send.Source> sources) throws IOException {
+        if (guestBook.current() == null) throw new IllegalStateException("No guest session: show a guest QR code first.");
+        List<io.github.hafijbge.meshdrop.engine.guest.GuestServer.SharedFile> added = new ArrayList<>();
+        List<Map<String, Object>> out = new ArrayList<>();
+        for (io.github.hafijbge.meshdrop.engine.send.Source src : sources) {
+            byte[] id = new byte[9];
+            new java.security.SecureRandom().nextBytes(id);
+            io.github.hafijbge.meshdrop.engine.guest.GuestServer.SharedFile f = new io.github.hafijbge.meshdrop.engine.guest.GuestServer.SharedFile(B64.url(id), src.name(), src.size(), src);
+            added.add(f);
+            Map<String, Object> m = new LinkedHashMap<>();
+            m.put("id", f.id);
+            m.put("name", f.name);
+            m.put("size", f.size);
+            out.add(m);
+        }
+        List<io.github.hafijbge.meshdrop.engine.guest.GuestServer.SharedFile> all = new ArrayList<>(guestShared);
+        all.addAll(added);
+        guestShared = all;
+        return out;
+    }
+
+    public void guestUnshare(String id) {
+        List<io.github.hafijbge.meshdrop.engine.guest.GuestServer.SharedFile> all = new ArrayList<>(guestShared);
+        all.removeIf(f -> f.id.equals(id));
+        guestShared = all;
+    }
+
+    private io.github.hafijbge.meshdrop.engine.guest.GuestUploads uploadsOf(String id) {
+        io.github.hafijbge.meshdrop.engine.guest.GuestUploads u = guestUploads;
+        if (u == null || !u.has(id)) throw new IllegalArgumentException("That guest send is no longer there.");
+        return u;
+    }
+
+    public void guestAccept(String id) throws IOException {
+        try {
+            uploadsOf(id).accept(id);
+        } catch (io.github.hafijbge.meshdrop.engine.guest.GuestUploads.GuestError e) {
+            throw new IllegalStateException("That guest send was already answered (" + e.code + ").");
+        }
+    }
+
+    public void guestReject(String id) {
+        try {
+            uploadsOf(id).reject(id);
+        } catch (io.github.hafijbge.meshdrop.engine.guest.GuestUploads.GuestError ignored) {
+            // gone already
+        }
+    }
+
+    /** {active, available, url?, expiresAt?, claimed?, shared:[{id,name,size}], offers:[{id, files, text?}]} */
+    public Map<String, Object> guestState() {
+        Map<String, Object> m = new LinkedHashMap<>();
+        io.github.hafijbge.meshdrop.engine.guest.GuestBook.Current cur = guestBook.current();
+        io.github.hafijbge.meshdrop.engine.guest.GuestUploads u = guestUploads;
+        boolean active = cur != null && u != null;
+        m.put("active", active);
+        m.put("available", guestServer != null);
+        List<Object> shared = new ArrayList<>();
+        if (active) {
+            m.put("url", guestUrl == null ? "" : guestUrl);
+            m.put("expiresAt", cur.expiresAt);
+            m.put("claimed", cur.claimed);
+            for (io.github.hafijbge.meshdrop.engine.guest.GuestServer.SharedFile f : guestShared) {
+                Map<String, Object> x = new LinkedHashMap<>();
+                x.put("id", f.id);
+                x.put("name", f.name);
+                x.put("size", f.size);
+                shared.add(x);
+            }
+        }
+        m.put("shared", shared);
+        m.put("offers", active ? new ArrayList<Object>(u.pending()) : new ArrayList<>());
+        return m;
+    }
+
+    public int guestPort() {
+        return guestPort;
     }
 
     // ---- receiving ------------------------------------------------------------------------------

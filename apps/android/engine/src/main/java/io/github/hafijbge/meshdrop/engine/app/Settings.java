@@ -16,6 +16,8 @@ public final class Settings implements Cloneable {
     public boolean closeToTray = true;
     public boolean clipboardReceive = true;
     public boolean notifications = true;
+    /** How long a guest link works, in minutes (5..1440). */
+    public int guestMinutes = 60;
 
     public static Settings defaults(String alias) {
         Settings s = new Settings();
@@ -42,6 +44,7 @@ public final class Settings implements Cloneable {
         m.put("closeToTray", closeToTray);
         m.put("clipboardReceive", clipboardReceive);
         m.put("notifications", notifications);
+        m.put("guestMinutes", (long) guestMinutes);
         return m;
     }
 }

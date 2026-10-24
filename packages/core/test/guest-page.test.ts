@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import type { Server } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -8,6 +8,7 @@ import { GuestBook } from '../src/guest/book.ts';
 import { GUEST_PAGE } from '../src/guest/page.ts';
 import { createGuestServer, type SharedFile } from '../src/guest/server.ts';
 import { GuestUploads } from '../src/guest/uploads.ts';
+import { JAVA_GUEST_DIR } from '../scripts/guest-page-java.ts';
 
 const tmps: string[] = [];
 const servers: Server[] = [];
@@ -27,6 +28,12 @@ describe('guest page', () => {
     expect(GUEST_PAGE.html).toContain('<link rel="stylesheet" href="/g/app.css"');
     expect(GUEST_PAGE.html).not.toMatch(/<script>|style=/);
     expect(GUEST_PAGE.html).toContain('{{TOKEN}}');
+  });
+
+  it('the Android engine serves the same page (run scripts/guest-page-java.ts after changing it)', () => {
+    expect(readFileSync(join(JAVA_GUEST_DIR, 'page.html'), 'utf8')).toBe(GUEST_PAGE.html);
+    expect(readFileSync(join(JAVA_GUEST_DIR, 'app.js'), 'utf8')).toBe(GUEST_PAGE.js);
+    expect(readFileSync(join(JAVA_GUEST_DIR, 'app.css'), 'utf8')).toBe(GUEST_PAGE.css);
   });
 
   it('lets a plain download link carry the token in the query (the cookie is still required)', async () => {
