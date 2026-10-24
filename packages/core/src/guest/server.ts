@@ -29,7 +29,7 @@ export interface GuestServerOptions {
   onClaim?: () => void;
 }
 
-const MAX_OFFER_JSON = 8 * 1024 * 1024;
+const MAX_OFFER_JSON = 2 * 1024 * 1024; // 1000 names + 1 MiB of thumbnails + 64 KiB of text
 const TOKEN_RE = /^[A-Za-z0-9_-]{22}$/;
 const COOKIE = 'mdg';
 
@@ -174,5 +174,9 @@ export function createGuestServer(o: GuestServerOptions): Server {
     });
   });
   server.on('clientError', (_e, sock) => sock.destroy());
+  // A guest on the LAN must not hold sockets open forever (a stalled slice also holds its offer's lock).
+  server.headersTimeout = 10_000;
+  server.requestTimeout = 120_000;
+  server.maxConnections = 64;
   return server;
 }

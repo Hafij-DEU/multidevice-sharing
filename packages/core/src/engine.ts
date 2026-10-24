@@ -74,6 +74,7 @@ export type EngineEvent =
   | { source: 'guest'; type: 'received'; id: string; files: string[]; text?: string }
   | { source: 'guest'; type: 'file'; id: string; path: string }
   | { source: 'guest'; type: 'rejected'; id: string }
+  | { source: 'guest'; type: 'failed'; id: string; error: string }
   | { source: 'guest'; type: 'ended' | 'opened' }
   | {
       source: 'mesh';
@@ -512,6 +513,7 @@ export class Engine extends EventEmitter {
   private guestUploads: GuestUploads | null = null;
   private guestShared: SharedFile[] = [];
   private guestUrl: string | null = null;
+  private guestTimer: NodeJS.Timeout | null = null;
   private lastInviteSecret = '';
   private joinHandler: ((peer: string, body: unknown) => Promise<{ status: number; body: object }>) | null = null;
   private readonly lastPull = new Map<string, number>();
@@ -643,6 +645,7 @@ export class Engine extends EventEmitter {
     let guest: HttpServer | null = null;
     let guestPort = 0;
     if (server && this.opts.guest !== false) {
+      rmSync(join(this.home, 'guest-partial'), { recursive: true, force: true }); // left by a crash: no session survives a restart
       const g = createGuestServer({
         book: this.guestBook,
         uploads: () => this.guestUploads,
@@ -1425,12 +1428,17 @@ export class Engine extends EventEmitter {
    * Opens a guest session (ending any earlier one): a one-time link for a browser on the LAN, shown as
    * a QR code. The guest can send to this device (after guestAccept) and download what guestShare offers.
    */
-  async guestStart(opts: { minutes?: number } = {}): Promise<{ url: string; qrSvg: string; expiresAt: number }> {
+  /** `ttlMs` overrides `minutes` (tests and embedders; at least 100 ms). */
+  async guestStart(opts: { minutes?: number; ttlMs?: number } = {}): Promise<{ url: string; qrSvg: string; expiresAt: number }> {
     const r = this.requireRunning();
     if (!r.guest) throw new Error(`guest sessions are not available: port ${(this.opts.guest && this.opts.guest.port) ?? DEFAULT_GUEST_PORT} is in use`);
     await this.endGuest(false);
     const minutes = Math.min(MAX_GUEST_MINUTES, Math.max(MIN_GUEST_MINUTES, Math.round(opts.minutes ?? DEFAULT_GUEST_MINUTES)));
-    const { token, expiresAt } = this.guestBook.open(minutes * 60_000);
+    const ttl = opts.ttlMs !== undefined ? Math.max(100, opts.ttlMs) : minutes * 60_000;
+    const { token, expiresAt } = this.guestBook.open(ttl);
+    // At the end of its time the session ends for real: unfinished uploads are deleted now, not later.
+    this.guestTimer = setTimeout(() => void this.endGuest(true), ttl);
+    this.guestTimer.unref();
     this.guestUploads = new GuestUploads(join(this.home, 'guest-partial'), this.inboxDir, (ev) => this.onGuest(ev));
     const host = this.lanAddrs(r.port)[0]?.host ?? '127.0.0.1';
     const url = `http://${host.includes(':') ? `[${host}]` : host}:${r.guestPort}/g/${token}`;
@@ -1444,6 +1452,8 @@ export class Engine extends EventEmitter {
   }
 
   private async endGuest(announce: boolean): Promise<void> {
+    if (this.guestTimer) clearTimeout(this.guestTimer);
+    this.guestTimer = null;
     const had = this.guestBook.current() !== null || this.guestUploads !== null;
     this.guestBook.end();
     const u = this.guestUploads;
@@ -1467,6 +1477,9 @@ export class Engine extends EventEmitter {
         break;
       case 'guest-rejected':
         this.emitEvent({ source: 'guest', type: 'rejected', id: ev.id });
+        break;
+      case 'guest-failed':
+        this.emitEvent({ source: 'guest', type: 'failed', id: ev.id, error: ev.error });
         break;
     }
   }

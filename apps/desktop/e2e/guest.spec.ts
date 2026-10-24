@@ -34,6 +34,14 @@ test('a guest browser sends after the owner accepts, and downloads what the owne
     const big = join(home, 'from-guest.bin');
     const data = randomBytes(9 * 1024 * 1024 + 7);
     writeFileSync(big, data);
+    // The first slice upload dies mid-way (the phone lost Wi-Fi): the page must resume, not start over.
+    let cut = false;
+    await guest.route('**/g/api/offers/*/0?offset=*', async (route) => {
+      if (!cut && route.request().method() === 'PUT') {
+        cut = true;
+        await route.abort('connectionreset');
+      } else await route.continue();
+    });
     await guest.locator('#files').setInputFiles(big);
     await guest.locator('#text').fill('hello from the guest');
     await guest.getByRole('button', { name: 'Send' }).click();
@@ -45,6 +53,7 @@ test('a guest browser sends after the owner accepts, and downloads what the owne
     await expect(prompt.getByText('hello from the guest')).toBeVisible();
     await prompt.getByRole('button', { name: 'Accept' }).click();
     await expect(guest.getByText('Sent.')).toBeVisible({ timeout: 60_000 });
+    expect(cut).toBe(true);
     expect(sha(readFileSync(join(home, 'inbox', 'from-guest.bin')))).toBe(sha(data));
     const st = (await win.evaluate(() => window.meshdrop.getState())) as AppState;
     expect(st.received.find((r) => r.from === 'guest')).toMatchObject({ text: 'hello from the guest' });

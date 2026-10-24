@@ -162,6 +162,31 @@ const js = `(function () {
     });
   }
 
+  // After a network error: ask again with growing pauses until the device answers (or the link ends).
+  function resync(id, i, wait) {
+    return sleep(wait).then(function () {
+      return api('offers/' + id).then(checked).then(function (r) { return r.json(); }).then(function (s) {
+        return s.files[i].received;
+      });
+    }).catch(function (e) {
+      if (over || !(e instanceof TypeError)) throw e;
+      return resync(id, i, Math.min(wait * 2, 15000));
+    });
+  }
+
+  // Sent means saved: wait until the device reports the whole offer as done (or failed).
+  function waitSaved(id) {
+    return api('offers/' + id).then(checked).then(function (r) { return r.json(); }).then(function (s) {
+      if (s.status === 'done') return;
+      if (s.status === 'failed') throw new Error("the owner's device could not save the files");
+      if (s.status === 'rejected') throw new Error('declined by the owner');
+      return sleep(500).then(function () { return waitSaved(id); });
+    }, function (e) {
+      if (over || !(e instanceof TypeError)) throw e;
+      return sleep(2000).then(function () { return waitSaved(id); });
+    });
+  }
+
   function upload(id, files, state, done, total) {
     var p = el('progress');
     var i = 0;
@@ -176,14 +201,12 @@ const js = `(function () {
           received = n;
           return step();
         }, function (e) {
-          if (over) throw e;
+          if (over || !(e instanceof TypeError)) throw e; // only network errors are retried
           status('Connection lost, retrying…', 'muted');
-          return sleep(2000).then(function () {
-            return api('offers/' + id).then(checked).then(function (r) { return r.json(); }).then(function (s) {
-              received = s.files[i].received;
-              status('Sending…', '');
-              return step();
-            });
+          return resync(id, i, 1000).then(function (n) {
+            received = n;
+            status('Sending…', '');
+            return step();
           });
         });
       }
@@ -219,7 +242,7 @@ const js = `(function () {
         var total = files.reduce(function (n, f) { return n + f.size; }, 0);
         el('progress').hidden = files.length === 0;
         status('Sending…', '');
-        return upload(id, files, s, 0, total).then(function () {
+        return upload(id, files, s, 0, total).then(function () { return waitSaved(id); }).then(function () {
           el('progress').value = 1;
           status('Sent.', 'ok');
           el('files').value = '';
