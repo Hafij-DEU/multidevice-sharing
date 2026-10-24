@@ -162,6 +162,8 @@ public final class HubClient {
         public Supplier<LanAddr> hubLan = () -> null;
         public long[] backoffMs = DEFAULT_BACKOFF_MS;
         public long pingMs = DEFAULT_PING_MS;
+        /** The CAs a wss:// hub URL is checked against (null: the platform's; tests use their own). */
+        public javax.net.ssl.X509TrustManager caTrust;
         public Listener listener = new Listener() {};
         /** Relayed requests addressed to this device (null: they are dropped). */
         public RequestHandler handler;
@@ -217,12 +219,12 @@ public final class HubClient {
         }
 
         /** Connects (TLS as the kind says; `hubId` is the pin for a LAN endpoint) within `timeoutMs`. */
-        Socket open(Identity me, String hubId, int timeoutMs) throws IOException {
+        Socket open(Identity me, String hubId, int timeoutMs, javax.net.ssl.X509TrustManager caTrust) throws IOException {
             switch (kind) {
                 case "pinned":
                     return Tls.connect(Tls.pinnedClient(me, hubId), host, port, timeoutMs);
                 case "wss":
-                    return Tls.connectVerified(Tls.caClient(me), host, port, timeoutMs);
+                    return Tls.connectVerified(Tls.caClient(me, caTrust), host, port, timeoutMs);
                 default:
                     Socket s = new Socket();
                     try {
@@ -236,8 +238,8 @@ public final class HubClient {
         }
 
         /** Opens the WebSocket on /mesh/v1/hub (or the URL's path). */
-        public WebSocket connect(Identity me, String hubId, int timeoutMs, WebSocket.Listener l) throws IOException {
-            Socket s = open(me, hubId, timeoutMs);
+        public WebSocket connect(Identity me, String hubId, int timeoutMs, javax.net.ssl.X509TrustManager caTrust, WebSocket.Listener l) throws IOException {
+            Socket s = open(me, hubId, timeoutMs, caTrust);
             try {
                 s.setSoTimeout(0);
                 return WebSocket.connect(s, hostHeader, path, l, WebSocket.DEFAULT_MAX_MESSAGE);
@@ -628,7 +630,7 @@ public final class HubClient {
                 if (stopped) return false;
                 trying = l;
             }
-            s = t.open(me(), hubId, HANDSHAKE_TIMEOUT_MS);
+            s = t.open(me(), hubId, HANDSHAKE_TIMEOUT_MS, o.caTrust);
             synchronized (this) {
                 if (stopped) {
                     closeQuietly(s);

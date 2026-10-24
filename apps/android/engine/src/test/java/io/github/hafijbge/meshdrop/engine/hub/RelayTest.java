@@ -118,6 +118,40 @@ public class RelayTest {
     }
 
     @Test
+    public void aFileSentWhileThePhoneIsOffIsDeliveredWhenItLinks() throws Exception {
+        File hubHome = tmp.newFolder("hub");
+        File bHome = tmp.newFolder("b");
+        File jHome = tmp.newFolder("phone");
+        NodeMesh.hubInit(hubHome);
+        Identity jId = Identity.loadOrCreate(jHome, new PlainKeyVault());
+        NodeMesh.addMember(hubHome, jId, jHome, "phone", INGRESS);
+        NodeMesh.addNodeMember(hubHome, bHome, "b", INGRESS);
+        EngineConfig c = new EngineConfig(jHome, new PlainKeyVault(), new DirectorySink(new File(jHome, "inbox")));
+        c.port = 0;
+        c.alias = "phone";
+        c.discovery = false;
+        c.lanAddrs = Collections::emptyList;
+        c.probeDirectoryAddrs = false;
+        c.hubBackoffMs = new long[] {50, 200};
+        try (NodeListen hub = NodeListen.start(hubHome)) {
+            // The PC (B) sends while the phone has never linked: the hub holds it.
+            File f = file("held.bin", 5_000_000);
+            Node.Result s = Node.run(120, "send", jId.deviceId().substring(0, 8), f.getPath(), "--home", bHome.getPath());
+            assertEquals(s.out, 0, s.code);
+            assertTrue(s.out, s.out.contains("held"));
+            Engine j = Engine.create(c);
+            try {
+                j.start();
+                File in = new File(jHome, "inbox/held.bin");
+                until("held file delivered on link-up", () -> in.length() == f.length(), 30_000);
+                assertArrayEquals(Files.readAllBytes(f.toPath()), Files.readAllBytes(in.toPath()));
+            } finally {
+                j.stop();
+            }
+        }
+    }
+
+    @Test
     public void aReplayedRequestRunsOnceAndAForgedOneNever() throws Exception {
         File hubHome = tmp.newFolder("hub");
         File aHome = tmp.newFolder("a");

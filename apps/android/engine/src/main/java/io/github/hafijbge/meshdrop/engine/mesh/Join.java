@@ -304,7 +304,7 @@ public final class Join {
     private static void joinOnce(Identity id, Invite inv, String alias, File home, HubClient.Endpoint ep) throws IOException {
         Queue q = new Queue();
         long deadline = System.currentTimeMillis() + TIMEOUT_MS;
-        WebSocket ws = ep.connect(id, null, TIMEOUT_MS, q);
+        WebSocket ws = ep.connect(id, null, TIMEOUT_MS, null, q);
         try {
             Map<String, Object> hello = q.next(deadline);
             if (!"hello".equals(hello.get("t")) || !(hello.get("hub") instanceof String) || !HEX64.matcher((String) hello.get("hub")).matches()

@@ -83,6 +83,33 @@ public class RevokeTest {
     }
 
     @Test
+    public void aPhoneRevokedWhileOfflineLearnsItOnItsNextLink() throws Exception {
+        File hubHome = tmp.newFolder("hub");
+        File jHome = tmp.newFolder("phone");
+        NodeMesh.hubInit(hubHome);
+        Identity id = Identity.loadOrCreate(jHome, new PlainKeyVault());
+        NodeMesh.addMember(hubHome, id, jHome, "phone", INGRESS);
+        try (NodeListen hub = NodeListen.start(hubHome)) {
+            Engine first = engine(jHome);
+            first.start();
+            until("hub link", () -> first.hubState() == HubClient.State.ONLINE, 15_000);
+            first.stop(); // the phone goes away
+            Node.Result r = Node.run("hub", "revoke", id.deviceId().substring(0, 12), "--home", hubHome.getPath());
+            assertEquals(r.out, 0, r.code);
+            assertTrue("still a member on disk while offline", new File(jHome, "mesh/membership.json").exists());
+            Engine j = engine(jHome);
+            try {
+                j.start(); // the hub answers the next auth with the signed proof instead of a welcome
+                until("revoked", () -> saw("mesh", "revoked"), 15_000);
+                assertNull(j.mesh());
+                assertFalse(new File(jHome, "mesh").exists());
+            } finally {
+                j.stop();
+            }
+        }
+    }
+
+    @Test
     public void aRefusalWithoutProofKeepsTheMesh() throws Exception {
         File hubHome = tmp.newFolder("hub");
         File otherHub = tmp.newFolder("other");

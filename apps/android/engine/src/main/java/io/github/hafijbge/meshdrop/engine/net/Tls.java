@@ -161,27 +161,47 @@ public final class Tls {
 
     private static final java.util.Map<String, SSLContext> CA = new java.util.concurrent.ConcurrentHashMap<>();
 
-    /** Our device certificate as the client cert; the server is checked against the platform's CAs. */
-    public static SSLContext caClient(Identity me) {
-        return CA.computeIfAbsent(me.deviceId(), k -> {
+    /**
+     * Our device certificate as the client cert; the server is checked against `trust` (null: the
+     * platform's CAs).
+     */
+    public static SSLContext caClient(Identity me, javax.net.ssl.X509TrustManager trust) {
+        return CA.computeIfAbsent(me.deviceId() + "/" + (trust == null ? "platform" : Integer.toHexString(System.identityHashCode(trust))), k -> {
             try {
-                javax.net.ssl.TrustManagerFactory f = javax.net.ssl.TrustManagerFactory.getInstance(javax.net.ssl.TrustManagerFactory.getDefaultAlgorithm());
-                f.init((java.security.KeyStore) null);
-                return context(new DeviceKeyManager(me), f.getTrustManagers()[0]);
+                javax.net.ssl.TrustManager tm = trust;
+                if (tm == null) {
+                    javax.net.ssl.TrustManagerFactory f = javax.net.ssl.TrustManagerFactory.getInstance(javax.net.ssl.TrustManagerFactory.getDefaultAlgorithm());
+                    f.init((java.security.KeyStore) null);
+                    tm = f.getTrustManagers()[0];
+                }
+                return context(new DeviceKeyManager(me), tm);
             } catch (GeneralSecurityException e) {
                 throw new IllegalStateException(e);
             }
         });
     }
 
-    /** As connect(), then the certificate must name `host` (CA-validated links only). */
+    /**
+     * A CA-validated TLS 1.3 connection whose certificate must name `host`. The name is checked inside
+     * the handshake (endpoint identification "HTTPS"), before our client certificate goes out.
+     */
     public static SSLSocket connectVerified(SSLContext ctx, String host, int port, int timeoutMs) throws IOException {
-        SSLSocket s = connect(ctx, host, port, timeoutMs);
-        if (!javax.net.ssl.HttpsURLConnection.getDefaultHostnameVerifier().verify(host, s.getSession())) {
-            s.close();
-            throw new javax.net.ssl.SSLPeerUnverifiedException("certificate does not match " + host);
+        Socket tcp = new Socket();
+        try {
+            tcp.connect(new InetSocketAddress(host, port), timeoutMs);
+            tcp.setSoTimeout(timeoutMs);
+            SSLSocket s = (SSLSocket) ctx.getSocketFactory().createSocket(tcp, host, port, true);
+            s.setEnabledProtocols(PROTOCOLS);
+            s.setUseClientMode(true);
+            javax.net.ssl.SSLParameters p = s.getSSLParameters();
+            p.setEndpointIdentificationAlgorithm("HTTPS");
+            s.setSSLParameters(p);
+            s.startHandshake();
+            return s;
+        } catch (IOException | RuntimeException e) {
+            tcp.close();
+            throw e;
         }
-        return s;
     }
 
     public static SSLContext probeClient() {
