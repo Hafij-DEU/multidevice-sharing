@@ -76,6 +76,11 @@ public final class Sender {
         public boolean paused() {
             return paused.get();
         }
+
+        /** The flag itself (Prepared.of stops hashing when it is set). */
+        public AtomicBoolean pausedFlag() {
+            return paused;
+        }
     }
 
     public static final class Options implements Cloneable {

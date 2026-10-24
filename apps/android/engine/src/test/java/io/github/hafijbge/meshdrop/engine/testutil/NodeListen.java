@@ -18,11 +18,12 @@ public final class NodeListen implements AutoCloseable {
     private final Process proc;
     private final StringBuffer out = new StringBuffer();
 
-    private NodeListen(File home, int port) throws IOException, InterruptedException {
+    private NodeListen(File home, int port, boolean discovery) throws IOException, InterruptedException {
         this.home = home;
         this.inbox = new File(home, "inbox");
-        proc = new ProcessBuilder(Node.argv("listen", "--home", home.getPath(), "--inbox", inbox.getPath(), "--port", String.valueOf(port),
-                "--no-discovery", "--alias", "pc")).redirectErrorStream(true).start();
+        java.util.List<String> args = new java.util.ArrayList<>(java.util.List.of("listen", "--home", home.getPath(), "--inbox", inbox.getPath(), "--port", String.valueOf(port), "--alias", "pc"));
+        if (!discovery) args.add("--no-discovery");
+        proc = new ProcessBuilder(Node.argv(args.toArray(new String[0]))).redirectErrorStream(true).start();
         Thread t = new Thread(() -> {
             try (BufferedReader r = new BufferedReader(new InputStreamReader(proc.getInputStream(), StandardCharsets.UTF_8))) {
                 for (String line; (line = r.readLine()) != null; ) out.append(line).append('\n');
@@ -48,15 +49,23 @@ public final class NodeListen implements AutoCloseable {
     }
 
     public static NodeListen start(File home) throws IOException, InterruptedException {
-        return new NodeListen(home, 0);
+        return new NodeListen(home, 0, false);
     }
 
     public static NodeListen start(File home, int port) throws IOException, InterruptedException {
-        return new NodeListen(home, port);
+        return new NodeListen(home, port, false);
+    }
+
+    public static NodeListen startWithDiscovery(File home) throws IOException, InterruptedException {
+        return new NodeListen(home, 0, true);
     }
 
     public String output() {
         return out.toString();
+    }
+
+    public boolean isAlive() {
+        return proc.isAlive();
     }
 
     /** SIGKILL: a crash, not a clean stop. */
