@@ -7,6 +7,7 @@ import io.github.hafijbge.meshdrop.engine.proto.Sanitize;
 import io.github.hafijbge.meshdrop.engine.util.Atomic;
 import io.github.hafijbge.meshdrop.engine.util.Hex;
 import io.github.hafijbge.meshdrop.engine.util.Json;
+import io.github.hafijbge.meshdrop.engine.util.Io;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
@@ -201,16 +202,16 @@ public final class Inbox {
         int n = 0;
         for (Map.Entry<Long, Set<Long>> e : new TreeMap<>(s.have).entrySet()) {
             for (Long i : e.getValue()) {
-                b.append(Json.stringify(rec("c", List.of(e.getKey(), i)))).append('\n');
+                b.append(Json.stringify(rec("c", java.util.Arrays.asList(e.getKey(), i)))).append('\n');
                 n++;
             }
         }
         for (Map.Entry<Long, String> e : s.pending.entrySet()) {
-            b.append(Json.stringify(rec("p", List.of(e.getKey(), e.getValue())))).append('\n');
+            b.append(Json.stringify(rec("p", java.util.Arrays.asList(e.getKey(), e.getValue())))).append('\n');
             n++;
         }
         for (Map.Entry<Long, String> e : s.done.entrySet()) {
-            b.append(Json.stringify(rec("d", List.of(e.getKey(), e.getValue())))).append('\n');
+            b.append(Json.stringify(rec("d", java.util.Arrays.asList(e.getKey(), e.getValue())))).append('\n');
             n++;
         }
         Atomic.write(new File(sessionDir(sid), LOG), b.toString().getBytes(StandardCharsets.UTF_8));
@@ -242,7 +243,7 @@ public final class Inbox {
         File dir = sessionDir(sid);
         File st = new File(dir, "state.json");
         if (!st.isFile()) return null;
-        Map<String, Object> j = (Map<String, Object>) Json.parse(Files.readString(st.toPath()));
+        Map<String, Object> j = (Map<String, Object>) Json.parse(Io.readString(st.toPath()));
         Map<String, String> tops = new LinkedHashMap<>();
         if (j.get("tops") instanceof Map) {
             for (Map.Entry<String, Object> e : ((Map<String, Object>) j.get("tops")).entrySet()) {
@@ -252,7 +253,7 @@ public final class Inbox {
         Session s = new Session(Manifest.fromJson(j.get("manifest")), (String) j.get("ctxExport"), tops);
         File log = new File(dir, LOG);
         if (!log.isFile()) return s;
-        String text = Files.readString(log.toPath());
+        String text = Io.readString(log.toPath());
         int lines = 0, bad = 0;
         for (String line : text.split("\n", -1)) {
             if (line.isEmpty()) continue;
@@ -405,7 +406,7 @@ public final class Inbox {
         synchronized (s) {
             Set<Long> h = s.have.get(fileId);
             if (s.done.containsKey(fileId) || (h != null && h.contains(index))) return;
-            append(sid, s, rec("c", List.of(fileId, index)));
+            append(sid, s, rec("c", java.util.Arrays.asList(fileId, index)));
         }
     }
 
@@ -437,7 +438,7 @@ public final class Inbox {
         try (InputStream in = sink.open(rel)) {
             if (in == null || !hash(in, f.size).equals(f.sha256)) return null;
         }
-        record(sid, s, rec("d", List.of(f.fileId, rel)));
+        record(sid, s, rec("d", java.util.Arrays.asList(f.fileId, rel)));
         return rel;
     }
 
@@ -486,10 +487,10 @@ public final class Inbox {
             for (;;) {
                 String name = Sanitize.uniqueName(base, n -> taken(dir.isEmpty() ? n : dir + "/" + n));
                 String rel = dir.isEmpty() ? name : dir + "/" + name;
-                record(sid, s, rec("p", List.of(fileId, rel)));
+                record(sid, s, rec("p", java.util.Arrays.asList(fileId, rel)));
                 String landed = sink.publishAs(rel, part, f.mime);
                 if (landed == null) continue; // lost a race for this name; pick the next
-                record(sid, s, rec("d", List.of(fileId, landed)));
+                record(sid, s, rec("d", java.util.Arrays.asList(fileId, landed)));
                 Files.deleteIfExists(part.toPath());
                 return landed;
             }
@@ -541,7 +542,7 @@ public final class Inbox {
         File f = new File(new File(state, FINISHED_DIR), sid + ".json");
         if (!f.isFile()) return null;
         try {
-            Map<String, Object> j = (Map<String, Object>) Json.parse(Files.readString(f.toPath()));
+            Map<String, Object> j = (Map<String, Object>) Json.parse(Io.readString(f.toPath()));
             if (!(j.get("from") instanceof String) || !(j.get("files") instanceof List)) return null;
             List<String> files = new ArrayList<>();
             for (Object o : (List<Object>) j.get("files")) {

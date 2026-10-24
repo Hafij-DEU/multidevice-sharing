@@ -7,6 +7,7 @@ import io.github.hafijbge.meshdrop.engine.proto.Manifest;
 import io.github.hafijbge.meshdrop.engine.proto.Offer;
 import io.github.hafijbge.meshdrop.engine.util.Atomic;
 import io.github.hafijbge.meshdrop.engine.util.Json;
+import io.github.hafijbge.meshdrop.engine.util.Io;
 import java.io.File;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -141,7 +142,7 @@ public final class Outbox {
         File f = file(sid);
         if (!f.isFile()) return null;
         try {
-            return Entry.fromMap((Map<String, Object>) Json.parse(Files.readString(f.toPath())), sid);
+            return Entry.fromMap((Map<String, Object>) Json.parse(Io.readString(f.toPath())), sid);
         } catch (IOException | RuntimeException e) {
             return null;
         }

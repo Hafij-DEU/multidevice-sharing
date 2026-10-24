@@ -14,17 +14,22 @@ import java.util.Map;
 
 /** Sources on the local file system (JVM tests, and plain files on Android). */
 public final class PathSource implements Source {
-    private static final Map<String, String> MIME = Map.ofEntries(
-            Map.entry(".txt", "text/plain"), Map.entry(".md", "text/markdown"), Map.entry(".html", "text/html"), Map.entry(".htm", "text/html"),
-            Map.entry(".css", "text/css"), Map.entry(".csv", "text/csv"), Map.entry(".json", "application/json"), Map.entry(".js", "text/javascript"),
-            Map.entry(".xml", "application/xml"), Map.entry(".pdf", "application/pdf"), Map.entry(".zip", "application/zip"), Map.entry(".gz", "application/gzip"),
-            Map.entry(".tar", "application/x-tar"), Map.entry(".png", "image/png"), Map.entry(".jpg", "image/jpeg"), Map.entry(".jpeg", "image/jpeg"),
-            Map.entry(".gif", "image/gif"), Map.entry(".webp", "image/webp"), Map.entry(".svg", "image/svg+xml"), Map.entry(".heic", "image/heic"),
-            Map.entry(".mp3", "audio/mpeg"), Map.entry(".ogg", "audio/ogg"), Map.entry(".wav", "audio/wav"), Map.entry(".flac", "audio/flac"),
-            Map.entry(".mp4", "video/mp4"), Map.entry(".mkv", "video/x-matroska"), Map.entry(".webm", "video/webm"), Map.entry(".mov", "video/quicktime"),
-            Map.entry(".apk", "application/vnd.android.package-archive"), Map.entry(".deb", "application/vnd.debian.binary-package"));
+    private static final Map<String, String> MIME = new java.util.HashMap<>();
 
-    public static final Resolver RESOLVER = ref -> new PathSource(Path.of(ref));
+    static {
+        String[] pairs = {
+            ".txt", "text/plain", ".md", "text/markdown", ".html", "text/html", ".htm", "text/html", ".css", "text/css",
+            ".csv", "text/csv", ".json", "application/json", ".js", "text/javascript", ".xml", "application/xml",
+            ".pdf", "application/pdf", ".zip", "application/zip", ".gz", "application/gzip", ".tar", "application/x-tar",
+            ".png", "image/png", ".jpg", "image/jpeg", ".jpeg", "image/jpeg", ".gif", "image/gif", ".webp", "image/webp",
+            ".svg", "image/svg+xml", ".heic", "image/heic", ".mp3", "audio/mpeg", ".ogg", "audio/ogg", ".wav", "audio/wav",
+            ".flac", "audio/flac", ".mp4", "video/mp4", ".mkv", "video/x-matroska", ".webm", "video/webm", ".mov", "video/quicktime",
+            ".apk", "application/vnd.android.package-archive", ".deb", "application/vnd.debian.binary-package",
+        };
+        for (int i = 0; i < pairs.length; i += 2) MIME.put(pairs[i], pairs[i + 1]);
+    }
+
+    public static final Resolver RESOLVER = ref -> new PathSource(java.nio.file.Paths.get(ref));
 
     private final Path path;
 

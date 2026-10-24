@@ -4,6 +4,7 @@ import io.github.hafijbge.meshdrop.engine.crypto.P256;
 import io.github.hafijbge.meshdrop.engine.proto.Manifest;
 import io.github.hafijbge.meshdrop.engine.util.Atomic;
 import io.github.hafijbge.meshdrop.engine.util.Json;
+import io.github.hafijbge.meshdrop.engine.util.Io;
 import java.io.File;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -67,7 +68,7 @@ public final class TrustStore {
         devices.clear();
         loadedStamp = st;
         if (st == -1) return;
-        Object o = Json.parse(Files.readString(file.toPath()));
+        Object o = Json.parse(Io.readString(file.toPath()));
         if (!(o instanceof Map) || !(((Map<String, Object>) o).get("devices") instanceof List)) throw new IOException("corrupt trust store " + file);
         for (Object d : (List<Object>) ((Map<String, Object>) o).get("devices")) {
             Map<String, Object> m = (Map<String, Object>) d;

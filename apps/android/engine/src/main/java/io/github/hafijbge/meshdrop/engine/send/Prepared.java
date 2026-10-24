@@ -109,8 +109,9 @@ public final class Prepared {
             long pos = 0;
             while (pos < size) {
                 if (cancel != null && cancel.get()) throw new Sender.Aborted();
-                buf.clear();
-                buf.limit((int) Math.min(buf.capacity(), Math.min(size - pos, Chunks.CHUNK_SIZE - (pos % Chunks.CHUNK_SIZE))));
+                java.nio.Buffer b = buf; // Buffer's clear()/limit(): ByteBuffer's covariant ones are Java 9+
+                b.clear();
+                b.limit((int) Math.min(buf.capacity(), Math.min(size - pos, Chunks.CHUNK_SIZE - (pos % Chunks.CHUNK_SIZE))));
                 ch.position(pos);
                 int n = ch.read(buf);
                 if (n <= 0) throw new Sender.SourceChanged(s.ref());

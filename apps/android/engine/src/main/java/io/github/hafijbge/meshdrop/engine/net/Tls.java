@@ -145,16 +145,24 @@ public final class Tls {
         }
     }
 
+    /** Contexts are costly to build (provider and key setup): one per (identity, pinned peer), reused. */
+    private static final java.util.Map<String, SSLContext> PINNED = new java.util.concurrent.ConcurrentHashMap<>();
+    private static volatile SSLContext probe;
+
     public static SSLContext pinnedClient(Identity me, String expectedId) {
-        try {
-            return context(new DeviceKeyManager(me), new Pinned(expectedId));
-        } catch (GeneralSecurityException e) {
-            throw new IllegalStateException(e);
-        }
+        return PINNED.computeIfAbsent(me.deviceId() + "/" + expectedId, k -> {
+            try {
+                return context(new DeviceKeyManager(me), new Pinned(expectedId));
+            } catch (GeneralSecurityException e) {
+                throw new IllegalStateException(e);
+            }
+        });
     }
 
     public static SSLContext probeClient() {
-        return context(null, new AnyCert());
+        SSLContext c = probe;
+        if (c == null) probe = c = context(null, new AnyCert());
+        return c;
     }
 
     /** Opens a TLS 1.3 connection and completes the handshake (the pin, if any, is checked inside it). */

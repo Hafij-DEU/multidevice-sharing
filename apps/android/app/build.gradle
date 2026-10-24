@@ -1,0 +1,69 @@
+plugins {
+    id 'com.android.application'
+}
+
+// Release signing comes from the environment (scripts/release.sh), so the keystore never lives in the repo.
+def releaseStore = System.getenv('MESHDROP_KS')
+
+android {
+    namespace 'io.github.hafijbge.meshdrop'
+    compileSdk 35
+    buildToolsVersion '35.0.0'
+
+    defaultConfig {
+        applicationId 'io.github.hafijbge.meshdrop'
+        minSdk 29
+        targetSdk 35
+        versionCode 1
+        versionName '0.1.0'
+    }
+
+    signingConfigs {
+        release {
+            if (releaseStore) {
+                storeFile file(releaseStore)
+                storePassword System.getenv('MESHDROP_KS_PASS')
+                keyAlias System.getenv('MESHDROP_KEY_ALIAS')
+                keyPassword System.getenv('MESHDROP_KEY_PASS')
+            }
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            if (releaseStore) {
+                signingConfig signingConfigs.release
+            }
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    lint {
+        checkDependencies true
+        abortOnError true
+        warningsAsErrors false
+    }
+
+    packaging {
+        resources.excludes += ['META-INF/*']
+    }
+}
+
+dependencies {
+    implementation project(':engine')
+    implementation 'androidx.webkit:webkit:1.12.1'
+}
+
+// The shared React renderer (apps/desktop/src/renderer), built into assets/web before every build.
+def buildRenderer = tasks.register('buildRenderer', Exec) {
+    workingDir rootProject.projectDir
+    commandLine 'bash', 'scripts/build-renderer.sh'
+    inputs.dir("${rootProject.projectDir}/../desktop/src")
+    outputs.dir("${projectDir}/src/main/assets/web")
+}
+tasks.named('preBuild').configure { dependsOn buildRenderer }

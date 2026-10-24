@@ -132,7 +132,7 @@ public final class Discovery {
                     continue;
                 }
                 for (InetAddress a : Collections.list(ni.getInetAddresses())) {
-                    if (a instanceof Inet4Address) out.add(Map.entry(ni, (Inet4Address) a));
+                    if (a instanceof Inet4Address) out.add(new java.util.AbstractMap.SimpleImmutableEntry<>(ni, (Inet4Address) a));
                 }
             }
         } catch (SocketException e) {
@@ -319,7 +319,7 @@ public final class Discovery {
         if (port < 1 || port > 65535) throw new IOException("probe: invalid port " + port);
         SSLSocket s = Tls.connect(Tls.probeClient(), host, port, timeoutMs);
         String deviceId = Identity.deviceIdOf(Tls.peerCertDer(s));
-        Http.Response r = Http.request(s, "GET", "/mesh/v1/info", Map.of("Accept", "application/json"), null, MAX_INFO_BYTES);
+        Http.Response r = Http.request(s, "GET", "/mesh/v1/info", java.util.Collections.singletonMap("Accept", "application/json"), null, MAX_INFO_BYTES);
         if (r.status != 200) throw new IOException("probe: HTTP " + r.status + " from " + host + ":" + port);
         Object j;
         try {

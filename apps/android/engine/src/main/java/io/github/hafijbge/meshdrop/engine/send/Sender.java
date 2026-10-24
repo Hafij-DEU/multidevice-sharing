@@ -417,7 +417,7 @@ public final class Sender {
         Map<Long, AtomicInteger> remaining = new ConcurrentHashMap<>();
         Map<Long, long[]> sent = new ConcurrentHashMap<>();
         for (Manifest.FileEntry f : entry.manifest.files) {
-            Set<Long> got = have.getOrDefault(f.fileId, Set.of());
+            Set<Long> got = have.getOrDefault(f.fileId, java.util.Collections.<Long>emptySet());
             long n = Chunks.count(f.size);
             int missing = 0;
             long bytes = 0;

@@ -255,6 +255,7 @@ export class AppController extends EventEmitter {
       outbox: this.#outbox.map((o) => ({ ...o })),
       received: this.#history.received(),
       settings: this.#settings.get(),
+      platform: 'desktop',
       receiving: this.#mode === 'serving' && !this.#paused && this.#error === undefined,
       ...(this.#error !== undefined ? { error: this.#error } : {}),
       members: e.members().map((m) => ({ deviceId: m.deviceId, alias: m.alias, role: m.role, self: m.deviceId === me })),

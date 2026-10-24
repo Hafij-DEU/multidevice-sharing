@@ -14,6 +14,7 @@ import io.github.hafijbge.meshdrop.engine.send.SendResult;
 import io.github.hafijbge.meshdrop.engine.send.Sender;
 import io.github.hafijbge.meshdrop.engine.util.Atomic;
 import io.github.hafijbge.meshdrop.engine.util.Json;
+import io.github.hafijbge.meshdrop.engine.util.Io;
 import java.io.File;
 import java.io.IOException;
 import java.net.Inet4Address;
@@ -276,7 +277,7 @@ public final class Engine {
     @SuppressWarnings("unchecked")
     private List<Map<String, Object>> readManual() {
         try {
-            Object j = Json.parse(Files.readString(manualFile.toPath()));
+            Object j = Json.parse(Io.readString(manualFile.toPath()));
             Object peers = j instanceof Map ? ((Map<String, Object>) j).get("peers") : null;
             List<Map<String, Object>> out = new ArrayList<>();
             if (peers instanceof List) {
@@ -404,7 +405,7 @@ public final class Engine {
         Discovery d = requireRunning();
         List<String> hosts = new ArrayList<>();
         for (String c : cidrs != null ? cidrs : ownSubnets()) hosts.addAll(expand(c, 512 - hosts.size()));
-        List<Integer> ps = ports != null ? ports : new ArrayList<>(new LinkedHashSet<>(List.of(53318, port)));
+        List<Integer> ps = ports != null ? ports : new ArrayList<>(new LinkedHashSet<>(java.util.Arrays.asList(53318, port)));
         Set<String> before = new java.util.HashSet<>();
         for (Discovery.PeerInfo p : d.peers()) before.add(p.deviceId);
         Semaphore slots = new Semaphore(Math.max(1, concurrency));
@@ -564,7 +565,7 @@ public final class Engine {
     }
 
     public CompletableFuture<List<SendResult>> sendClipboard(List<String> ids, String text, String tag) {
-        return send(ids, List.of(SendItem.clipboard(text)), tag);
+        return send(ids, java.util.Arrays.asList(SendItem.clipboard(text)), tag);
     }
 
     /** Resumes every unfinished send whose device is trusted and present. */

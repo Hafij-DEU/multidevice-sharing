@@ -1,1 +1,4 @@
 // MeshDrop for Android. Build offline: ~/.local/opt/gradle-8.11.1/bin/gradle --offline <task>
+plugins {
+    id 'com.android.application' version '8.7.3' apply false
+}

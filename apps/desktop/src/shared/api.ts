@@ -16,7 +16,10 @@ export interface DeviceView {
 
 export interface SendItemInput {
   kind: 'file' | 'dir' | 'text';
+  /** A local path, or a content:// URI on Android. */
   path?: string;
+  /** Display name when `path` is not readable (a content URI). */
+  name?: string;
   text?: string;
 }
 
@@ -68,6 +71,12 @@ export interface AppState {
   receiving: boolean;
   /** Why this device is not receiving although it should (shown as a banner). */
   error?: string;
+  /** Which shell runs the UI (absent = desktop). */
+  platform?: 'desktop' | 'android';
+  /** Android: the "Keep MeshDrop alive" checklist for this phone's ROM. */
+  keepAlive?: { batteryUnrestricted: boolean; rom: 'miui' | 'hios' | 'stock'; steps: { id: string; label: string; done?: boolean }[] };
+  /** Android: files shared into MeshDrop from another app, waiting for takeSharedItems(). */
+  sharedPending?: number;
   /** Mesh members (for the Mesh page). */
   members: { deviceId: string; alias: string; role: 'hub' | 'member'; self: boolean }[];
 }
@@ -98,6 +107,12 @@ export interface DesktopApi {
   reveal(path: string): Promise<void>;
   registerClipboardShortcut(binding: string): Promise<void>;
   openConfigFolder(): Promise<void>;
+  /** Android: the system picker, returning items with display names (content URIs are not readable paths). */
+  pickItems?(kind: 'file' | 'dir'): Promise<SendItemInput[]>;
+  /** Android: the items shared into MeshDrop (Share → MeshDrop), once. */
+  takeSharedItems?(): Promise<SendItemInput[]>;
+  /** Android: runs one step of the keep-alive checklist (opens the right system screen). */
+  keepAliveAction?(id: string): Promise<void>;
 }
 
 declare global {

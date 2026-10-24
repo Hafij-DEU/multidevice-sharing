@@ -55,7 +55,7 @@ export function App() {
     <div className="app">
       <nav className="sidebar" aria-label="Pages">
         <div className="brand">MeshDrop</div>
-        {PAGES.map((p) => (
+        {PAGES.filter((p) => !(p === 'Mesh' && state?.platform === 'android')).map((p) => (
           <button key={p} className={p === page ? 'nav active' : 'nav'} onClick={() => setPage(p)} aria-current={p === page ? 'page' : undefined}>
             {p}
           </button>

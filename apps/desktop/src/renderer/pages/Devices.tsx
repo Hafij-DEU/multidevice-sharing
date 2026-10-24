@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import type { AppState, SendItemInput } from '../../shared/api.ts';
 import { DeviceCard } from '../components/DeviceCard.tsx';
 import { DropZone } from '../components/DropZone.tsx';
@@ -34,6 +34,20 @@ export function Devices({ state, run }: { state: AppState; run: Run }) {
   const targets = all ? trusted.filter((d) => d.reach !== 'offline').map((d) => d.deviceId) : [...selected].filter((id) => trusted.some((d) => d.deviceId === id));
   const payload: SendItemInput[] = [...items, ...(text !== null && text !== '' ? [{ kind: 'text' as const, text }] : [])];
   const canSend = targets.length > 0 && payload.length > 0 && !busy;
+
+  const android = state.platform === 'android';
+  const shared = state.sharedPending ?? 0;
+  useEffect(() => {
+    if (shared > 0 && window.meshdrop.takeSharedItems) {
+      void run(async () => {
+        const got = await window.meshdrop.takeSharedItems!();
+        const files = got.filter((g) => g.kind !== 'text');
+        const t = got.find((g) => g.kind === 'text');
+        if (files.length > 0) setItems((cur) => [...cur, ...files]);
+        if (t?.text) setText(t.text);
+      });
+    }
+  }, [shared]);
 
   const toggle = (id: string) =>
     setSelected((s) => {
@@ -76,7 +90,7 @@ export function Devices({ state, run }: { state: AppState; run: Run }) {
         </label>
       </div>
       {trusted.length === 0 ? (
-        <p className="muted">No devices yet. Add one by address below, or join a mesh on the Mesh page.</p>
+        <p className="muted">{android ? 'No devices yet. Add your PC by address below (its address is in MeshDrop on the PC).' : 'No devices yet. Add one by address below, or join a mesh on the Mesh page.'}</p>
       ) : (
         <div className="cards">
           {trusted.map((d) => (
@@ -86,12 +100,24 @@ export function Devices({ state, run }: { state: AppState; run: Run }) {
       )}
 
       <h2>What</h2>
-      <DropZone onItems={add} />
+      {!android && <DropZone onItems={add} />}
       <div className="row">
-        <button onClick={() => void run(async () => add((await window.meshdrop.pickFiles()).map((path) => ({ kind: 'file' as const, path }))))}>Add files</button>
+        <button
+          onClick={() =>
+            void run(async () =>
+              add(window.meshdrop.pickItems ? await window.meshdrop.pickItems('file') : (await window.meshdrop.pickFiles()).map((path) => ({ kind: 'file' as const, path }))),
+            )
+          }
+        >
+          Add files
+        </button>
         <button
           onClick={() =>
             void run(async () => {
+              if (window.meshdrop.pickItems) {
+                add(await window.meshdrop.pickItems('dir'));
+                return;
+              }
               const p = await window.meshdrop.pickFolder();
               if (p) add([{ kind: 'dir', path: p }]);
             })
@@ -111,8 +137,8 @@ export function Devices({ state, run }: { state: AppState; run: Run }) {
         <ul className="items">
           {items.map((it) => (
             <li key={`${it.kind}:${it.path}`}>
-              <span className="muted">{it.kind === 'dir' ? 'Folder' : 'File'}</span> {baseName(it.path ?? '')}
-              <button className="link" aria-label={`Remove ${baseName(it.path ?? '')}`} onClick={() => setItems(items.filter((x) => x !== it))}>
+              <span className="muted">{it.kind === 'dir' ? 'Folder' : 'File'}</span> {it.name ?? baseName(it.path ?? '')}
+              <button className="link" aria-label={`Remove ${it.name ?? baseName(it.path ?? '')}`} onClick={() => setItems(items.filter((x) => x !== it))}>
                 ×
               </button>
             </li>
