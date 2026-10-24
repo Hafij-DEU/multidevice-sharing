@@ -553,6 +553,23 @@ What the M4a Java engine (`apps/android/engine`) chose:
   `Download/MeshDrop/<path>`. Empty folders are created where the platform allows it (Android 11+).
 - **Pause receiving**: offers get `503 {"error":"paused"}`, like the desktop.
 
+What the M4b Java engine implements of M2 (the phone is a **member only**):
+
+- **Implemented**: canonical JSON and domain signatures; the membership list, its store
+  (`mesh/anchor.pem`, `mesh/membership.json`, the same files as Node) and composite trust (members first,
+  then manually paired devices, never a revoked one); redeeming invites over the LAN (`POST join`, including
+  `provisional` completed later through `GET membership`) and through the hub (`{t:'join'}`); the hub link
+  (hello/auth/welcome, pings, liveness, backoff, the hub's LAN address pinned first, then the list's URLs);
+  relay envelopes both ways with the replay cache; held sends (`holdBytes` on the offer); revocation on a
+  verified notice only (a bare refusal just stops the link); LAN pull of a newer list while the hub is
+  unreachable; `GET /mesh/v1/membership` and `mv` in `GET info`.
+- **Not implemented** (stays on the PC): being the hub, creating a mesh, invites (no `POST join` handler
+  and no InviteBook: the phone never enforces an invite), revocation, hub URLs, recovery.
+- **WebSocket**: an own RFC 6455 client (no library is available offline and `java.net.http` is missing on
+  Android); messages up to the hub's frame limit (64 MiB + 64 KiB).
+- **Invite links**: `meshdrop://join?…` is an intent filter; opening one only pre-fills the join box, the
+  user confirms. There is no in-app QR scanner.
+
 ## Test vectors
 
 Frozen files in `protocol/vectors/`. A conforming engine must reproduce `hpke-auth-p256.json`,

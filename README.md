@@ -5,8 +5,9 @@ end-to-end encrypted. Devices on the same Wi-Fi talk directly. Away from home, t
 runs on your own PC (reachable through Tailscale Funnel, a Cloudflare tunnel or a forwarded port). No
 account and no third-party server.
 
-Status: the core engine (M1), the hub (M2), the Ubuntu desktop app (M3) and the Android app for the local
-network (M4a) are done; mesh features on Android (QR join, the hub over the internet) come next (M4b). The wire protocol is in [docs/protocol.md](docs/protocol.md).
+Status: the core engine (M1), the hub (M2), the Ubuntu desktop app (M3) and the Android app (M4: the local
+network, then joining the mesh by QR and sending through the hub) are done. The wire protocol is in
+[docs/protocol.md](docs/protocol.md).
 
 ## Install (Ubuntu)
 
@@ -59,6 +60,11 @@ keep it, every update must be signed with it). Install it from the phone's file 
 4. Send from Devices (Add files / Add folder / Text), from any app's Share menu, or send the clipboard
    with the notification's "Send clipboard" button or the quick-settings tile. Received files land in
    `Download/MeshDrop`.
+5. Away from home: join the mesh. On the PC, Mesh → "Invite a device" shows a QR code. Scan it with the
+   phone's camera (or Google Lens): it opens MeshDrop's Mesh page with the invite filled in; tap Join.
+   You can also paste the invite there. The phone then keeps a link to the hub and reaches your other
+   devices through it when they are not on the same Wi-Fi; files for a device that is off wait on the
+   hub until it comes back. Creating the mesh, inviting, revoking and recovery stay on the PC.
 
 ## Command line
 
