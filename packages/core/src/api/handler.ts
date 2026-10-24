@@ -38,7 +38,8 @@ export type ReceiverEvent =
   | { type: 'progress'; sessionId: string; from: string; fileId: number; chunks: number; total: number }
   /** `path` / `files` are absolute local paths (the wire carries them relative to the inbox root). */
   | { type: 'file'; sessionId: string; from: string; fileId: number; path: string }
-  | { type: 'received'; sessionId: string; from: string; files: string[]; text?: string; clipboard?: true }
+  /** backup: a photo backup, filed in the backup folder (set by the engine, never by the handler). */
+  | { type: 'received'; sessionId: string; from: string; files: string[]; text?: string; clipboard?: true; backup?: true }
   | { type: 'error'; sessionId: string; from: string; code: string }
   | { type: 'cancelled'; sessionId: string; from: string };
 
@@ -60,6 +61,8 @@ export interface MeshServerOptions {
   membership?: () => unknown | null;
   /** False while receiving is paused: new offers get 503 'paused' (the sender keeps them to resume). */
   accepting?: () => boolean;
+  /** Folder sync routes (`sync/...`, trusted peers; LAN server only, never the relay). Without it: 404. */
+  sync?: (peer: string, method: string, seg: string[], query: URLSearchParams) => Promise<MeshResponse>;
 }
 
 /** Max body of a join request (device id, alias, certificate, proof). */
@@ -395,12 +398,13 @@ export function createMeshHandler(opts: MeshServerOptions): MeshHandler {
 
   async function route(req: MeshRequest, who: { peer?: string; sessionId?: string }): Promise<MeshResponse> {
     const method = req.method;
-    let pathname: string;
+    let url: URL;
     try {
-      pathname = new URL(req.path, 'http://meshdrop').pathname;
+      url = new URL(req.path, 'http://meshdrop');
     } catch {
       throw new HttpError(400, 'bad-request');
     }
+    const pathname = url.pathname;
     if (!pathname.startsWith(PREFIX)) throw new HttpError(404, 'not-found');
     const seg = pathname.slice(PREFIX.length).split('/');
 
@@ -426,6 +430,10 @@ export function createMeshHandler(opts: MeshServerOptions): MeshHandler {
     who.peer = peer;
     if (seg.length > 1 && seg[1] !== undefined && SESSION_ID_RE.test(seg[1])) who.sessionId = seg[1];
 
+    if (seg[0] === 'sync') {
+      if (!opts.sync) throw new HttpError(404, 'not-found');
+      return opts.sync(peer, method, seg.slice(1), url.searchParams);
+    }
     if (method === 'GET' && seg.length === 1 && seg[0] === 'membership') {
       const s = opts.membership?.() ?? null;
       if (s === null) throw new HttpError(404, 'not-found');

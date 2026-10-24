@@ -73,6 +73,8 @@ export interface SendOptions {
   connectTimeoutMs?: number;
   /** How to reach the target (default: LanTransport to target.host:port). */
   transport?: (t: Target) => Transport | Promise<Transport>;
+  /** Photo backup: the receiver files it in its backup folder (manifest `backup`). */
+  backup?: boolean;
 }
 
 export const DEFAULT_RETRY_DELAYS_MS: readonly number[] = Object.freeze([500, 1000, 2000]);
@@ -604,6 +606,7 @@ export async function sendPrepared(id: Identity, t: Target, p: PreparedItems, op
     }
     if (!entry) {
       const manifest = manifestFor(p, id.deviceId, t.deviceId);
+      if (opts.backup) manifest.backup = true;
       sessionId = manifest.sessionId;
       const { offer, ctx } = createOffer(id, t.publicKey, manifest);
       entry = {

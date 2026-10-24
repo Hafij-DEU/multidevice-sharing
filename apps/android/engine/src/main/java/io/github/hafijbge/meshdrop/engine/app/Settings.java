@@ -20,6 +20,9 @@ public final class Settings implements Cloneable {
     public boolean notifications = true;
     /** How long a guest link works, in minutes (5..1440). */
     public int guestMinutes = 60;
+    /** Photo backup (Android): the PC that gets new camera photos ("": off), and the last MediaStore id handed over. */
+    public String backupTarget = "";
+    public long backupSince = 0;
 
     public static Settings defaults(String alias) {
         Settings s = new Settings();
@@ -48,6 +51,8 @@ public final class Settings implements Cloneable {
         m.put("clipboardSync", clipboardSync);
         m.put("notifications", notifications);
         m.put("guestMinutes", (long) guestMinutes);
+        m.put("backupTarget", backupTarget);
+        m.put("backupSince", backupSince);
         return m;
     }
 }

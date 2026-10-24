@@ -122,6 +122,62 @@ public class AndroidPlatform implements Platform {
         }
     }
 
+    private static final android.net.Uri[] MEDIA = {
+        android.provider.MediaStore.Images.Media.getContentUri(android.provider.MediaStore.VOLUME_EXTERNAL),
+        android.provider.MediaStore.Video.Media.getContentUri(android.provider.MediaStore.VOLUME_EXTERNAL),
+    };
+
+    @Override
+    public boolean supportsBackup() {
+        return true;
+    }
+
+    @Override
+    public boolean mediaPermission() {
+        if (android.os.Build.VERSION.SDK_INT >= 33) {
+            return ctx.checkSelfPermission(android.Manifest.permission.READ_MEDIA_IMAGES) == android.content.pm.PackageManager.PERMISSION_GRANTED;
+        }
+        return ctx.checkSelfPermission(android.Manifest.permission.READ_EXTERNAL_STORAGE) == android.content.pm.PackageManager.PERMISSION_GRANTED;
+    }
+
+    @Override
+    public List<Media> cameraMediaAfter(long afterId, int limit) {
+        List<Media> out = new ArrayList<>();
+        if (!mediaPermission()) return out;
+        for (android.net.Uri base : MEDIA) {
+            String[] cols = {android.provider.MediaStore.MediaColumns._ID};
+            String sel = android.provider.MediaStore.MediaColumns._ID + " > ? AND " + android.provider.MediaStore.MediaColumns.RELATIVE_PATH + " LIKE 'DCIM/%' AND "
+                    + android.provider.MediaStore.MediaColumns.IS_PENDING + " = 0";
+            try (Cursor c = ctx.getContentResolver().query(base, cols, sel, new String[] {String.valueOf(afterId)},
+                    android.provider.MediaStore.MediaColumns._ID + " ASC")) {
+                if (c == null) continue;
+                while (c.moveToNext() && out.size() < limit * 2) {
+                    long id = c.getLong(0);
+                    out.add(new Media(id, android.content.ContentUris.withAppendedId(base, id).toString()));
+                }
+            } catch (RuntimeException e) {
+                // a volume that cannot be read now: next time
+            }
+        }
+        out.sort((a, b) -> Long.compare(a.id, b.id));
+        return out.size() > limit ? new ArrayList<>(out.subList(0, limit)) : out;
+    }
+
+    @Override
+    public long cameraMediaMaxId() {
+        long max = 0;
+        if (!mediaPermission()) return 0;
+        for (android.net.Uri base : MEDIA) {
+            try (Cursor c = ctx.getContentResolver().query(base, new String[] {android.provider.MediaStore.MediaColumns._ID},
+                    android.provider.MediaStore.MediaColumns.RELATIVE_PATH + " LIKE 'DCIM/%'", null, android.provider.MediaStore.MediaColumns._ID + " DESC")) {
+                if (c != null && c.moveToFirst()) max = Math.max(max, c.getLong(0));
+            } catch (RuntimeException ignored) {
+                // none readable
+            }
+        }
+        return max;
+    }
+
     @Override
     public String thumbnail(String located) {
         Uri u = sink == null ? null : sink.uriForLocated(located);

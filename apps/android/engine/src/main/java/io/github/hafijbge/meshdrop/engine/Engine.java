@@ -11,6 +11,7 @@ import io.github.hafijbge.meshdrop.engine.net.Tls;
 import io.github.hafijbge.meshdrop.engine.net.TrustStore;
 import io.github.hafijbge.meshdrop.engine.recv.Inbox;
 import io.github.hafijbge.meshdrop.engine.recv.MeshServer;
+import io.github.hafijbge.meshdrop.engine.send.LanTransport;
 import io.github.hafijbge.meshdrop.engine.send.MultiSend;
 import io.github.hafijbge.meshdrop.engine.send.Outbox;
 import io.github.hafijbge.meshdrop.engine.send.Prepared;
@@ -134,6 +135,15 @@ public final class Engine {
         this.trust = new TrustStore(new File(cfg.home, "trust.json"));
         this.inbox = new Inbox(new File(cfg.home, "inbox-state"), cfg.sink);
         this.outbox = new Outbox(new File(cfg.home, "outbox"));
+        this.syncState = new io.github.hafijbge.meshdrop.engine.sync.SyncState(cfg.home);
+        String sf = syncState.config().folder;
+        if (!sf.isEmpty()) {
+            try {
+                syncFolder = cfg.syncFolders.open(sf);
+            } catch (IOException | RuntimeException e) {
+                syncFolder = null; // gone or permission revoked: sync stays off until set again
+            }
+        }
         this.manualFile = new File(cfg.home, "manual-peers.json");
         this.port = cfg.port;
         this.trustSource = new CompositeTrust(() -> mesh, trust);
@@ -230,6 +240,7 @@ public final class Engine {
             MembershipStore m = mesh;
             return m == null ? null : m.current();
         };
+        so.sync = new io.github.hafijbge.meshdrop.engine.sync.SyncRoutes(syncState, () -> syncFolder, peer -> scheduleSync(peer, 300));
         MeshServer s = new MeshServer(identity, trustSource, inbox, ev -> {
             touch();
             Map<String, Object> d = new LinkedHashMap<>(ev);
@@ -263,6 +274,7 @@ public final class Engine {
         long tick = Math.max(50, cfg.activityIdleMs / 4);
         ticker.scheduleWithFixedDelay(this::activityTick, tick, tick, java.util.concurrent.TimeUnit.MILLISECONDS);
         ticker.scheduleWithFixedDelay(() -> execute(this::finishPendingJoin), 0, PENDING_RETRY_MS, java.util.concurrent.TimeUnit.MILLISECONDS);
+        ticker.scheduleWithFixedDelay(this::syncPresent, SYNC_INTERVAL_MS, SYNC_INTERVAL_MS, java.util.concurrent.TimeUnit.MILLISECONDS);
     }
 
     // ---- the hub link -------------------------------------------------------------------------
@@ -524,6 +536,7 @@ public final class Engine {
                 emit("discovery", "peer", m);
                 maybeAutoResume(p.deviceId);
                 execute(() -> maybePull(p));
+                if (syncState.config().partners.contains(p.deviceId)) scheduleSync(p.deviceId, 1000);
                 MembershipStore ms = mesh;
                 HubClient h = hub;
                 // The hub showed up on the LAN (or moved): link to it there now instead of waiting out the backoff.
@@ -598,6 +611,137 @@ public final class Engine {
         Discovery d = discovery;
         if (d == null || server == null) throw new IllegalStateException("engine not started");
         return d;
+    }
+
+    // ---- folder sync (M8a, LAN only) ------------------------------------------------------------
+
+    private static final long SYNC_INTERVAL_MS = 60_000;
+    private final io.github.hafijbge.meshdrop.engine.sync.SyncState syncState;
+    private volatile io.github.hafijbge.meshdrop.engine.sync.SyncFolder syncFolder;
+    private final Set<String> syncRunning = ConcurrentHashMap.newKeySet();
+    private final Map<String, Object> syncLocks = new ConcurrentHashMap<>();
+    private final Map<String, Map<String, Object>> syncLast = new ConcurrentHashMap<>();
+
+    /**
+     * Sets the synced folder ("" turns sync off; a path, or on Android a picked folder's URI) and the
+     * partners (trusted device id prefixes).
+     */
+    public synchronized void syncSet(String folder, List<String> partners) throws IOException {
+        String f = folder == null ? "" : folder.trim();
+        io.github.hafijbge.meshdrop.engine.sync.SyncFolder sf = f.isEmpty() ? null : cfg.syncFolders.open(f);
+        List<String> ids = new ArrayList<>();
+        for (String q : partners) {
+            String id = resolveDeviceId(q);
+            if (!ids.contains(id)) ids.add(id);
+        }
+        syncState.setConfig(new io.github.hafijbge.meshdrop.engine.sync.SyncState.Config(f, ids));
+        syncFolder = sf;
+        for (String id : ids) scheduleSync(id, 500);
+    }
+
+    public io.github.hafijbge.meshdrop.engine.sync.SyncState.Config syncConfig() {
+        return syncState.config();
+    }
+
+    /** {folder, partners:[{deviceId, alias?, present, syncing, last?}]} as the desktop's syncStatus(). */
+    public Map<String, Object> syncStatus() {
+        io.github.hafijbge.meshdrop.engine.sync.SyncState.Config c = syncState.config();
+        Discovery d = discovery;
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("folder", syncFolder == null ? "" : c.folder);
+        List<Object> ps = new ArrayList<>();
+        for (String id : c.partners) {
+            Map<String, Object> p = new LinkedHashMap<>();
+            p.put("deviceId", id);
+            TrustStore.Device t = trustSource.get(id);
+            if (t != null) p.put("alias", t.alias);
+            p.put("present", d != null && d.peer(id) != null);
+            p.put("syncing", syncRunning.contains(id));
+            if (syncLast.containsKey(id)) p.put("last", new LinkedHashMap<>(syncLast.get(id)));
+            ps.add(p);
+        }
+        m.put("partners", ps);
+        return m;
+    }
+
+    /** Runs a round now with every partner on the LAN (blocks until they finished). */
+    public void syncNow() {
+        Discovery d = requireRunning();
+        for (String id : syncState.config().partners) if (d.peer(id) != null) runSync(id);
+    }
+
+    private void syncPresent() {
+        Discovery d = discovery;
+        if (d == null) return;
+        for (String id : syncState.config().partners) if (d.peer(id) != null) execute(() -> runSync(id));
+    }
+
+    private void scheduleSync(String partner, long delayMs) {
+        java.util.concurrent.ScheduledExecutorService t = ticker;
+        if (t == null) return;
+        try {
+            t.schedule(() -> execute(() -> runSync(partner)), delayMs, java.util.concurrent.TimeUnit.MILLISECONDS);
+        } catch (java.util.concurrent.RejectedExecutionException ignored) {
+            // stopping
+        }
+    }
+
+    /** One round with `partner` at a time: a caller during a round waits for it, then runs its own (so it sees the latest). */
+    private void runSync(String partner) {
+        Object lock = syncLocks.computeIfAbsent(partner, k -> new Object());
+        synchronized (lock) {
+            syncRunning.add(partner);
+            try {
+                syncOnce(partner);
+            } finally {
+                syncRunning.remove(partner);
+            }
+        }
+    }
+
+    private void syncOnce(String partner) {
+        io.github.hafijbge.meshdrop.engine.sync.SyncFolder f = syncFolder;
+        Discovery d = discovery;
+        TrustStore.Device t = trustSource.get(partner);
+        if (f == null || d == null || server == null || t == null || !syncState.config().partners.contains(partner)) return;
+        Discovery.PeerInfo p = d.peer(partner);
+        if (p == null) return; // LAN only
+        Map<String, Object> last = new LinkedHashMap<>();
+        last.put("at", System.currentTimeMillis());
+        try {
+            touch();
+            io.github.hafijbge.meshdrop.engine.sync.SyncRound.Result r = io.github.hafijbge.meshdrop.engine.sync.SyncRound.run(f, syncState,
+                    new LanTransport(identity, new Sender.Target(partner, p.host, p.port, t.key), 10_000), identity.deviceId(), partner, t.alias,
+                    () -> server == null, System.currentTimeMillis());
+            last.put("pulled", (long) r.pulled);
+            last.put("deleted", (long) r.deleted);
+            last.put("conflicts", (long) r.conflicts);
+            last.put("errors", (long) r.errors.size());
+            syncLast.put(partner, last);
+            // Our own edits (no file watcher on Android): tell the partner to pull now.
+            if (r.localChanged || r.pulled + r.deleted + r.conflicts > 0) {
+                try {
+                    new LanTransport(identity, new Sender.Target(partner, p.host, p.port, t.key), 10_000).request("POST", "/mesh/v1/sync/poke", null, null, 10_000, null, null);
+                } catch (IOException ignored) {
+                    // it pulls on its own timer
+                }
+            }
+            Map<String, Object> ev = new LinkedHashMap<>(last);
+            ev.remove("at");
+            ev.put("partner", partner);
+            emit("sync", "round", ev);
+        } catch (IOException | RuntimeException e) {
+            last.put("pulled", 0L);
+            last.put("deleted", 0L);
+            last.put("conflicts", 0L);
+            last.put("errors", 0L);
+            last.put("error", e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage());
+            syncLast.put(partner, last);
+            Map<String, Object> ev = new LinkedHashMap<>();
+            ev.put("partner", partner);
+            ev.put("error", last.get("error"));
+            emit("sync", "error", ev);
+        }
     }
 
     // ---- LAN guests ---------------------------------------------------------------------------
@@ -897,6 +1041,12 @@ public final class Engine {
         manual.removeIf(x -> id.equals(x.get("deviceId")));
         writeManual(manual);
         for (Outbox.Entry e : outbox.list()) if (id.equals(e.targetId)) outbox.remove(e.sessionId);
+        io.github.hafijbge.meshdrop.engine.sync.SyncState.Config sc = syncState.config();
+        if (sc.partners.contains(id)) {
+            List<String> ps = new ArrayList<>(sc.partners);
+            ps.remove(id);
+            syncState.setConfig(new io.github.hafijbge.meshdrop.engine.sync.SyncState.Config(sc.folder, ps));
+        }
     }
 
     public void forgetPeer(String deviceId) {
@@ -1167,6 +1317,11 @@ public final class Engine {
      * device that is not present fails 'offline'. Progress and result events carry `tag`.
      */
     public CompletableFuture<List<SendResult>> send(List<String> ids, List<SendItem> items, String tag) {
+        return send(ids, items, tag, false);
+    }
+
+    /** `backup`: a photo backup (the receiver files it in its backup folder). */
+    public CompletableFuture<List<SendResult>> send(List<String> ids, List<SendItem> items, String tag, boolean backup) {
         Discovery d = requireRunning();
         List<String> targets = new ArrayList<>();
         if (ids == null) {
@@ -1192,6 +1347,7 @@ public final class Engine {
                     Prepared p;
                     try {
                         p = Prepared.of(items, control.pausedFlag());
+                        p.backup = backup;
                     } catch (IOException | RuntimeException x) {
                         for (String id : targets) out.add(new SendResult(id, control.paused() ? "cancelled" : "failed", "", control.paused() ? null : String.valueOf(x.getMessage())));
                         for (SendResult r : out) emitResult(r, tag);

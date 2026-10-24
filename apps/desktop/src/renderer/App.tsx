@@ -9,6 +9,7 @@ import { Inbox } from './pages/Inbox.tsx';
 import { Mesh } from './pages/Mesh.tsx';
 import { PairedDevices } from './pages/PairedDevices.tsx';
 import { Settings } from './pages/Settings.tsx';
+import { Sync } from './pages/Sync.tsx';
 import { Transfers } from './pages/Transfers.tsx';
 
 /** Three tabs; the rarer pages live under More. */
@@ -19,9 +20,10 @@ const TAB_ICON: Record<Tab, string> = {
   Received: 'M12 4v11M7 10l5 5 5-5M5 20h14',
   More: 'M5 12h.01M12 12h.01M19 12h.01',
 };
-const MORE = ['Devices', 'Guests', 'Mesh', 'Transfers', 'Settings'] as const;
+const MORE = ['Devices', 'Sync', 'Guests', 'Mesh', 'Transfers', 'Settings'] as const;
 type Sub = (typeof MORE)[number];
 const ICON: Record<Sub, string> = {
+  Sync: 'M4 12a8 8 0 0 1 14-5.3M20 4v4h-4M20 12a8 8 0 0 1-14 5.3M4 20v-4h4',
   Devices: 'M4 5h10v14H4zM16 9h4v10h-4M8 16h2',
   Guests: 'M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM4 21a8 8 0 0 1 16 0',
   Mesh: 'M5 12a2 2 0 1 0 0 .01M19 5a2 2 0 1 0 0 .01M19 19a2 2 0 1 0 0 .01M7 11l10-5M7 13l10 5',
@@ -30,6 +32,7 @@ const ICON: Record<Sub, string> = {
 };
 const MORE_HINT: Record<Sub, string> = {
   Devices: 'Paired devices: unpair, or pair again',
+  Sync: 'Keep one folder the same on your devices; phone photo backup',
   Guests: 'Let someone without the app send or get files from a browser',
   Mesh: 'Link your devices so they reach each other from anywhere',
   Transfers: 'Unfinished sends and transfer history',
@@ -103,7 +106,7 @@ export function App() {
     return off;
   }, []);
 
-  const subs = MORE.filter((p) => !(p === 'Guests' && !state?.guest));
+  const subs = MORE.filter((p) => !(p === 'Guests' && !state?.guest) && !(p === 'Sync' && !state?.sync));
   const status = !state
     ? ''
     : state.mode === 'client-only'
@@ -170,6 +173,8 @@ export function App() {
             </div>
             {sub === 'Devices' ? (
               <PairedDevices state={state} run={run} />
+            ) : sub === 'Sync' ? (
+              <Sync state={state} run={run} />
             ) : sub === 'Guests' ? (
               <Guests state={state} run={run} />
             ) : sub === 'Mesh' ? (

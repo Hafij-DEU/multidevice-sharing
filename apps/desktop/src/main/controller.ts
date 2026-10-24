@@ -6,14 +6,14 @@ import { EventEmitter } from 'node:events';
 import { mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { lstat, readdir } from 'node:fs/promises';
 import { createServer } from 'node:net';
-import { networkInterfaces } from 'node:os';
+import { homedir, networkInterfaces } from 'node:os';
 import { isAbsolute, join, relative, resolve } from 'node:path';
 import QRCode from 'qrcode';
 import { CHUNK_SIZE } from '@meshdrop/core/src/chunk.ts';
 import { Engine, liveListener, type EngineEvent, type EngineOptions, type SendItem } from '@meshdrop/core/src/engine.ts';
 import { loadOrCreateIdentity } from '@meshdrop/core/src/identity.ts';
 import { writeFileAtomic } from '@meshdrop/core/src/trust.ts';
-import type { AppState, DeviceView, GuestView, LinkCreateInput, LinkView, ReachInput, ReachView, SendItemInput, Settings, TransferView } from '../shared/api.ts';
+import type { AppState, DeviceView, GuestView, LinkCreateInput, LinkView, ReachInput, ReachView, SendItemInput, Settings, SyncView, TransferView } from '../shared/api.ts';
 import type { HistoryStore } from './history.ts';
 import { SettingsError, type SettingsStore } from './settings.ts';
 
@@ -302,6 +302,7 @@ export class AppController extends EventEmitter {
       ...(this.#error !== undefined ? { error: this.#error } : {}),
       members: e.members().map((m) => ({ deviceId: m.deviceId, alias: m.alias, role: m.role, self: m.deviceId === me })),
       guest: this.#guestView(e),
+      sync: this.#syncView(e),
       ...(st.role === 'hub' ? { links: this.#links.map((l) => ({ ...l })) } : {}),
       ...(this.#reachView(e) ? { reach: this.#reachView(e)! } : {}),
     };
@@ -414,6 +415,9 @@ export class AppController extends EventEmitter {
     else if (ev.source === 'receiver') this.#onReceiver(ev);
     if (ev.source === 'mesh') this.#onMesh(ev);
     if (ev.source === 'guest') this.#onGuest(ev);
+    if (ev.source === 'sync' && ev.type === 'round' && ev.conflicts > 0 && this.#settings.get().notifications) {
+      this.#platform.notify('Sync conflict', `A file changed on both ${this.#aliasOf(ev.partner)} and here. Both versions are kept: look for "(conflict from …)" in the sync folder.`);
+    }
     this.#changed();
   }
 
@@ -562,6 +566,10 @@ export class AppController extends EventEmitter {
     }
     const body = n > 0 ? `${n} file${n === 1 ? '' : 's'} received${ev.text !== undefined ? ' with a message' : ''}` : `Text: ${(ev.text ?? "").slice(0, 120)}`;
     const first = ev.files[0];
+    if (ev.backup) {
+      this.#platform.notify(`Photo backup from ${alias}`, `${n} photo${n === 1 ? '' : 's'} or video${n === 1 ? '' : 's'} saved`, first !== undefined ? () => this.#platform.revealPath(first) : undefined);
+      return;
+    }
     this.#platform.notify(`From ${alias}`, body, first !== undefined ? () => this.#platform.revealPath(first) : undefined);
   }
 
@@ -701,6 +709,27 @@ export class AppController extends EventEmitter {
 
   // ---- internet reach (hub PC) -------------------------------------------------------------------
 
+  #syncView(e: Engine): SyncView {
+    const st = e.syncStatus();
+    return { folder: st.folder, suggested: join(homedir(), 'MeshDrop Sync'), partners: st.partners.map((p) => ({ ...p, ...(p.last ? { last: { ...p.last } } : {}) })) };
+  }
+
+  async syncSet(folder: string, partners: string[]): Promise<void> {
+    this.#e.syncSet({ folder, partners });
+    this.#changed();
+  }
+
+  async openSyncFolder(): Promise<void> {
+    const f = this.#e.syncConfig().folder;
+    if (f === '') throw new Error('Sync is off.');
+    await this.#platform.openPath(f);
+  }
+
+  async syncNow(): Promise<void> {
+    await this.#e.syncNow();
+    this.#changed();
+  }
+
   #reachView(e: Engine): ReachView | null {
     const r = e.reachStatus();
     if (!r) return null;
@@ -829,13 +858,15 @@ export class AppController extends EventEmitter {
     await this.#platform.openPath(inbox);
   }
 
-  /** Shows a received file in the file manager (only files inside the inbox). */
-  /** `path` if it is inside the inbox (only received files are shown, opened or previewed). */
+  /** `path` if it is inside the inbox or the photo backup folder (only received files are shown, opened or previewed). */
   #inInbox(path: string): string {
-    const inbox = resolve(this.#settings.get().inbox);
-    const rel = relative(inbox, resolve(path));
-    if (rel === '' || rel.startsWith('..') || isAbsolute(rel)) throw new Error('Only received files can be shown.');
-    return resolve(path);
+    const p = resolve(path);
+    const inside = (root: string) => {
+      const rel = relative(resolve(root), p);
+      return rel !== '' && !rel.startsWith('..') && !isAbsolute(rel);
+    };
+    if (!inside(this.#settings.get().inbox) && !(this.#engine && inside(this.#engine.backupDir))) throw new Error('Only received files can be shown.');
+    return p;
   }
 
   async reveal(path: string): Promise<void> {

@@ -17,12 +17,12 @@
 // Events: everything is emitted on the single 'event' channel as an EngineEvent.
 import { X509Certificate, createPublicKey, randomBytes, type KeyObject } from 'node:crypto';
 import { EventEmitter } from 'node:events';
-import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, statSync, unlinkSync, writeSync } from 'node:fs';
+import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, statSync, unlinkSync, watch, writeSync, type FSWatcher } from 'node:fs';
 import { lstat, readdir } from 'node:fs/promises';
 import type { Server as HttpServer } from 'node:http';
 import { createServer as createHttpsServer, type Server } from 'node:https';
 import { homedir, hostname, networkInterfaces } from 'node:os';
-import { basename, join } from 'node:path';
+import { basename, isAbsolute, join, resolve, sep } from 'node:path';
 import { connect } from 'node:tls';
 import { createMeshHandler, type TrustSource } from './api/handler.ts';
 import { createMeshServer, type ReceiverEvent } from './api/server.ts';
@@ -31,7 +31,7 @@ import QRCode from 'qrcode';
 import { GuestBook } from './guest/book.ts';
 import { GUEST_PAGE } from './guest/page.ts';
 import { createGuestServer, type SharedFile } from './guest/server.ts';
-import { GuestUploads, type GuestEvent, type GuestFile } from './guest/uploads.ts';
+import { ensureDir, GuestUploads, land, type GuestEvent, type GuestFile } from './guest/uploads.ts';
 import { LINK_PAGE } from './links/page.ts';
 import { lsRegister, lsSend } from './localsend/client.ts';
 import { LS_PORT, LocalSendDiscovery, type LsPeerInfo } from './localsend/discovery.ts';
@@ -51,6 +51,10 @@ import { pullMembership } from './mesh/propagate.ts';
 import { exportRecovery as sealRecovery, importRecovery as openRecovery } from './mesh/recovery.ts';
 import { hasRootKey, loadOrCreateRootKey, saveRootKey } from './mesh/rootkey.ts';
 import { LanTransport, RelayTransport, type Transport } from './transfer/transport.ts';
+import { syncRound } from './sync/client.ts';
+import { ignored as syncIgnored } from './sync/ignore.ts';
+import { syncRoutes } from './sync/server.ts';
+import { SyncStore, type SyncConfig } from './sync/store.ts';
 import { writeFileAtomic } from './trust.ts';
 import { DEFAULT_MESH_PORT, Discovery, MAX_ALIAS_CHARS, type Announce, type DiscoveryOptions, type PeerInfo } from './discovery.ts';
 import { deviceIdOf, loadOrCreateIdentity, type Identity } from './identity.ts';
@@ -86,6 +90,9 @@ export type EngineEvent =
   | { source: 'guest'; type: 'rejected'; id: string }
   | { source: 'guest'; type: 'failed'; id: string; error: string }
   | { source: 'guest'; type: 'ended' | 'opened' }
+  /** Folder sync: a round with `partner` finished (counts are what changed here), or failed. */
+  | { source: 'sync'; type: 'round'; partner: string; pulled: number; deleted: number; conflicts: number; errors: number }
+  | { source: 'sync'; type: 'error'; partner: string; error: string }
   | {
       source: 'mesh';
       type: 'online' | 'offline' | 'membership' | 'directory' | 'revoked' | 'held-delivered' | 'held-failed' | 'joined';
@@ -137,6 +144,17 @@ export interface HubStatus {
 }
 
 /** An unfinished send waiting in the outbox (paused, failed, or interrupted by a crash). */
+/** A folder sync partner as syncStatus() reports it. */
+export interface SyncPartnerStatus {
+  deviceId: string;
+  alias?: string;
+  /** On the LAN now (sync runs only then). */
+  present: boolean;
+  syncing: boolean;
+  /** The last round: what changed here, or why it failed. */
+  last?: { at: number; pulled: number; deleted: number; conflicts: number; errors: number; error?: string };
+}
+
 export interface OutboxItem {
   sessionId: string;
   /** Target device. */
@@ -175,6 +193,8 @@ export interface EngineOptions {
   home?: string;
   /** Inbox root (default ~/Downloads/MeshDrop). */
   inbox?: string;
+  /** Photo backups from phones land in <backupDir>/<phone name>/ (default ~/Pictures/MeshDrop Backup). */
+  backupDir?: string;
   /** Mesh HTTPS port (default 53318; 0 picks a free port, see `engine.port`). */
   port?: number;
   /** Shown to peers (default the host name, truncated to 64 chars). */
@@ -261,6 +281,9 @@ export class UnknownDeviceError extends Error {
 const PREFIX_RE = /^[0-9a-f]{4,64}$/;
 const PULL_INTERVAL_MS = 60_000;
 const AUTO_RESUME_INTERVAL_MS = 30_000;
+/** Folder sync: a round with every present partner this often, and the quiet time after a local change before poking them. */
+const SYNC_INTERVAL_MS = 60_000;
+const SYNC_DEBOUNCE_MS = 2000;
 const SCAN_MAX_ADDRESSES = 512;
 const INVITE_POLL_MS = 1000;
 const PENDING_RETRY_MS = 10_000;
@@ -569,6 +592,7 @@ export class Engine extends EventEmitter {
     this.inbox = new Inbox(this.inboxDir);
     this.outbox = new Outbox(join(home, 'outbox'));
     this.manualFile = join(home, 'manual-peers.json');
+    this.syncStore = new SyncStore(home);
     this.alias = truncateAlias(opts.alias ?? hostname());
     this.deviceType = opts.deviceType ?? 'desktop';
     this.mesh = mesh;
@@ -777,6 +801,10 @@ export class Engine extends EventEmitter {
       pending.unref();
       r.timers.push(poll, pending);
       void this.finishPendingJoin();
+      const syncTick = setInterval(() => this.syncPresent(), SYNC_INTERVAL_MS);
+      syncTick.unref();
+      r.timers.push(syncTick);
+      this.restartSyncWatch();
     }
 
     // Manually paired devices are not announced to us by multicast (that is why they were paired
@@ -801,6 +829,7 @@ export class Engine extends EventEmitter {
       this.emitEvent({ source: 'discovery', type: 'peer', peer: p });
       void this.maybePull(p);
       void this.maybeAutoResume(p.deviceId);
+      if (this.syncStore.config().partners.includes(p.deviceId)) this.scheduleSync(p.deviceId, 1000);
     });
     discovery.on('lost', (p: PeerInfo) => this.emitEvent({ source: 'discovery', type: 'lost', peer: p }));
     return discovery;
@@ -825,6 +854,10 @@ export class Engine extends EventEmitter {
     this.running = null;
     r.abort.abort();
     for (const t of r.timers) clearInterval(t);
+    this.syncWatcher?.close();
+    this.syncWatcher = null;
+    if (this.syncDebounce) clearTimeout(this.syncDebounce);
+    this.syncDebounce = null;
     await r.client?.stop();
     await this.reach?.stop(false);
     this.reach = null;
@@ -953,7 +986,7 @@ export class Engine extends EventEmitter {
    * error:'offline'} and the send waits in the outbox until the device shows up (auto-resume).
    * Results are in request order; duplicates are sent once.
    */
-  async send(deviceIds: string[] | 'all', items: SendItem[], opts: { tag?: string } = {}): Promise<SendResult[]> {
+  async send(deviceIds: string[] | 'all', items: SendItem[], opts: { tag?: string; backup?: boolean } = {}): Promise<SendResult[]> {
     const tag = opts.tag !== undefined ? { tag: opts.tag } : {};
     const r = this.requireRunning();
     let ids: string[];
@@ -985,6 +1018,7 @@ export class Engine extends EventEmitter {
               outbox: this.outbox,
               signal: r.abort.signal,
               onProgress: progress,
+              ...(opts.backup ? { backup: true } : {}),
               transport: (t) => {
                 const route = routes.get(t.deviceId)!;
                 if (route.kind === 'unreachable') throw new Error('offline');
@@ -1004,7 +1038,7 @@ export class Engine extends EventEmitter {
         const hb = route.kind === 'held' ? await estimateHoldBytes(items) : 0;
         const t = targets.find((x) => x.deviceId === res.deviceId)!;
         sent[i] = await sendTo(this.identity, t, items, {
-          outbox: this.outbox, signal: r.abort.signal,
+          outbox: this.outbox, signal: r.abort.signal, ...(opts.backup ? { backup: true } : {}),
           onProgress: (p) => progress({ deviceId: t.deviceId, ...p }),
           transport: (tt) => this.transportFor(route, tt, hb),
         });
@@ -1183,6 +1217,8 @@ export class Engine extends EventEmitter {
     this.trust.remove(id);
     writeManual(this.manualFile, readManual(this.manualFile).filter((m) => m.deviceId !== id));
     for (const o of await this.outbox.list()) if (o.target.deviceId === id) await this.outbox.remove(o.sessionId);
+    const sc = this.syncStore.config();
+    if (sc.partners.includes(id)) this.syncStore.setConfig({ ...sc, partners: sc.partners.filter((p) => p !== id) });
   }
 
   /** Drops a device from the LAN peer table (it is still trusted; it reappears when seen). */
@@ -1288,7 +1324,7 @@ export class Engine extends EventEmitter {
       inbox: this.inbox,
       alias: this.alias,
       deviceType: this.deviceType,
-      onEvent: (e) => this.emitEvent({ source: 'receiver', ...e }),
+      onEvent: (e) => void this.onReceiverEvent(e),
       onJoin: async (peer, body) => {
         this.syncInvite();
         if (!this.joinHandler) return { status: 404, body: { error: 'not-found' } };
@@ -1298,7 +1334,40 @@ export class Engine extends EventEmitter {
       },
       membership: () => this.mesh?.current() ?? null,
       accepting: () => this.accepting,
+      sync: syncRoutes({ store: this.syncStore, onPoke: (peer) => this.scheduleSync(peer, 300) }),
     };
+  }
+
+  /** Sessions that are photo backups (manifest `backup`), by session id → sender. */
+  private readonly backupSessions = new Map<string, string>();
+
+  get backupDir(): string {
+    return this.opts.backupDir ?? join(homedir(), 'Pictures', 'MeshDrop Backup');
+  }
+
+  /**
+   * Receiver events go out as they are, except a finished photo backup: its files move from the
+   * inbox to <backupDir>/<sender name>/ first (free names, never over a file), and the event
+   * carries the new paths and `backup: true`.
+   */
+  private async onReceiverEvent(e: ReceiverEvent): Promise<void> {
+    if (e.type === 'offer' && e.manifest.backup === true) this.backupSessions.set(e.sessionId, e.from);
+    if (e.type === 'received' && this.backupSessions.has(e.sessionId)) {
+      this.backupSessions.delete(e.sessionId);
+      const alias = (this.devices().find((d) => d.deviceId === e.from)?.alias ?? e.from.slice(0, 8)).replace(/[/\\\u0000-\u001f]/g, '_').trim() || 'phone';
+      const files: string[] = [];
+      for (const f of e.files) {
+        try {
+          const dir = await ensureDir(this.backupDir, [alias]);
+          files.push(await land(f, dir, basename(f)));
+        } catch {
+          files.push(f); // stays in the inbox
+        }
+      }
+      this.emitEvent({ source: 'receiver', ...e, files, backup: true });
+      return;
+    }
+    this.emitEvent({ source: 'receiver', ...e });
   }
 
   /** Whether new offers are accepted (false: paused, offers get 503 and stay with their senders). */
@@ -1315,7 +1384,8 @@ export class Engine extends EventEmitter {
   private startClient(): void {
     const r = this.running;
     if (!r || r.client || !this.mesh || !r.server) return;
-    const handler = createMeshHandler(this.receiverOptions());
+    const { sync: _lanOnly, ...relayOpts } = this.receiverOptions(); // folder sync never goes through the hub
+    const handler = createMeshHandler(relayOpts);
     const port = r.port;
     const isHub = r.hub !== null;
     const client = new HubClient({
@@ -1547,6 +1617,145 @@ export class Engine extends EventEmitter {
     this.lastInviteSecret = secret;
     this.running?.client?.registerInvite(invite);
     return { invite, uri: inviteUri(invite) };
+  }
+
+  // ---- folder sync (M8a, LAN only) ---------------------------------------------------------------
+
+  private readonly syncStore: SyncStore;
+  private syncWatcher: FSWatcher | null = null;
+  private syncDebounce: NodeJS.Timeout | null = null;
+  private readonly syncRuns = new Map<string, Promise<void>>();
+  private readonly syncAgain = new Set<string>();
+  private readonly syncLast = new Map<string, SyncPartnerStatus['last']>();
+
+  syncConfig(): SyncConfig {
+    return this.syncStore.config();
+  }
+
+  /**
+   * Sets the synced folder ('' turns sync off) and the partners (trusted device id prefixes). The
+   * folder is created if needed; it may not be /, the home folder or overlap the inbox.
+   */
+  syncSet(c: { folder: string; partners: string[] }): SyncConfig {
+    let folder = c.folder.trim();
+    if (folder !== '') {
+      if (!isAbsolute(folder)) throw new Error('Choose a folder (a full path).');
+      folder = resolve(folder);
+      if (folder === sep || folder === resolve(homedir())) throw new Error('Choose a dedicated folder for syncing, not your home folder.');
+      const inbox = resolve(this.inboxDir);
+      if (folder === inbox || folder.startsWith(inbox + sep) || inbox.startsWith(folder + sep)) throw new Error('The sync folder must be separate from the folder received files go to.');
+      mkdirSync(folder, { recursive: true });
+    }
+    const partners = [...new Set(c.partners.map((q) => this.resolveDeviceId(q)))];
+    const cfg: SyncConfig = { folder, partners };
+    this.syncStore.setConfig(cfg);
+    this.restartSyncWatch();
+    for (const p of partners) this.scheduleSync(p, 500);
+    return cfg;
+  }
+
+  /** The folder, and per partner whether it is on the LAN now and how its last round went. */
+  syncStatus(): { folder: string; partners: SyncPartnerStatus[] } {
+    const cfg = this.syncStore.config();
+    const present = new Set(this.running?.discovery.peers().map((p) => p.deviceId) ?? []);
+    const devs = this.devices();
+    return {
+      folder: cfg.folder,
+      partners: cfg.partners.map((id) => {
+        const last = this.syncLast.get(id);
+        const alias = devs.find((d) => d.deviceId === id)?.alias;
+        return { deviceId: id, ...(alias !== undefined ? { alias } : {}), present: present.has(id), syncing: this.syncRuns.has(id), ...(last ? { last } : {}) };
+      }),
+    };
+  }
+
+  /** Runs a round now with every partner that is on the LAN. */
+  async syncNow(): Promise<void> {
+    const r = this.requireRunning();
+    const present = new Set(r.discovery.peers().map((p) => p.deviceId));
+    await Promise.all(this.syncStore.config().partners.filter((p) => present.has(p)).map((p) => this.runSync(p)));
+  }
+
+  private syncPresent(): void {
+    const present = new Set(this.running?.discovery.peers().map((p) => p.deviceId) ?? []);
+    for (const p of this.syncStore.config().partners) if (present.has(p)) void this.runSync(p);
+  }
+
+  private scheduleSync(partner: string, delayMs: number): void {
+    const t = setTimeout(() => void this.runSync(partner), delayMs);
+    t.unref();
+  }
+
+  /** One round with `partner` at a time; a request during a round runs one more after it. */
+  private runSync(partner: string): Promise<void> {
+    const cur = this.syncRuns.get(partner);
+    if (cur) {
+      this.syncAgain.add(partner);
+      return cur;
+    }
+    const p = (async () => {
+      do {
+        this.syncAgain.delete(partner);
+        await this.syncOnce(partner);
+      } while (this.syncAgain.has(partner) && this.running);
+    })().finally(() => this.syncRuns.delete(partner));
+    this.syncRuns.set(partner, p);
+    return this.track(p);
+  }
+
+  private async syncOnce(partner: string): Promise<void> {
+    const r = this.running;
+    const cfg = this.syncStore.config();
+    if (!r || !r.server || cfg.folder === '' || !cfg.partners.includes(partner) || !this.trustSource.isTrusted(partner)) return;
+    const peer = r.discovery.peers().find((p) => p.deviceId === partner);
+    if (!peer) return; // LAN only
+    const alias = this.devices().find((d) => d.deviceId === partner)?.alias ?? partner.slice(0, 8);
+    try {
+      const res = await syncRound({
+        folder: cfg.folder, store: this.syncStore, self: this.identity.deviceId, partner, partnerAlias: alias, signal: r.abort.signal,
+        transport: new LanTransport(this.identity, { deviceId: partner, host: peer.host, port: peer.port }),
+      });
+      this.syncLast.set(partner, { at: Date.now(), pulled: res.pulled, deleted: res.deleted, conflicts: res.conflicts, errors: res.errors.length });
+      this.emitEvent({ source: 'sync', type: 'round', partner, pulled: res.pulled, deleted: res.deleted, conflicts: res.conflicts, errors: res.errors.length });
+    } catch (e) {
+      if (r.abort.signal.aborted) return;
+      const error = e instanceof Error ? e.message : String(e);
+      this.syncLast.set(partner, { at: Date.now(), pulled: 0, deleted: 0, conflicts: 0, errors: 0, error });
+      this.emitEvent({ source: 'sync', type: 'error', partner, error });
+    }
+  }
+
+  /** Watches the folder: a local change pokes the partners (they pull), 2 s after the last change. */
+  private restartSyncWatch(): void {
+    this.syncWatcher?.close();
+    this.syncWatcher = null;
+    const r = this.running;
+    const cfg = this.syncStore.config();
+    if (!r || !r.server || cfg.folder === '') return;
+    try {
+      const w = watch(cfg.folder, { recursive: true }, (_ev, name) => {
+        if (name && syncIgnored(String(name).split(sep).join('/'))) return;
+        if (this.syncDebounce) clearTimeout(this.syncDebounce);
+        this.syncDebounce = setTimeout(() => void this.pokePartners(), SYNC_DEBOUNCE_MS);
+        this.syncDebounce.unref();
+      });
+      w.on('error', () => {});
+      this.syncWatcher = w;
+    } catch {
+      // not watchable here: the timer still syncs every minute
+    }
+  }
+
+  private async pokePartners(): Promise<void> {
+    const r = this.running;
+    if (!r) return;
+    const cfg = this.syncStore.config();
+    for (const p of r.discovery.peers()) {
+      if (!cfg.partners.includes(p.deviceId)) continue;
+      await new LanTransport(this.identity, { deviceId: p.deviceId, host: p.host, port: p.port })
+        .request('POST', '/mesh/v1/sync/poke', undefined, {}, { timeoutMs: 10_000 })
+        .catch(() => {});
+    }
   }
 
   // ---- LAN guests (M5a) -------------------------------------------------------------------------

@@ -36,6 +36,9 @@ public final class Core {
             c.multicastHooks = platform.multicastHooks();
             c.resolver = platform.resolver();
             c.activity = platform.transferLocks();
+            c.syncFolders = folder -> folder.startsWith("content://")
+                    ? new SafSyncFolder(app, android.net.Uri.parse(folder))
+                    : new io.github.hafijbge.meshdrop.engine.sync.PathSyncFolder(java.nio.file.Paths.get(folder));
             return Engine.create(c);
         });
         platform.attach(controller);

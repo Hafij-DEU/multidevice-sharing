@@ -170,6 +170,7 @@ input:focus, textarea:focus, select:focus { outline: 2px solid color-mix(in srgb
 .menu-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .menu-icon { flex: none; width: 44px; height: 44px; border-radius: 13px; display: grid; place-items: center; color: #fff; }
 .menu-icon svg { width: 22px; height: 22px; }
+.icon-Sync { background: linear-gradient(135deg, #22c55e, #84cc16); }
 .icon-Devices { background: linear-gradient(135deg, #3b82f6, #06b6d4); }
 .paired > li { padding: 0; border: 0; background: none; box-shadow: none; gap: 10px; flex-wrap: nowrap; }
 .paired .device-card { flex: 1; min-width: 0; }
