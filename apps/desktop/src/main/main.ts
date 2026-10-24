@@ -268,7 +268,10 @@ function wireIpc(): void {
 
 async function startController(): Promise<void> {
   const history = new HistoryStore(join(HOME, 'desktop-history.json'));
-  controller = new AppController({ home: HOME, settings: settings!, history, platform });
+  // MESHDROP_GUEST_PORT moves the LAN guest server off 53320 (e2e uses 0: any free port).
+  const guestPort = process.env.MESHDROP_GUEST_PORT !== undefined ? Number(process.env.MESHDROP_GUEST_PORT) : undefined;
+  const engineOptions = guestPort !== undefined && Number.isInteger(guestPort) && guestPort >= 0 && guestPort <= 65535 ? { guest: { port: guestPort } } : {};
+  controller = new AppController({ home: HOME, settings: settings!, history, platform, engineOptions });
   if (TEST) {
     // Test-only hooks, reachable from Playwright's app.evaluate (main process), never from the page.
     (globalThis as { __meshdropTest?: unknown }).__meshdropTest = {

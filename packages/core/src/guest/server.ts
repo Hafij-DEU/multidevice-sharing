@@ -25,6 +25,8 @@ export interface GuestServerOptions {
   alias: () => string;
   /** The page; `{{TOKEN}}` in the HTML is replaced with the session token. */
   page: { html: string; js: string; css: string };
+  /** The link was opened by its (first and only) browser. */
+  onClaim?: () => void;
 }
 
 const MAX_OFFER_JSON = 8 * 1024 * 1024;
@@ -129,6 +131,7 @@ export function createGuestServer(o: GuestServerOptions): Server {
     if (method === 'GET' && seg.length === 2 && TOKEN_RE.test(seg[1]!)) {
       const c = o.book.claim(seg[1]!, cookieOf(req));
       if (!c.ok) return send(res, c.error === 'unknown' ? 404 : 410, GONE[c.error]!, 'text/plain; charset=utf-8');
+      if (c.fresh) o.onClaim?.();
       return send(res, 200, o.page.html.split('{{TOKEN}}').join(seg[1]!), 'text/html; charset=utf-8', {
         'set-cookie': `${COOKIE}=${c.cookie}; Path=/g; HttpOnly; SameSite=Strict`,
       });

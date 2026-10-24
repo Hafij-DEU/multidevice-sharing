@@ -30,8 +30,12 @@ describe('engine guest sessions', () => {
     expect(g.qrSvg).toContain('<svg');
     const token = g.url.split('/').pop()!;
     const base = g.url.slice(0, g.url.indexOf('/g/'));
+    expect(events.some((x) => x.source === 'guest' && x.type === 'opened')).toBe(false);
     const page = await fetch(g.url);
+    expect(events.filter((x) => x.source === 'guest' && x.type === 'opened')).toHaveLength(1);
     const cookie = (page.headers.get('set-cookie') ?? '').split(';')[0]!;
+    await fetch(g.url, { headers: { cookie } }); // the same browser reloading
+    expect(events.filter((x) => x.source === 'guest' && x.type === 'opened')).toHaveLength(1);
     const api = (p: string, init: RequestInit = {}) => fetch(`${base}/g/api/${p}`, { ...init, headers: { 'x-guest-token': token, cookie, ...(init.headers as Record<string, string>) } });
     expect(((await (await api('session')).json()) as { owner: string }).owner).toBe('My PC');
 

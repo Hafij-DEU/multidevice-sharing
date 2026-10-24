@@ -74,7 +74,7 @@ export type EngineEvent =
   | { source: 'guest'; type: 'received'; id: string; files: string[]; text?: string }
   | { source: 'guest'; type: 'file'; id: string; path: string }
   | { source: 'guest'; type: 'rejected'; id: string }
-  | { source: 'guest'; type: 'ended' }
+  | { source: 'guest'; type: 'ended' | 'opened' }
   | {
       source: 'mesh';
       type: 'online' | 'offline' | 'membership' | 'directory' | 'revoked' | 'held-delivered' | 'held-failed' | 'joined';
@@ -649,6 +649,7 @@ export class Engine extends EventEmitter {
         shared: () => this.guestShared,
         alias: () => this.alias,
         page: GUEST_PAGE,
+        onClaim: () => this.emitEvent({ source: 'guest', type: 'opened' }),
       });
       const want = (this.opts.guest && this.opts.guest.port) ?? DEFAULT_GUEST_PORT;
       try {
