@@ -6,6 +6,7 @@ import io.github.hafijbge.meshdrop.engine.identity.Identity;
 import io.github.hafijbge.meshdrop.engine.mesh.CompositeTrust;
 import io.github.hafijbge.meshdrop.engine.mesh.Join;
 import io.github.hafijbge.meshdrop.engine.mesh.MembershipStore;
+import io.github.hafijbge.meshdrop.engine.net.Http;
 import io.github.hafijbge.meshdrop.engine.net.Tls;
 import io.github.hafijbge.meshdrop.engine.net.TrustStore;
 import io.github.hafijbge.meshdrop.engine.recv.Inbox;
@@ -289,6 +290,12 @@ public final class Engine {
             @Override
             public void onDirectory(List<HubClient.DirectoryEntry> devices) {
                 emit("hub", "directory", new LinkedHashMap<>());
+                for (HubClient.DirectoryEntry d : devices) if (d.online) maybeAutoResume(d.deviceId);
+            }
+
+            @Override
+            public void onRevoked() {
+                execute(Engine.this::leaveMesh);
             }
 
             @Override
@@ -307,6 +314,49 @@ public final class Engine {
         HubClient h = hub;
         hub = null;
         if (h != null) h.shutdown();
+    }
+
+    /** This device was revoked: drop the mesh state (the identity stays) and tell the app once. */
+    private void leaveMesh() {
+        synchronized (this) {
+            if (mesh == null) return;
+            stopHub();
+            mesh = null;
+            MembershipStore.drop(cfg.home);
+        }
+        emit("mesh", "revoked", new LinkedHashMap<>());
+    }
+
+    private static final long PULL_INTERVAL_MS = 60_000;
+    private final Map<String, Long> lastPull = new ConcurrentHashMap<>();
+
+    /**
+     * While the hub is unreachable, a LAN peer advertising a newer list version (mv in GET info) shares
+     * it; it only counts if it verifies against our anchor (MembershipStore.accept).
+     */
+    @SuppressWarnings("unchecked")
+    private void maybePull(Discovery.PeerInfo p) {
+        MembershipStore m = mesh;
+        if (server == null || m == null || hubOnline()) return;
+        Long last = lastPull.get(p.deviceId);
+        if (last != null && System.currentTimeMillis() - last < PULL_INTERVAL_MS) return;
+        lastPull.put(p.deviceId, System.currentTimeMillis());
+        try {
+            Http.Response info = Http.request(Tls.connect(Tls.pinnedClient(identity, p.deviceId), p.host, p.port, REPROBE_TIMEOUT_MS), "GET", "/mesh/v1/info", null, null, 64 * 1024);
+            Object j = info.status == 200 ? Json.parse(info.text()) : null;
+            Object mv = j instanceof Map ? ((Map<String, Object>) j).get("mv") : null;
+            if (!(mv instanceof Long) || (Long) mv <= m.list().version) return;
+            Http.Response res = Http.request(Tls.connect(Tls.pinnedClient(identity, p.deviceId), p.host, p.port, REPROBE_TIMEOUT_MS), "GET", "/mesh/v1/membership", null, null, 4 << 20);
+            if (res.status != 200) return;
+            Object s = Json.parse(res.text());
+            if (!(s instanceof Map) || !"updated".equals(m.accept((Map<String, Object>) s))) return;
+            Map<String, Object> d = new LinkedHashMap<>();
+            d.put("version", m.list().version);
+            emit("mesh", "membership", d);
+            if (m.isRevoked(identity.deviceId())) leaveMesh();
+        } catch (IOException | RuntimeException ignored) {
+            // a peer with a bad or foreign list is ignored
+        }
     }
 
     private boolean hubOnline() {
@@ -398,6 +448,7 @@ public final class Engine {
                 m.put("peer", p.toMap());
                 emit("discovery", "peer", m);
                 maybeAutoResume(p.deviceId);
+                execute(() -> maybePull(p));
             }
 
             @Override
