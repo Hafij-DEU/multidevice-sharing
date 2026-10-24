@@ -31,7 +31,28 @@ public final class MainActivity extends Activity {
         pickers = new Pickers(this, core.platform);
         bridge = new Bridge(this, core, pickers);
         web = WebUi.create(this, bridge, null);
-        setContentView(web);
+        // Edge-to-edge (Android 15+, some ROMs earlier): keep the page out from under the status bar,
+        // the gesture bar and a camera cutout.
+        android.widget.FrameLayout root = new android.widget.FrameLayout(this);
+        root.addView(web);
+        root.setOnApplyWindowInsetsListener((v, in) -> {
+            int l, t, r, b;
+            if (android.os.Build.VERSION.SDK_INT >= 30) {
+                android.graphics.Insets i = in.getInsets(android.view.WindowInsets.Type.systemBars() | android.view.WindowInsets.Type.displayCutout());
+                l = i.left;
+                t = i.top;
+                r = i.right;
+                b = i.bottom;
+            } else {
+                l = in.getSystemWindowInsetLeft();
+                t = in.getSystemWindowInsetTop();
+                r = in.getSystemWindowInsetRight();
+                b = in.getSystemWindowInsetBottom();
+            }
+            v.setPadding(l, t, r, b);
+            return in;
+        });
+        setContentView(root);
         handleShare(getIntent());
     }
 

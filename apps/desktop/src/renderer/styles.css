@@ -191,16 +191,38 @@ code { font-size: 12.5px; padding: 1px 6px; border-radius: 6px; background: colo
 .file-name { text-align: left; color: var(--text); font-weight: 500; padding: 2px 0; overflow-wrap: anywhere; }
 .file-name:hover { color: var(--accent); }
 
-/* Phones (and narrow windows): tabs share the width; the status line hides. */
+/* Phones (and narrow windows): the tabs move to the bottom, in reach of the thumb. */
+.tab { display: inline-flex; align-items: center; gap: 6px; }
+.tab-icon { width: 18px; height: 18px; flex: none; }
 @media (max-width: 720px) {
-  .topbar { gap: 8px; padding: 6px 10px; }
+  .topbar { position: fixed; top: auto; bottom: 0; left: 0; right: 0; padding: 6px 10px 8px; gap: 0; z-index: 20; box-shadow: 0 -4px 18px rgb(124 58 237 / 0.25); }
   .brand { display: none; }
-  .tabs { flex: 1; }
-  .tab { flex: 1; padding: 10px 6px; }
+  .tabs { flex: 1; justify-content: space-around; }
+  .tab { flex: 1; flex-direction: column; gap: 2px; padding: 6px 4px; border-radius: 14px; font-size: 12px; }
+  .tab-icon { width: 22px; height: 22px; }
   .self { display: none; }
-  .content { padding: 12px 14px 32px; }
+  .content { padding: 14px 14px 96px; }
   .cards { grid-template-columns: 1fr; }
   .row > input, .row > select, .row > textarea { flex: 1 1 160px; min-width: 0; }
-  .toasts { left: 12px; right: 12px; max-width: none; }
+  .toasts { left: 12px; right: 12px; bottom: 6rem; max-width: none; }
   .modal { max-width: calc(100vw - 24px); }
+  /* Sizes follow the screen: text grows with the display width (phones to small tablets), and
+     everything tappable is at least about 44 px high. */
+  :root { font-size: clamp(15px, 3.6vw, 20px); }
+  button, input:not([type='checkbox']), select, textarea { padding: 0.55em 0.9em; min-height: 2.6em; }
+  button.big { padding: 0.8em; font-size: 1.15rem; }
+  button.link, .thumb-btn, .menu-item { min-height: 0; }
+  button.link { padding: 0.2em 0.4em; }
+  h1 { font-size: 1.45rem; }
+  h2 { font-size: 0.8rem; }
+  .device-sub, .badge, .speed, .hint, .self, code { font-size: 0.82rem; }
+  .avatar { width: 2.6rem; height: 2.6rem; border-radius: 0.8rem; }
+  .device-card input[type='checkbox'] { width: 1.3rem; height: 1.3rem; }
+  .tab { font-size: 0.8rem; }
+  .tab-icon { width: 1.5rem; height: 1.5rem; }
+  .content { padding: 0.9rem 0.9rem 6.5rem; }
+  .menu-item { padding: 1em; }
+  .menu-icon { width: 2.8rem; height: 2.8rem; }
+  .menu-icon svg { width: 1.4rem; height: 1.4rem; }
+  .record .thumb { width: 4.5rem; height: 4.5rem; }
 }

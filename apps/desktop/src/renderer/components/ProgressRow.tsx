@@ -14,6 +14,15 @@ function fmtLeft(sec: number): string {
   return m < 60 ? `${m} min` : `${Math.floor(m / 60)} h${m % 60 ? ` ${m % 60} min` : ''}`;
 }
 
+/** Plain words for the errors people actually meet. */
+function explain(t: TransferView): string {
+  const e = t.error ?? '';
+  if (/^http-403\b/.test(e)) return `${t.alias} has not paired with this device yet. On ${t.alias}, open Send → Add a device and press Pair for this device.`;
+  if (/^http-503 paused/.test(e)) return `${t.alias} has paused receiving.`;
+  if (/ECONNREFUSED|EHOSTUNREACH|ETIMEDOUT|timed out/i.test(e)) return `${t.alias} did not answer. Is MeshDrop open on it, on the same Wi-Fi?`;
+  return e;
+}
+
 export function ProgressRow({ t }: { t: TransferView }) {
   const moving = (t.status === 'sending' || t.status === 'receiving') && t.bytesPerSec !== undefined && t.bytesPerSec > 0;
   const speed = moving ? `${fmtBytes(Math.round(t.bytesPerSec!))}/s · ${fmtLeft((t.bytes - t.sent) / t.bytesPerSec!)} left` : null;
@@ -32,7 +41,7 @@ export function ProgressRow({ t }: { t: TransferView }) {
       <div className="bar" role="progressbar" aria-valuenow={pct} aria-valuemin={0} aria-valuemax={100}>
         <div style={{ width: `${pct}%` }} />
       </div>
-      {t.error && <div className="error-text">{t.error}</div>}
+      {t.error && <div className="error-text">{explain(t)}</div>}
     </div>
   );
 }
