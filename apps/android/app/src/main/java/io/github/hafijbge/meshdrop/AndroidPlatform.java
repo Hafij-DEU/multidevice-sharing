@@ -373,6 +373,7 @@ public class AndroidPlatform implements Platform {
         List<Map<String, Object>> items = new ArrayList<>();
         if (Intent.ACTION_SEND.equals(action)) {
             Uri u = streamExtra(intent);
+            if (!shareable(u)) u = null;
             if (u != null) items.add(describe(u, false));
             CharSequence t = intent.getCharSequenceExtra(Intent.EXTRA_TEXT);
             if (u == null && t != null) {
@@ -383,10 +384,20 @@ public class AndroidPlatform implements Platform {
             }
         } else if (Intent.ACTION_SEND_MULTIPLE.equals(action)) {
             ArrayList<Uri> us = streamListExtra(intent);
-            if (us != null) for (Uri u : us) items.add(describe(u, false));
+            if (us != null) for (Uri u : us) if (shareable(u)) items.add(describe(u, false));
         }
         intent.setAction(null); // handled once, not again on recreation
         if (!items.isEmpty()) addShared(items);
+    }
+
+    /**
+     * Only content shared through another app's provider: a file:// link, or one into this app,
+     * could make MeshDrop read (and send) its own private files, such as its keys.
+     */
+    private boolean shareable(Uri u) {
+        if (u == null || !"content".equals(u.getScheme())) return false;
+        String auth = u.getAuthority();
+        return auth != null && !auth.startsWith(ctx.getPackageName());
     }
 
     @SuppressWarnings("deprecation") // the typed overloads are API 33+

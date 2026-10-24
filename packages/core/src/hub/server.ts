@@ -43,6 +43,12 @@ export const CLOSE_REPLACED = 4409;
 /** Too many links waiting to authenticate. */
 export const CLOSE_BUSY = 4429;
 export const MAX_PENDING_AUTH = 64;
+/**
+ * Links from one address waiting to authenticate. Loopback is exempt: the internet ingress (a tunnel
+ * on this machine) brings every outside link from 127.0.0.1.
+ */
+export const MAX_PENDING_AUTH_PER_IP = 8;
+const isLoopback = (ip: string) => ip === '::1' || ip.startsWith('127.') || ip.startsWith('::ffff:127.');
 export const MAX_PREAUTH_BYTES = 16384;
 const MAX_LAN_ADDRS = 8;
 
@@ -84,6 +90,7 @@ interface Conn {
   ws: WebSocket;
   deviceId: string | null;
   lastSeen: number;
+  ip: string;
 }
 
 const DEVICE_ID_RE = /^[0-9a-f]{64}$/;
@@ -547,23 +554,44 @@ export class HubServer extends EventEmitter {
       socket.destroy();
       return;
     }
-    this.#wss.handleUpgrade(req, socket, head, (ws) => this.#accept(ws, tlsPeer));
+    const ip = req.socket.remoteAddress ?? '';
+    this.#wss.handleUpgrade(req, socket, head, (ws) => this.#accept(ws, tlsPeer, socket, ip));
   }
 
-  #accept(ws: WebSocket, tlsPeer: string | null): void {
-    // Unauthenticated links are cheap to open and cost us memory: cap them.
+  /** Closes with `code`, and drops the link if the peer does not finish the close in a second. */
+  #drop(ws: WebSocket, code: number): void {
+    ws.close(code);
+    setTimeout(() => ws.terminate(), 1000).unref();
+  }
+
+  #accept(ws: WebSocket, tlsPeer: string | null, socket: Duplex, ip: string): void {
+    // Unauthenticated links are cheap to open and cost us memory: cap them, overall and per address.
     let pending = 0;
-    for (const x of this.#all) if (x.deviceId === null) pending++;
-    if (pending >= MAX_PENDING_AUTH) {
+    let fromIp = 0;
+    for (const x of this.#all) {
+      if (x.deviceId !== null) continue;
+      pending++;
+      if (x.ip === ip) fromIp++;
+    }
+    if (pending >= MAX_PENDING_AUTH || (fromIp >= MAX_PENDING_AUTH_PER_IP && !isLoopback(ip))) {
       ws.on('error', () => {});
-      ws.close(CLOSE_BUSY);
+      this.#drop(ws, CLOSE_BUSY);
       return;
     }
-    const c: Conn = { ws, deviceId: null, lastSeen: this.#now() };
+    const c: Conn = { ws, deviceId: null, lastSeen: this.#now(), ip };
     this.#all.add(c);
     const nonce = randomBytes(32).toString('base64');
-    const authTimer = setTimeout(() => ws.close(CLOSE_AUTH), this.#authMs);
+    const authTimer = setTimeout(() => this.#drop(ws, CLOSE_AUTH), this.#authMs);
     authTimer.unref();
+    // Count raw bytes until the link is authenticated: the frame size limit is for members, and a
+    // stranger must not make us buffer a large frame before we see it.
+    let raw = 0;
+    const countRaw = (chunk: Buffer) => {
+      if (c.deviceId !== null) return void socket.off('data', countRaw);
+      raw += chunk.length;
+      if (raw > MAX_PREAUTH_BYTES * 2) ws.terminate();
+    };
+    socket.on('data', countRaw);
     ws.on('error', () => {});
     ws.on('ping', () => { c.lastSeen = this.#now(); });
     ws.on('pong', () => { c.lastSeen = this.#now(); });
@@ -586,7 +614,7 @@ export class HubServer extends EventEmitter {
         clearTimeout(authTimer);
         // An auth or join message is small; never parse a large blob from an unknown peer.
         const size = Buffer.isBuffer(data) ? data.length : Array.isArray(data) ? data.reduce((n, b) => n + b.length, 0) : (data as ArrayBuffer).byteLength;
-        if (size > MAX_PREAUTH_BYTES) return c.ws.close(CLOSE_AUTH);
+        if (size > MAX_PREAUTH_BYTES) return this.#drop(c.ws, CLOSE_AUTH);
         this.#handshake(c, data, isBinary, nonce, tlsPeer);
         return;
       }
@@ -596,7 +624,7 @@ export class HubServer extends EventEmitter {
   }
 
   #handshake(c: Conn, data: RawData, isBinary: boolean, hubNonce: string, tlsPeer: string | null): void {
-    const fail = () => c.ws.close(CLOSE_AUTH);
+    const fail = () => this.#drop(c.ws, CLOSE_AUTH);
     if (isBinary) return fail();
     let m: Record<string, unknown>;
     try {

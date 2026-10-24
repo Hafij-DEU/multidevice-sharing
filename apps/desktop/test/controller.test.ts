@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer, type Server } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -36,6 +36,8 @@ interface FakePlatform extends Platform {
   clipboardText: string;
   clipboardFiles: string[];
   clipFilesWritten: string[][];
+  opened: string[];
+  revealed: string[];
 }
 function fakePlatform(): FakePlatform {
   const p: FakePlatform = {
@@ -52,8 +54,10 @@ function fakePlatform(): FakePlatform {
     notify: (title, body) => void p.notes.push({ title, body }),
     writeClipboard: (t) => void p.clip.push(t),
     readClipboard: () => p.clipboardText,
-    openPath: async () => {},
-    revealPath: () => {},
+    opened: [],
+    revealed: [],
+    openPath: async (x) => void p.opened.push(x),
+    revealPath: (x) => void p.revealed.push(x),
     thumbnail: async () => null,
   };
   return p;
@@ -343,6 +347,16 @@ async function freePort(): Promise<number> {
 }
 
 describe('AppController guests', () => {
+  it('a received program or script is shown in its folder, never started (security review #13)', async () => {
+    const A = await make('ay');
+    mkdirSync(A.inbox, { recursive: true });
+    for (const n of ['photo.jpg', 'evil.desktop', 'run.sh', 'noext']) writeFileSync(join(A.inbox, n), 'x');
+    chmodSync(join(A.inbox, 'noext'), 0o755);
+    for (const n of ['photo.jpg', 'evil.desktop', 'run.sh', 'noext']) await A.c.openFile(join(A.inbox, n));
+    expect(A.p.opened).toEqual([join(A.inbox, 'photo.jpg')]);
+    expect(A.p.revealed).toEqual(['evil.desktop', 'run.sh', 'noext'].map((n) => join(A.inbox, n)));
+  });
+
   it('opens a guest link for the set length, prompts for an offer, and records what was received', async () => {
     const A = await make('alpha', { guestMinutes: 15 });
     expect(A.c.state().guest).toMatchObject({ active: false, available: true });

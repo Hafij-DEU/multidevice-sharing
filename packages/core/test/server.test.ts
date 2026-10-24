@@ -113,6 +113,12 @@ const putChunk = (h: Harness, sid: string, fileId: number, index: number, ct: Bu
   call(h, id, 'PUT', `chunk/${sid}/${fileId}/${index}`, ct);
 
 describe('receiver API', () => {
+  it('limits slow or silent peers: handshake, header time and connection count', async () => {
+    const h = await startServer();
+    expect(h.server.headersTimeout).toBe(10_000);
+    expect(h.server.maxConnections).toBe(256);
+  });
+
   it('info is open to anyone; every other route is 403 untrusted for an untrusted peer', async () => {
     const h = await startServer();
     const info = await call(h, C, 'GET', 'info');

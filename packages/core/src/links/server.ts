@@ -52,12 +52,19 @@ async function readBody(req: IncomingMessage, max: number): Promise<Buffer> {
 /** Returns a request handler; it answers false for paths outside /l/ (the caller 404s them). */
 /** Upload offer keys kept (oldest dropped first); far above what pending offers can be. */
 const MAX_OFFER_KEYS = 1000;
+/** Sessions that presented the link key (for sending back), at most; the oldest go first. */
+const MAX_SESSION_KEYS = 1000;
 
 export function createLinkHandler(o: LinkHandlerOptions): (req: IncomingMessage, res: ServerResponse) => boolean {
   /** Upload keys presented by open sessions (memory only: never on disk). */
   const keys = new Map<string, Buffer>();
   /** Each upload offer's own key (derived from the link key and the offer's salt), by offer id. */
   const offerKeys = new Map<string, Buffer>();
+  const remember = (session: string, key: Buffer) => {
+    keys.delete(session);
+    keys.set(session, key);
+    while (keys.size > MAX_SESSION_KEYS) keys.delete(keys.keys().next().value as string);
+  };
 
   const handle = async (req: IncomingMessage, res: ServerResponse, url: URL): Promise<void> => {
     const send = (status: number, body: Buffer | string, type: string) => {
@@ -90,7 +97,7 @@ export function createLinkHandler(o: LinkHandlerOptions): (req: IncomingMessage,
       const k = req.headers['x-link-key'];
       if (typeof k === 'string' && r.allowUploads) {
         const key = Buffer.from(k, 'base64url');
-        if (key.length === 32 && keyHash(key) === r.keyHash) keys.set(r.session, key);
+        if (key.length === 32 && keyHash(key) === r.keyHash) remember(r.session, key);
       }
       return json(200, { session: r.session, allowUploads: r.allowUploads && keys.has(r.session) });
     }
@@ -102,7 +109,7 @@ export function createLinkHandler(o: LinkHandlerOptions): (req: IncomingMessage,
       const k = req.headers['x-link-key'];
       const key = typeof k === 'string' ? Buffer.from(k, 'base64url') : Buffer.alloc(0);
       if (key.length !== 32 || keyHash(key) !== kh) return json(403, { error: 'bad-key' });
-      keys.set(session, key);
+      remember(session, key);
       return json(200, { ok: true });
     }
     if (method === 'GET' && api.length === 1 && api[0] === 'manifest') return send(200, await o.store.manifest(id, session), 'application/octet-stream');

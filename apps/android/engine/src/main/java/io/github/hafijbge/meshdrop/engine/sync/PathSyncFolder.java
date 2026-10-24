@@ -73,7 +73,10 @@ public final class PathSyncFolder implements SyncFolder {
     public Entry stat(String rel) {
         try {
             BasicFileAttributes a = Files.readAttributes(at(rel), BasicFileAttributes.class, LinkOption.NOFOLLOW_LINKS);
-            return a.isRegularFile() ? new Entry(rel, a.size(), a.lastModifiedTime().toMillis()) : null;
+            if (!a.isRegularFile()) return null;
+            // A folder on the way may be a link to somewhere else: never read a file outside the root.
+            if (!at(rel).toRealPath().startsWith(root.toRealPath())) return null;
+            return new Entry(rel, a.size(), a.lastModifiedTime().toMillis());
         } catch (IOException e) {
             return null;
         }

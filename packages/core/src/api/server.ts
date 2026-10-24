@@ -16,7 +16,8 @@ export {
 
 export function createMeshServer(opts: MeshServerOptions): Server {
   const handler = createMeshHandler(opts);
-  const server = createServer(serverTlsOptions(opts.id), (req, res) => {
+  // Strangers can reach this port: a slow or silent peer must not hold a connection for long.
+  const server = createServer({ ...serverTlsOptions(opts.id), handshakeTimeout: 10_000, connectionsCheckingInterval: 2_000 }, (req, res) => {
     const headers: Record<string, string> = {};
     for (const [k, v] of Object.entries(req.headers)) if (typeof v === 'string') headers[k] = v;
     void handler
@@ -42,5 +43,7 @@ export function createMeshServer(opts: MeshServerOptions): Server {
   });
   // A client that disconnects or botches the handshake must never surface as an uncaught error.
   server.on('tlsClientError', () => {});
+  server.headersTimeout = 10_000;
+  server.maxConnections = 256;
   return server;
 }

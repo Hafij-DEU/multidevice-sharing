@@ -16,6 +16,8 @@ export const MIN_LINK_TTL_MS = 3_600_000;
 export const MAX_LINK_TTL_MS = 30 * 24 * 3_600_000;
 export const DEFAULT_LINK_TTL_MS = 7 * 24 * 3_600_000;
 export const LINK_SESSION_MS = 3_600_000;
+/** Open visitor sessions kept at most (the oldest go first); expired ones are dropped on each open. */
+export const MAX_LINK_SESSIONS = 5000;
 const MAX_TRIES = 5;
 const TRY_WINDOW_MS = 600_000;
 const ID_RE = /^[A-Za-z0-9_-]{22}$/;
@@ -249,7 +251,10 @@ export class LinkStore {
     m.downloads++;
     await this.#write(m);
     const session = randomBytes(32).toString('base64url');
-    this.#sessions.set(session, { id, until: this.#now() + LINK_SESSION_MS });
+    const now = this.#now();
+    for (const [t, s] of this.#sessions) if (now > s.until) this.#sessions.delete(t);
+    while (this.#sessions.size >= MAX_LINK_SESSIONS) this.#sessions.delete(this.#sessions.keys().next().value as string);
+    this.#sessions.set(session, { id, until: now + LINK_SESSION_MS });
     return { session, allowUploads: m.allowUploads, keyHash: m.keyHash };
   }
 
@@ -262,6 +267,11 @@ export class LinkStore {
   /** Whether the link needs a password (asked before open). */
   async needsPassword(id: string): Promise<boolean> {
     return !!(await this.#meta(id)).password;
+  }
+
+  /** Open sessions (tests). */
+  get sessionCount(): number {
+    return this.#sessions.size;
   }
 
   async #check(id: string, session: string): Promise<LinkMeta> {

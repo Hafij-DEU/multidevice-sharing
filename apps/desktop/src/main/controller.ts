@@ -113,6 +113,17 @@ async function measure(items: SendItemInput[]): Promise<{ files: number; bytes: 
   return { files, bytes };
 }
 
+/** Files that would run as a program when opened (by name, or by the executable bit). */
+const RUNNABLE_EXT = /\.(desktop|sh|bash|zsh|run|bin|appimage|deb|rpm|snap|flatpak|exe|msi|bat|cmd|com|scr|ps1|vbs|js|jar|py|pl|rb|apk|lnk)$/i;
+export function runnable(p: string): boolean {
+  if (RUNNABLE_EXT.test(p)) return true;
+  try {
+    return (statSync(p).mode & 0o111) !== 0;
+  } catch {
+    return false;
+  }
+}
+
 export class AppController extends EventEmitter {
   readonly #home: string;
   readonly #settings: SettingsStore;
@@ -1003,8 +1014,14 @@ export class AppController extends EventEmitter {
     return out;
   }
 
+  /**
+   * Opens a received file with its app. A program or script someone sent is never started this way:
+   * its folder opens with the file selected instead.
+   */
   async openFile(path: string): Promise<void> {
-    await this.#platform.openPath(this.#inInbox(path));
+    const p = this.#inInbox(path);
+    if (runnable(p)) return this.#platform.revealPath(p);
+    await this.#platform.openPath(p);
   }
 
   async thumb(path: string): Promise<string | null> {

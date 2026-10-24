@@ -1,8 +1,10 @@
 // LocalSend v2 (M6), sending side: prepare-upload with our info, then one upload per file. The peer's
-// TLS certificate must match the fingerprint it announced (LocalSend: SHA-256 of the certificate).
+// TLS certificate must match the fingerprint it announced (LocalSend: SHA-256 of the certificate); it
+// is checked right after the handshake, before any byte of the request goes out. Devices with
+// LocalSend's encryption turned off (plain HTTP) are refused.
 import { createHash } from 'node:crypto';
 import { createReadStream, statSync } from 'node:fs';
-import { request as httpRequest, type IncomingMessage } from 'node:http';
+import type { IncomingMessage } from 'node:http';
 import { request as httpsRequest } from 'node:https';
 import { basename } from 'node:path';
 import type { TLSSocket } from 'node:tls';
@@ -10,7 +12,7 @@ import type { LsPeerInfo } from './discovery.ts';
 import type { LsInfo } from './server.ts';
 
 export class LocalSendError extends Error {
-  readonly code: 'declined' | 'busy' | 'fingerprint' | 'failed';
+  readonly code: 'declined' | 'busy' | 'fingerprint' | 'insecure' | 'failed';
   constructor(code: LocalSendError['code'], message: string) {
     super(message);
     this.name = 'LocalSendError';
@@ -22,26 +24,38 @@ interface Res { status: number; body: string }
 
 function call(peer: LsPeerInfo, method: string, path: string, body: Buffer | NodeJS.ReadableStream | string | undefined, contentType: string, timeoutMs: number): Promise<Res> {
   return new Promise((resolve, reject) => {
-    const opts = { host: peer.host, port: peer.port, method, path, headers: { 'content-type': contentType }, timeout: timeoutMs };
-    const onRes = (res: IncomingMessage) => {
-      if (peer.protocol === 'https') {
-        const cert = (res.socket as TLSSocket).getPeerCertificate?.();
-        const fp = cert?.raw ? createHash('sha256').update(cert.raw).digest('hex') : '';
-        if (fp.toLowerCase() !== peer.fingerprint.toLowerCase()) {
-          res.destroy();
-          return reject(new LocalSendError('fingerprint', 'the device presented another certificate than it announced'));
-        }
-      }
-      let b = '';
-      res.setEncoding('utf8');
-      res.on('data', (c: string) => (b += c.length + b.length < 1_000_000 ? c : ''));
-      res.on('end', () => resolve({ status: res.statusCode ?? 0, body: b }));
+    if (peer.protocol !== 'https') {
+      return reject(new LocalSendError('insecure', `${peer.alias} has LocalSend encryption turned off; turn it on there to send`));
+    }
+    const fingerprintOk = (t: TLSSocket) => {
+      const cert = t.getPeerCertificate?.();
+      const fp = cert?.raw ? createHash('sha256').update(cert.raw).digest('hex') : '';
+      return fp !== '' && fp === peer.fingerprint.toLowerCase();
     };
-    const req = peer.protocol === 'https' ? httpsRequest({ ...opts, rejectUnauthorized: false }, onRes) : httpRequest(opts, onRes);
+    const fail = () => new LocalSendError('fingerprint', 'the device presented another certificate than it announced');
+    const req = httpsRequest(
+      { host: peer.host, port: peer.port, method, path, headers: { 'content-type': contentType }, timeout: timeoutMs, rejectUnauthorized: false, agent: false },
+      (res: IncomingMessage) => {
+        if (!fingerprintOk(res.socket as TLSSocket)) {
+          res.destroy();
+          return reject(fail());
+        }
+        let b = '';
+        res.setEncoding('utf8');
+        res.on('data', (c: string) => (b += c.length + b.length < 1_000_000 ? c : ''));
+        res.on('end', () => resolve({ status: res.statusCode ?? 0, body: b }));
+      },
+    );
     req.on('timeout', () => req.destroy(new LocalSendError('failed', 'timed out')));
     req.on('error', reject);
-    if (body === undefined || typeof body === 'string' || Buffer.isBuffer(body)) req.end(body);
-    else (body as NodeJS.ReadableStream).pipe(req);
+    // Nothing is written (not even the headers) until the certificate is the announced one.
+    req.once('socket', (sock) => {
+      (sock as TLSSocket).once('secureConnect', () => {
+        if (!fingerprintOk(sock as TLSSocket)) return req.destroy(fail());
+        if (body === undefined || typeof body === 'string' || Buffer.isBuffer(body)) req.end(body);
+        else (body as NodeJS.ReadableStream).pipe(req);
+      });
+    });
   });
 }
 

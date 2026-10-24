@@ -5,7 +5,7 @@
 //   POST sync/poke?f=<name>                          "I changed": the partner pulls soon (204)
 // Folders are matched by name; without f (a 0.3.0 partner) the first folder shared with the peer.
 import * as fsp from 'node:fs/promises';
-import { join } from 'node:path';
+import { join, sep } from 'node:path';
 import type { MeshResponse } from '../api/handler.ts';
 import { safeRelPath } from '../sanitize.ts';
 import { ignored } from './ignore.ts';
@@ -32,6 +32,13 @@ export async function fileState(folder: string, rel: string, cache: Map<string, 
     return null;
   }
   if (!st.isFile()) return null;
+  // A folder on the way may be a link to somewhere else: never read or touch a file outside the folder.
+  try {
+    const [root, real] = await Promise.all([fsp.realpath(folder), fsp.realpath(join(folder, rel))]);
+    if (!real.startsWith(root + sep)) return null;
+  } catch {
+    return null;
+  }
   const mtime = Math.floor(st.mtimeMs);
   const c = cache.get(rel);
   if (c && c.size === st.size && c.mtime === mtime) return c;

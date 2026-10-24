@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { LINK_CHUNK, linkChunkCount, openChunk, openManifest } from '../src/links/crypto.ts';
-import { LinkError, LinkStore } from '../src/links/store.ts';
+import { LINK_SESSION_MS, LinkError, LinkStore } from '../src/links/store.ts';
 
 const tmps: string[] = [];
 afterEach(() => {
@@ -26,6 +26,18 @@ async function err(p: Promise<unknown>): Promise<string> {
 const walk = (d: string): string[] => readdirSync(d, { recursive: true, encoding: 'utf8' }).map((p) => join(d, p));
 
 describe('LinkStore', () => {
+  it('expired visitor sessions are dropped when the next visitor opens (security review #11)', async () => {
+    let t = 1_000_000;
+    const { d, s } = setup(() => t);
+    writeFileSync(join(d, 'a.txt'), 'a');
+    const { id } = await s.create({ files: [join(d, 'a.txt')] });
+    for (let i = 0; i < 5; i++) await s.open(id);
+    expect(s.sessionCount).toBe(5);
+    t += LINK_SESSION_MS + 1;
+    await s.open(id);
+    expect(s.sessionCount).toBe(1);
+  });
+
   it('seals files so only the key opens them; no plaintext name or content in the store', async () => {
     const { d, s } = setup();
     const big = Buffer.alloc(LINK_CHUNK + 1000, 3);

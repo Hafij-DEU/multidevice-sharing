@@ -47,6 +47,13 @@ public final class GuestServer {
     private static final Pattern RANGE_RE = Pattern.compile("^bytes=(\\d*)-(\\d*)$");
     private static final String COOKIE = "mdg";
     private static final int MAX_CONNECTIONS = 64;
+    /** Connections from one address (a browser opens about six). */
+    private static final int MAX_PER_ADDRESS = 16;
+    private static final java.util.concurrent.ScheduledExecutorService DEADLINES = Executors.newSingleThreadScheduledExecutor(r -> {
+        Thread t = new Thread(r, "meshdrop-guest-deadlines");
+        t.setDaemon(true);
+        return t;
+    });
     private static final int IDLE_MS = 30_000;
 
     /** A file the owner offers to the guest. */
@@ -76,6 +83,8 @@ public final class GuestServer {
         public String css;
         /** The link was opened by its (first and only) browser. */
         public Runnable onClaim;
+        /** The request head must arrive within this time: a client dripping bytes cannot hold a slot. */
+        public int headDeadlineMs = 10_000;
     }
 
     private static final Map<String, String> HEADERS = new LinkedHashMap<>();
@@ -106,6 +115,7 @@ public final class GuestServer {
     private volatile ServerSocket server;
     private ExecutorService pool;
     private final Semaphore slots = new Semaphore(MAX_CONNECTIONS);
+    private final java.util.concurrent.ConcurrentHashMap<java.net.InetAddress, Integer> perAddress = new java.util.concurrent.ConcurrentHashMap<>();
 
     public GuestServer(Options o) {
         this.o = o;
@@ -151,7 +161,14 @@ public final class GuestServer {
                 if (server == null) return;
                 continue;
             }
+            java.net.InetAddress from = c.getInetAddress();
+            if (perAddress.merge(from, 1, Integer::sum) > MAX_PER_ADDRESS) {
+                release(from);
+                close(c);
+                continue;
+            }
             if (!slots.tryAcquire()) {
+                release(from);
                 close(c);
                 continue;
             }
@@ -163,11 +180,13 @@ public final class GuestServer {
                         // one bad connection never takes the server down
                     } finally {
                         slots.release();
+                        release(from);
                         close(c);
                     }
                 });
             } catch (RuntimeException e) {
                 slots.release();
+                release(from);
                 close(c);
             }
         }
@@ -254,15 +273,22 @@ public final class GuestServer {
 
     // ---- requests -------------------------------------------------------------------------------
 
+    private void release(java.net.InetAddress from) {
+        perAddress.computeIfPresent(from, (k, n) -> n <= 1 ? null : n - 1);
+    }
+
     private void serve(Socket sock) throws IOException {
         sock.setSoTimeout(IDLE_MS);
         InputStream in = new BufferedInputStream(sock.getInputStream());
         OutputStream out = sock.getOutputStream();
         Http.Request req;
+        java.util.concurrent.ScheduledFuture<?> deadline = DEADLINES.schedule(() -> close(sock), o.headDeadlineMs, java.util.concurrent.TimeUnit.MILLISECONDS);
         try {
             req = Http.readRequest(in);
         } catch (IOException e) {
             return;
+        } finally {
+            deadline.cancel(false);
         }
         if (req == null) return;
         try {

@@ -51,6 +51,7 @@ import javax.net.ssl.SSLSocket;
  */
 public final class Engine {
     private static final int PAIR_TIMEOUT_MS = 5000;
+    private static final java.security.SecureRandom RANDOM = new java.security.SecureRandom();
     private static final int REPROBE_TIMEOUT_MS = 2000;
     private static final long AUTO_RESUME_INTERVAL_MS = 30_000;
     private static final java.util.regex.Pattern PREFIX = java.util.regex.Pattern.compile("^[0-9a-f]{4,64}$");
@@ -954,7 +955,7 @@ public final class Engine {
         List<Map<String, Object>> out = new ArrayList<>();
         for (io.github.hafijbge.meshdrop.engine.send.Source src : sources) {
             byte[] id = new byte[9];
-            new java.security.SecureRandom().nextBytes(id);
+            RANDOM.nextBytes(id);
             io.github.hafijbge.meshdrop.engine.guest.GuestServer.SharedFile f = new io.github.hafijbge.meshdrop.engine.guest.GuestServer.SharedFile(B64.url(id), src.name(), src.size(), src);
             added.add(f);
             Map<String, Object> m = new LinkedHashMap<>();

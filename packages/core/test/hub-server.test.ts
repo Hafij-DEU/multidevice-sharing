@@ -45,7 +45,7 @@ interface Hub {
   https: Server;
 }
 
-async function startHub(extra: Partial<HubServerOptions> = {}): Promise<Hub> {
+async function startHub(extra: Partial<HubServerOptions> = {}, host = '127.0.0.1'): Promise<Hub> {
   const home = tmpDir();
   const rootKey = await loadOrCreateRootKey(home);
   const anchor = createPublicKey(rootKey);
@@ -59,7 +59,7 @@ async function startHub(extra: Partial<HubServerOptions> = {}): Promise<Hub> {
   const hub = new HubServer({ id: H, home, rootKey, members, ...extra });
   const https = createServer(serverTlsOptions(H));
   hub.attach(https);
-  await new Promise<void>((r) => https.listen(0, '127.0.0.1', () => r()));
+  await new Promise<void>((r) => https.listen(0, host, () => r()));
   closers.push(async () => {
     await hub.close();
     https.closeAllConnections();
@@ -244,6 +244,24 @@ describe('pre-auth limits', () => {
     }
     const extra = new Client(url(h.port));
     expect(await extra.closed).toBe(4429);
+  });
+
+  const lanIp = Object.values(networkInterfaces()).flat().find((i) => i && i.family === 'IPv4' && !i.internal)?.address;
+  it.skipIf(!lanIp)('at most 8 unauthenticated links from one (non-loopback) address', async () => {
+    const h = await startHub({ authTimeoutMs: 5000 }, '0.0.0.0');
+    for (let i = 0; i < 8; i++) await new Client(`wss://${lanIp}:${h.port}/mesh/v1/hub`).next('hello');
+    expect(await new Client(`wss://${lanIp}:${h.port}/mesh/v1/hub`).closed).toBe(4429);
+    // loopback (the internet ingress) is not capped per address
+    await new Client(url(h.port)).next('hello');
+  });
+
+  it('a large frame from a stranger is dropped before it is buffered whole', async () => {
+    const h = await startHub({ authTimeoutMs: 5000 });
+    const c = new Client(url(h.port), A);
+    await c.next('hello');
+    // a frame under the member limit but far over the pre-auth budget, sent in pieces
+    c.ws.send(Buffer.alloc(200_000, 120), { binary: false, fin: false });
+    expect(await c.closed).toBe(1006);
   });
 
   it('an oversized message before auth closes 4401', async () => {

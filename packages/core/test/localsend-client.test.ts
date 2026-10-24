@@ -21,11 +21,12 @@ async function receiver() {
   closers.push(() => rmSync(d, { recursive: true, force: true }));
   const id = await loadOrCreateIdentity(join(d, 'home'));
   const r = new LocalSendReceiver({ self: () => ({ ...me, alias: 'Other', fingerprint: id.deviceId }), partialDir: join(d, 'p'), inboxRoot: join(d, 'inbox'), onEvent: () => {}, answerTimeoutMs: 3000 });
-  const s: Server = createServer({ ...serverTlsOptions(id), requestCert: false }, (q, a) => void r.handle(q, a));
+  const seen = { requests: 0 };
+  const s: Server = createServer({ ...serverTlsOptions(id), requestCert: false }, (q, a) => (seen.requests++, void r.handle(q, a)));
   await new Promise<void>((ok) => s.listen(0, '127.0.0.1', () => ok()));
   closers.push(() => s.close());
   const peer: LsPeerInfo = { alias: 'Other', fingerprint: id.deviceId, host: '127.0.0.1', port: (s.address() as { port: number }).port, protocol: 'https', lastSeen: Date.now() };
-  return { d, r, peer };
+  return { d, r, peer, seen };
 }
 
 describe('LocalSend client', () => {
@@ -43,10 +44,20 @@ describe('LocalSend client', () => {
   });
 
   it('refuses a device whose certificate is not the announced fingerprint', async () => {
-    const { peer } = await receiver();
-    const err = await lsSend({ ...peer, fingerprint: 'b'.repeat(64) }, me, { paths: [], text: 'x' }).catch((e: unknown) => e);
+    const { peer, r, seen } = await receiver();
+    const err = await lsSend({ ...peer, fingerprint: 'b'.repeat(64) }, me, { paths: [], text: 'secret note' }).catch((e: unknown) => e);
     expect(err).toBeInstanceOf(LocalSendError);
     expect((err as LocalSendError).code).toBe('fingerprint');
+    // checked right after the handshake: not even the request (with the note's preview) went out
+    await new Promise((ok) => setTimeout(ok, 100));
+    expect(seen.requests).toBe(0);
+    expect(r.pending()).toEqual([]);
+  });
+
+  it('refuses a device with LocalSend encryption turned off (plain HTTP)', async () => {
+    const { peer, seen } = await receiver();
+    await expect(lsSend({ ...peer, protocol: 'http' }, me, { paths: [], text: 'x' })).rejects.toMatchObject({ code: 'insecure' });
+    expect(seen.requests).toBe(0);
   });
 });
 

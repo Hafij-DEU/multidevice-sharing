@@ -546,6 +546,12 @@ function defaultLanAddrs(port: number): LanAddr[] {
   return out.slice(0, 8);
 }
 
+/** The folder name for a device's photo backups: its name, never a path or "." / "..". */
+export function backupFolderName(alias: string): string {
+  const n = alias.replace(/[/\\\u0000-\u001f]/g, '_').trim();
+  return n === '' || /^\.+$/.test(n) ? 'phone' : n;
+}
+
 export class Engine extends EventEmitter {
   readonly identity: Identity;
   readonly trust: TrustStore;
@@ -1385,7 +1391,7 @@ export class Engine extends EventEmitter {
     if (e.type === 'offer' && e.manifest.backup === true) this.backupSessions.set(e.sessionId, e.from);
     if (e.type === 'received' && this.backupSessions.has(e.sessionId)) {
       this.backupSessions.delete(e.sessionId);
-      const alias = (this.devices().find((d) => d.deviceId === e.from)?.alias ?? e.from.slice(0, 8)).replace(/[/\\\u0000-\u001f]/g, '_').trim() || 'phone';
+      const alias = backupFolderName(this.devices().find((d) => d.deviceId === e.from)?.alias ?? e.from.slice(0, 8));
       const files: string[] = [];
       for (const f of e.files) {
         try {

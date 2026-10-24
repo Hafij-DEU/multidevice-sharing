@@ -31,6 +31,10 @@ function LanGuests({ state, run }: { state: AppState; run: Run }) {
           They scan a QR code on the same Wi-Fi and get a page where they can send you files and download what you offer. They see nothing else. You accept every
           send before anything is saved. The link works for one browser, for {fmtLeft(minutes * 60_000)} (change it in Settings).
         </p>
+        <p className="muted">
+          A browser cannot check this {state.platform === 'android' ? 'phone' : 'PC'}'s identity, so a guest link is not encrypted: others on the same Wi-Fi could
+          see what is sent. Use it on networks you trust, and pair devices for anything private.
+        </p>
         <button className="primary" onClick={() => void run(() => window.meshdrop.guestStart())}>
           Show a guest QR code
         </button>
