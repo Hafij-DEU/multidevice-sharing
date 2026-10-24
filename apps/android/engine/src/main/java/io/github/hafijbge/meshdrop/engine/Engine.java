@@ -1296,6 +1296,11 @@ public final class Engine {
      * device that is not present fails 'offline'. Progress and result events carry `tag`.
      */
     public CompletableFuture<List<SendResult>> send(List<String> ids, List<SendItem> items, String tag) {
+        return send(ids, items, tag, false);
+    }
+
+    /** `backup`: a photo backup (the receiver files it in its backup folder). */
+    public CompletableFuture<List<SendResult>> send(List<String> ids, List<SendItem> items, String tag, boolean backup) {
         Discovery d = requireRunning();
         List<String> targets = new ArrayList<>();
         if (ids == null) {
@@ -1321,6 +1326,7 @@ public final class Engine {
                     Prepared p;
                     try {
                         p = Prepared.of(items, control.pausedFlag());
+                        p.backup = backup;
                     } catch (IOException | RuntimeException x) {
                         for (String id : targets) out.add(new SendResult(id, control.paused() ? "cancelled" : "failed", "", control.paused() ? null : String.valueOf(x.getMessage())));
                         for (SendResult r : out) emitResult(r, tag);

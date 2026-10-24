@@ -155,4 +155,24 @@ public class SyncTest {
             pc.close();
         }
     }
+
+    @Test
+    public void aPhotoBackupLandsInThePcsBackupFolder() throws Exception {
+        Engine e = engine("Pixel");
+        try (NodeListen pc = NodeListen.start(tmp.newFolder())) {
+            e.pairManual("127.0.0.1", pc.port, "pc");
+            Node.Result r = Node.run("pair", "127.0.0.1:" + e.port(), "Pixel", "--home", pc.home.getPath());
+            assertEquals(r.out, 0, r.code);
+            File img = new File(tmp.getRoot(), "IMG_2001.jpg");
+            Files.write(img.toPath(), "jpeg".getBytes(StandardCharsets.UTF_8));
+            List<io.github.hafijbge.meshdrop.engine.send.SendResult> rs = e.send(Collections.singletonList(pc.deviceId),
+                    Collections.singletonList(io.github.hafijbge.meshdrop.engine.send.SendItem.file(io.github.hafijbge.meshdrop.engine.send.PathSource.file(img.toPath()))),
+                    null, true).get(60, java.util.concurrent.TimeUnit.SECONDS);
+            assertEquals("done", rs.get(0).status);
+            File landed = new File(pc.home, "backup/Pixel/IMG_2001.jpg");
+            until(landed::exists, 10_000);
+            assertEquals("jpeg", read(landed.getParentFile(), "IMG_2001.jpg"));
+            assertFalse(new File(pc.inbox, "IMG_2001.jpg").exists());
+        }
+    }
 }

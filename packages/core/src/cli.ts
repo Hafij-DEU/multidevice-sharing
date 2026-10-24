@@ -62,6 +62,7 @@ options:
   --home DIR            config dir (default: $MESHDROP_HOME, $XDG_CONFIG_HOME/meshdrop, ~/.config/meshdrop)
   --port N              mesh port (default ${DEFAULT_MESH_PORT})
   --inbox DIR           where received files go (default ~/Downloads/MeshDrop)
+  --backup-dir DIR      where photo backups from phones go (default ~/Pictures/MeshDrop Backup)
   --alias NAME          name shown to peers (default: host name)
   --device-type T       desktop | mobile | headless (default desktop)
   --no-discovery        listen: no multicast announce/discovery
@@ -137,6 +138,7 @@ async function main(argv: string[]): Promise<number> {
       home: { type: 'string' },
       port: { type: 'string' },
       inbox: { type: 'string' },
+      'backup-dir': { type: 'string' },
       alias: { type: 'string' },
       'device-type': { type: 'string' },
       text: { type: 'string' },
@@ -171,6 +173,7 @@ async function main(argv: string[]): Promise<number> {
     deviceType: deviceType as DeviceType,
   };
   if (values.inbox !== undefined) base.inbox = values.inbox;
+  if (values['backup-dir'] !== undefined) base.backupDir = values['backup-dir'];
   if (values.alias !== undefined) base.alias = values.alias;
   if (values['no-discovery']) base.discovery = false;
 

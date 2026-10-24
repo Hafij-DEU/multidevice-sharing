@@ -566,6 +566,10 @@ export class AppController extends EventEmitter {
     }
     const body = n > 0 ? `${n} file${n === 1 ? '' : 's'} received${ev.text !== undefined ? ' with a message' : ''}` : `Text: ${(ev.text ?? "").slice(0, 120)}`;
     const first = ev.files[0];
+    if (ev.backup) {
+      this.#platform.notify(`Photo backup from ${alias}`, `${n} photo${n === 1 ? '' : 's'} or video${n === 1 ? '' : 's'} saved`, first !== undefined ? () => this.#platform.revealPath(first) : undefined);
+      return;
+    }
     this.#platform.notify(`From ${alias}`, body, first !== undefined ? () => this.#platform.revealPath(first) : undefined);
   }
 
@@ -848,13 +852,15 @@ export class AppController extends EventEmitter {
     await this.#platform.openPath(inbox);
   }
 
-  /** Shows a received file in the file manager (only files inside the inbox). */
-  /** `path` if it is inside the inbox (only received files are shown, opened or previewed). */
+  /** `path` if it is inside the inbox or the photo backup folder (only received files are shown, opened or previewed). */
   #inInbox(path: string): string {
-    const inbox = resolve(this.#settings.get().inbox);
-    const rel = relative(inbox, resolve(path));
-    if (rel === '' || rel.startsWith('..') || isAbsolute(rel)) throw new Error('Only received files can be shown.');
-    return resolve(path);
+    const p = resolve(path);
+    const inside = (root: string) => {
+      const rel = relative(resolve(root), p);
+      return rel !== '' && !rel.startsWith('..') && !isAbsolute(rel);
+    };
+    if (!inside(this.#settings.get().inbox) && !(this.#engine && inside(this.#engine.backupDir))) throw new Error('Only received files can be shown.');
+    return p;
   }
 
   async reveal(path: string): Promise<void> {

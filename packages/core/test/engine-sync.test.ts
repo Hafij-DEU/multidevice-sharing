@@ -28,7 +28,7 @@ async function until(cond: () => boolean, ms = 10_000): Promise<void> {
 
 async function mk(alias: string) {
   const home = tmp();
-  const e = await Engine.create({ home, inbox: join(home, 'inbox'), port: 0, alias, discovery: false, hub: { ingressPort: 0 }, guest: { port: 0 } });
+  const e = await Engine.create({ home, inbox: join(home, 'inbox'), backupDir: join(home, 'Backup'), port: 0, alias, discovery: false, hub: { ingressPort: 0 }, guest: { port: 0 } });
   engines.push(e);
   const events: EngineEvent[] = [];
   e.on('event', (x: EngineEvent) => events.push(x));
@@ -143,5 +143,27 @@ describe('folder sync', () => {
     expect(existsSync(join(C.folder, 'secret.txt'))).toBe(false);
     expect(() => A.e.syncSet({ folder: join(A.folder, '..', 'inbox', 'x'), partners: [] })).toThrow(/separate/);
     expect(() => A.e.syncSet({ folder: 'relative', partners: [] })).toThrow(/full path/);
+  }, 30_000);
+});
+
+describe('photo backup', () => {
+  it('a backup send lands in <backupDir>/<sender>/, never in the inbox, and says so', async () => {
+    const A = await mk('alpha');
+    const B = await mk('beta');
+    await A.e.pairManual('127.0.0.1', B.e.port, 'beta');
+    await B.e.pairManual('127.0.0.1', A.e.port, 'alpha phone');
+    const src = join(tmp(), 'IMG_0001.jpg');
+    writeFileSync(src, 'jpeg');
+    writeFileSync(join(tmp(), 'x'), '');
+    const [r] = await A.e.send([B.e.identity.deviceId], [{ kind: 'file', srcPath: src }], { backup: true });
+    expect(r!.status).toBe('done');
+    await until(() => B.events.some((x) => x.source === 'receiver' && x.type === 'received'));
+    const got = B.events.find((x) => x.source === 'receiver' && x.type === 'received') as Extract<EngineEvent, { type: 'received' }>;
+    expect(got).toMatchObject({ backup: true, files: [join(B.e.backupDir, 'alpha phone', 'IMG_0001.jpg')] });
+    expect(readFileSync(join(B.e.backupDir, 'alpha phone', 'IMG_0001.jpg'), 'utf8')).toBe('jpeg');
+    expect(existsSync(join(B.e.backupDir, '..', 'inbox', 'IMG_0001.jpg'))).toBe(false);
+    // The same name again: a free name, never over the first one.
+    await A.e.send([B.e.identity.deviceId], [{ kind: 'file', srcPath: src }], { backup: true });
+    await until(() => existsSync(join(B.e.backupDir, 'alpha phone', 'IMG_0001 (1).jpg')));
   }, 30_000);
 });

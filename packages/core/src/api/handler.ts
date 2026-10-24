@@ -38,7 +38,8 @@ export type ReceiverEvent =
   | { type: 'progress'; sessionId: string; from: string; fileId: number; chunks: number; total: number }
   /** `path` / `files` are absolute local paths (the wire carries them relative to the inbox root). */
   | { type: 'file'; sessionId: string; from: string; fileId: number; path: string }
-  | { type: 'received'; sessionId: string; from: string; files: string[]; text?: string; clipboard?: true }
+  /** backup: a photo backup, filed in the backup folder (set by the engine, never by the handler). */
+  | { type: 'received'; sessionId: string; from: string; files: string[]; text?: string; clipboard?: true; backup?: true }
   | { type: 'error'; sessionId: string; from: string; code: string }
   | { type: 'cancelled'; sessionId: string; from: string };
 

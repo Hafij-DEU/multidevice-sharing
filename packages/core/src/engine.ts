@@ -31,7 +31,7 @@ import QRCode from 'qrcode';
 import { GuestBook } from './guest/book.ts';
 import { GUEST_PAGE } from './guest/page.ts';
 import { createGuestServer, type SharedFile } from './guest/server.ts';
-import { GuestUploads, type GuestEvent, type GuestFile } from './guest/uploads.ts';
+import { ensureDir, GuestUploads, land, type GuestEvent, type GuestFile } from './guest/uploads.ts';
 import { LINK_PAGE } from './links/page.ts';
 import { lsRegister, lsSend } from './localsend/client.ts';
 import { LS_PORT, LocalSendDiscovery, type LsPeerInfo } from './localsend/discovery.ts';
@@ -193,6 +193,8 @@ export interface EngineOptions {
   home?: string;
   /** Inbox root (default ~/Downloads/MeshDrop). */
   inbox?: string;
+  /** Photo backups from phones land in <backupDir>/<phone name>/ (default ~/Pictures/MeshDrop Backup). */
+  backupDir?: string;
   /** Mesh HTTPS port (default 53318; 0 picks a free port, see `engine.port`). */
   port?: number;
   /** Shown to peers (default the host name, truncated to 64 chars). */
@@ -984,7 +986,7 @@ export class Engine extends EventEmitter {
    * error:'offline'} and the send waits in the outbox until the device shows up (auto-resume).
    * Results are in request order; duplicates are sent once.
    */
-  async send(deviceIds: string[] | 'all', items: SendItem[], opts: { tag?: string } = {}): Promise<SendResult[]> {
+  async send(deviceIds: string[] | 'all', items: SendItem[], opts: { tag?: string; backup?: boolean } = {}): Promise<SendResult[]> {
     const tag = opts.tag !== undefined ? { tag: opts.tag } : {};
     const r = this.requireRunning();
     let ids: string[];
@@ -1016,6 +1018,7 @@ export class Engine extends EventEmitter {
               outbox: this.outbox,
               signal: r.abort.signal,
               onProgress: progress,
+              ...(opts.backup ? { backup: true } : {}),
               transport: (t) => {
                 const route = routes.get(t.deviceId)!;
                 if (route.kind === 'unreachable') throw new Error('offline');
@@ -1035,7 +1038,7 @@ export class Engine extends EventEmitter {
         const hb = route.kind === 'held' ? await estimateHoldBytes(items) : 0;
         const t = targets.find((x) => x.deviceId === res.deviceId)!;
         sent[i] = await sendTo(this.identity, t, items, {
-          outbox: this.outbox, signal: r.abort.signal,
+          outbox: this.outbox, signal: r.abort.signal, ...(opts.backup ? { backup: true } : {}),
           onProgress: (p) => progress({ deviceId: t.deviceId, ...p }),
           transport: (tt) => this.transportFor(route, tt, hb),
         });
@@ -1306,7 +1309,7 @@ export class Engine extends EventEmitter {
       inbox: this.inbox,
       alias: this.alias,
       deviceType: this.deviceType,
-      onEvent: (e) => this.emitEvent({ source: 'receiver', ...e }),
+      onEvent: (e) => void this.onReceiverEvent(e),
       onJoin: async (peer, body) => {
         this.syncInvite();
         if (!this.joinHandler) return { status: 404, body: { error: 'not-found' } };
@@ -1318,6 +1321,38 @@ export class Engine extends EventEmitter {
       accepting: () => this.accepting,
       sync: syncRoutes({ store: this.syncStore, onPoke: (peer) => this.scheduleSync(peer, 300) }),
     };
+  }
+
+  /** Sessions that are photo backups (manifest `backup`), by session id → sender. */
+  private readonly backupSessions = new Map<string, string>();
+
+  get backupDir(): string {
+    return this.opts.backupDir ?? join(homedir(), 'Pictures', 'MeshDrop Backup');
+  }
+
+  /**
+   * Receiver events go out as they are, except a finished photo backup: its files move from the
+   * inbox to <backupDir>/<sender name>/ first (free names, never over a file), and the event
+   * carries the new paths and `backup: true`.
+   */
+  private async onReceiverEvent(e: ReceiverEvent): Promise<void> {
+    if (e.type === 'offer' && e.manifest.backup === true) this.backupSessions.set(e.sessionId, e.from);
+    if (e.type === 'received' && this.backupSessions.has(e.sessionId)) {
+      this.backupSessions.delete(e.sessionId);
+      const alias = (this.devices().find((d) => d.deviceId === e.from)?.alias ?? e.from.slice(0, 8)).replace(/[/\\\u0000-\u001f]/g, '_').trim() || 'phone';
+      const files: string[] = [];
+      for (const f of e.files) {
+        try {
+          const dir = await ensureDir(this.backupDir, [alias]);
+          files.push(await land(f, dir, basename(f)));
+        } catch {
+          files.push(f); // stays in the inbox
+        }
+      }
+      this.emitEvent({ source: 'receiver', ...e, files, backup: true });
+      return;
+    }
+    this.emitEvent({ source: 'receiver', ...e });
   }
 
   /** Whether new offers are accepted (false: paused, offers get 503 and stay with their senders). */

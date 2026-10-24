@@ -21,7 +21,7 @@ public final class NodeListen implements AutoCloseable {
     private NodeListen(File home, int port, boolean discovery) throws IOException, InterruptedException {
         this.home = home;
         this.inbox = new File(home, "inbox");
-        java.util.List<String> args = new java.util.ArrayList<>(java.util.List.of("listen", "--home", home.getPath(), "--inbox", inbox.getPath(), "--port", String.valueOf(port), "--alias", "pc"));
+        java.util.List<String> args = new java.util.ArrayList<>(java.util.List.of("listen", "--home", home.getPath(), "--inbox", inbox.getPath(), "--backup-dir", new File(home, "backup").getPath(), "--port", String.valueOf(port), "--alias", "pc"));
         if (!discovery) args.add("--no-discovery");
         proc = new ProcessBuilder(Node.argv(args.toArray(new String[0]))).redirectErrorStream(true).start();
         Thread t = new Thread(() -> {

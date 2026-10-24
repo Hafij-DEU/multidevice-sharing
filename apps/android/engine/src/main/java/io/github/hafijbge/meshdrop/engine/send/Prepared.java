@@ -28,6 +28,8 @@ public final class Prepared {
     public final List<String> dirs = new ArrayList<>();
     public String text;
     public boolean clipboard;
+    /** Photo backup: set by the engine before sending. */
+    public boolean backup;
     public String itemsKey;
     final Map<Long, Source> sources = new HashMap<>();
     final Map<Long, long[]> stats = new HashMap<>(); // size, mtime
@@ -151,6 +153,7 @@ public final class Prepared {
         m.dirs.addAll(dirs);
         m.text = text;
         m.clipboard = clipboard;
+        m.backup = backup;
         return m;
     }
 }
