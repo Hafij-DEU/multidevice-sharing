@@ -35,7 +35,8 @@ export interface TransferView {
   files: number;
   bytes: number;
   sent: number;
-  status: 'preparing' | 'sending' | 'receiving' | 'done' | 'held' | 'failed' | 'cancelled';
+  /** waiting: the device was away; the send goes out when it is seen again. */
+  status: 'preparing' | 'sending' | 'receiving' | 'done' | 'held' | 'waiting' | 'failed' | 'cancelled';
   error?: string;
   startedAt: number;
 }
@@ -136,7 +137,8 @@ export interface AppState {
   hub: { role: 'hub' | 'member' | 'provisional' | 'none'; online: boolean; version: number; members: number; urls: string[]; ingressPort: number };
   devices: DeviceView[];
   transfers: TransferView[];
-  outbox: { sessionId: string; deviceId: string; alias?: string; files: number; bytes: number }[];
+  /** waiting: sends on its own when the device is seen; else it stopped on `error`. */
+  outbox: { sessionId: string; deviceId: string; alias?: string; files: number; bytes: number; waiting: boolean; error?: string }[];
   received: ReceivedRecord[];
   settings: Settings;
   /** Offers are accepted right now (false: paused, client-only, or the port could not be bound). */

@@ -320,9 +320,25 @@ export class AppController extends EventEmitter {
     const e = this.#engine;
     if (!e) return;
     try {
-      this.#outbox = (await e.listOutbox()).map((o) => ({ sessionId: o.sessionId, deviceId: o.deviceId, ...(o.alias !== undefined ? { alias: o.alias } : {}), files: o.files, bytes: o.bytes }));
+      this.#outbox = (await e.listOutbox()).map((o) => ({
+        sessionId: o.sessionId, deviceId: o.deviceId, ...(o.alias !== undefined ? { alias: o.alias } : {}), files: o.files, bytes: o.bytes,
+        waiting: o.waiting, ...(o.lastError !== undefined && !o.waiting ? { error: o.lastError } : {}),
+      }));
     } catch {
       return;
+    }
+    // A failed send the engine kept for auto-resume (the device was away) is waiting, not failed.
+    // One the owner cancelled (removed from the outbox) stops waiting.
+    const waiting = new Set(this.#outbox.filter((o) => o.waiting).map((o) => o.sessionId));
+    for (const t of this.#transfers.values()) {
+      if (t.direction !== 'out' || t.sessionId === undefined) continue;
+      if (t.status === 'failed' && waiting.has(t.sessionId)) {
+        t.status = 'waiting';
+        t.error = `${t.alias} is not reachable now. It gets this when it is back online (or cancel it under Unfinished sends).`;
+      } else if (t.status === 'waiting' && !this.#outbox.some((o) => o.sessionId === t.sessionId)) {
+        t.status = 'failed';
+        t.error = 'Send cancelled.';
+      }
     }
     this.#changed();
   }
@@ -422,6 +438,7 @@ export class AppController extends EventEmitter {
       t.status = ev.status;
       if (ev.status === 'done') t.sent = t.bytes;
       if (ev.error !== undefined) t.error = ev.error;
+      else delete t.error;
     }
     void this.#refreshOutbox();
   }
@@ -514,7 +531,7 @@ export class AppController extends EventEmitter {
   #targets(targets: string[] | 'all'): string[] {
     const e = this.#e;
     const ids = targets === 'all' ? this.#allTargets() : [...new Set(targets.map((q) => e.resolveDeviceId(q)))];
-    if (ids.length === 0) throw new Error('No trusted device is online.');
+    if (ids.length === 0) throw new Error('No trusted device is online. Pick a device: an offline one gets the send when it is back.');
     return ids;
   }
 

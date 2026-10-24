@@ -84,6 +84,28 @@ describe('auto-resume', () => {
     expect(sha(readFileSync(join(B.inbox, 'auto.bin')))).toBe(sha(data));
   }, 40_000);
 
+  it('a send to a device that is away waits in the outbox and goes out when it is seen', async () => {
+    const A = await make({ alias: 'a', autoResume: true });
+    const bHome = tmpDir();
+    let B = await make({ alias: 'b' }, bHome);
+    await A.e.start();
+    await B.e.start();
+    const bPort = B.e.port;
+    await A.e.pairManual('127.0.0.1', bPort, 'bee');
+    await B.e.pairManual('127.0.0.1', A.e.port, 'ay');
+    await B.e.stop();
+    A.e.forgetPeer(B.e.identity.deviceId);
+    const [r] = await A.e.send([B.e.identity.deviceId.slice(0, 8)], [{ kind: 'text', text: 'later' }]);
+    expect(r).toMatchObject({ status: 'failed', error: 'offline', sessionId: expect.any(String) });
+    expect((await A.e.listOutbox()).map((o) => o.sessionId)).toEqual([r!.sessionId]);
+    B = await make({ alias: 'b', port: bPort, inbox: B.inbox }, bHome);
+    await B.e.start();
+    await A.e.addNearby('127.0.0.1', bPort);
+    await until(() => A.events.some((x) => x.source === 'sender' && x.type === 'result' && x.status === 'done'), 20_000);
+    expect(B.events).toContainEqual(expect.objectContaining({ source: 'receiver', type: 'received', text: 'later' }));
+    expect(await A.e.listOutbox()).toEqual([]);
+  }, 40_000);
+
   it('never auto-resumes a send whose source changed', async () => {
     const A = await make({ alias: 'a', autoResume: true });
     const B = await make({ alias: 'b' });

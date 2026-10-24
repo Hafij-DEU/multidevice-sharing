@@ -22,6 +22,13 @@ public interface Transport {
     Http.Response request(String method, String path, byte[] body, String contentType, int timeoutMs, Set<Socket> track, BooleanSupplier aborted)
             throws IOException;
 
+    /** The device is away: not retried now, but kept for auto-resume ("offline" is a transient error). */
+    final class Away extends IOException {
+        public Away() {
+            super("offline");
+        }
+    }
+
     /** No way to reach the target on this transport (retrying cannot help). */
     final class NoRoute extends IOException {
         public NoRoute() {

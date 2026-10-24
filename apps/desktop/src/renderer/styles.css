@@ -65,6 +65,7 @@ textarea { width: 100%; resize: vertical; }
 .progress-head .status { margin-left: auto; font-weight: 600; }
 .status-done .status { color: var(--ok); }
 .status-failed .status { color: var(--bad); }
+.status-waiting .status { color: var(--warn); }
 .bar { height: 6px; border-radius: 3px; background: var(--border); margin-top: 8px; overflow: hidden; }
 .bar > div { height: 100%; background: var(--accent); transition: width 0.2s; }
 .error-text { color: var(--bad); font-size: 12px; margin-top: 4px; }

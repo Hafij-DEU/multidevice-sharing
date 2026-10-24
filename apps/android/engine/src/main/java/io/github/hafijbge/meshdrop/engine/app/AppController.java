@@ -304,9 +304,31 @@ public final class AppController {
             if (o.alias != null) m.put("alias", o.alias);
             m.put("files", (long) o.files);
             m.put("bytes", o.bytes);
+            m.put("waiting", o.waiting);
+            if (o.lastError != null && !o.waiting) m.put("error", o.lastError);
             out.add(m);
         }
         outbox = out;
+        // A failed send the engine kept for auto-resume (the device was away) is waiting, not failed.
+        // One the owner cancelled (removed from the outbox) stops waiting.
+        java.util.Set<String> all = new java.util.HashSet<>();
+        java.util.Set<String> waiting = new java.util.HashSet<>();
+        for (Map<String, Object> m : out) {
+            all.add((String) m.get("sessionId"));
+            if (Boolean.TRUE.equals(m.get("waiting"))) waiting.add((String) m.get("sessionId"));
+        }
+        synchronized (rows) {
+            for (Row r : rows.values()) {
+                if (!"out".equals(r.direction) || r.sessionId == null) continue;
+                if ("failed".equals(r.status) && waiting.contains(r.sessionId)) {
+                    r.status = "waiting";
+                    r.error = r.alias + " is not reachable now. It gets this when it is back online (or cancel it under Unfinished sends).";
+                } else if ("waiting".equals(r.status) && !all.contains(r.sessionId)) {
+                    r.status = "failed";
+                    r.error = "Send cancelled.";
+                }
+            }
+        }
         changed();
     }
 
@@ -402,7 +424,7 @@ public final class AppController {
             synchronized (rows) {
                 r.status = (String) d.get("status");
                 if ("done".equals(r.status)) r.sent = r.bytes;
-                if (d.get("error") != null) r.error = (String) d.get("error");
+                r.error = d.get("error") != null ? (String) d.get("error") : null;
             }
         }
         refreshOutbox();
@@ -509,7 +531,7 @@ public final class AppController {
                 if (!ids.contains(id)) ids.add(id);
             }
         }
-        if (ids.isEmpty()) throw new IllegalArgumentException("No trusted device is online.");
+        if (ids.isEmpty()) throw new IllegalArgumentException("No trusted device is online. Pick a device: an offline one gets the send when it is back.");
         return ids;
     }
 

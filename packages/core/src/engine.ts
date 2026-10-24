@@ -149,6 +149,10 @@ export interface OutboxItem {
   bytes: number;
   /** Whether the send carries a text item. */
   text: boolean;
+  /** How the last attempt ended ('offline': the device was away), absent before the first try. */
+  lastError?: string;
+  /** Auto-resume sends it when the device is seen again (a pause or a transient failure). */
+  waiting: boolean;
 }
 
 /** A session id prefix that matches no outbox entry, or several. */
@@ -946,7 +950,8 @@ export class Engine extends EventEmitter {
    * Sends `items` to each device (unique trusted id prefixes) or to 'all' (every trusted device
    * currently present; [] if there is none). Rejects with UnknownDeviceError for a bad prefix,
    * before anything is sent. A trusted device that is not present gets {status:'failed',
-   * error:'offline'}. Results are in request order; duplicates are sent once.
+   * error:'offline'} and the send waits in the outbox until the device shows up (auto-resume).
+   * Results are in request order; duplicates are sent once.
    */
   async send(deviceIds: string[] | 'all', items: SendItem[], opts: { tag?: string } = {}): Promise<SendResult[]> {
     const tag = opts.tag !== undefined ? { tag: opts.tag } : {};
@@ -965,10 +970,12 @@ export class Engine extends EventEmitter {
       const routes = new Map<string, Route>();
       for (const id of unique) routes.set(id, await this.route(id));
       const holdBytes = unique.some((id) => routes.get(id)!.kind === 'held') ? await estimateHoldBytes(items) : 0;
+      // A device that is away still gets its session: it fails 'offline' at once and stays in the
+      // outbox, so auto-resume sends it when the device is seen again (LAN or hub directory).
       const targets: Target[] = [];
       for (const id of unique) {
         const t = this.trustSource.get(id);
-        if (t && routes.get(id)!.kind !== 'unreachable') targets.push({ deviceId: id, publicKey: createPublicKey(t.publicKeyPem) });
+        if (t) targets.push({ deviceId: id, publicKey: createPublicKey(t.publicKeyPem) });
       }
       const progress = (p: { deviceId: string; sessionId: string; fileId: number; sent: number; total: number }) => this.emitEvent({ source: 'sender', type: 'progress', ...p, ...tag });
       const sent =
@@ -978,7 +985,11 @@ export class Engine extends EventEmitter {
               outbox: this.outbox,
               signal: r.abort.signal,
               onProgress: progress,
-              transport: (t) => this.transportFor(routes.get(t.deviceId)!, t, holdBytes),
+              transport: (t) => {
+                const route = routes.get(t.deviceId)!;
+                if (route.kind === 'unreachable') throw new Error('offline');
+                return this.transportFor(route, t, holdBytes);
+              },
             });
       // A LAN attempt that failed for a transient reason resumes the same session over the hub once.
       // A relay that found the target gone (our directory was stale) leaves it on the hub instead.
@@ -1052,7 +1063,9 @@ export class Engine extends EventEmitter {
       files: e.manifest.files.length,
       bytes: e.manifest.files.reduce((n, f) => n + f.size, 0),
       text: e.manifest.text !== undefined,
+      waiting: e.lastError === 'cancelled' || isTransientError(e.lastError),
     };
+    if (e.lastError !== undefined) item.lastError = e.lastError;
     const t = this.trust.get(e.target.deviceId);
     if (t) item.alias = t.alias;
     return item;

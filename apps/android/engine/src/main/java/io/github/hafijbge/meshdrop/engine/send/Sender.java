@@ -190,6 +190,7 @@ public final class Sender {
     }
 
     private static boolean isTransient(Throwable e) {
+        if (e instanceof Transport.Away) return false;
         if (e instanceof HttpStatus) {
             HttpStatus h = (HttpStatus) e;
             return h.status >= 500 && !(h.status == 507 && (h.code.equals("hub-quota") || h.code.equals("hub-no-space")));

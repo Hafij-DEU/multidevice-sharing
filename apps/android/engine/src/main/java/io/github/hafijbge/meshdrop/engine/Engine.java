@@ -73,6 +73,10 @@ public final class Engine {
         public final int files;
         public final long bytes;
         public final boolean text;
+        /** How the last attempt ended ("offline": the device was away); null before the first try. */
+        public final String lastError;
+        /** Auto-resume sends it when the device is seen again (a pause or a transient failure). */
+        public final boolean waiting;
 
         OutboxItem(Outbox.Entry e, String alias) {
             this.sessionId = e.sessionId;
@@ -84,6 +88,8 @@ public final class Engine {
             for (io.github.hafijbge.meshdrop.engine.proto.Manifest.FileEntry f : e.manifest.files) b += f.size;
             this.bytes = b;
             this.text = e.manifest.text != null;
+            this.lastError = e.lastError;
+            this.waiting = "cancelled".equals(e.lastError) || Sender.isTransientError(e.lastError);
         }
     }
 
@@ -864,6 +870,26 @@ public final class Engine {
         return r.peer != null ? new Sender.Target(deviceId, r.peer.host, r.peer.port, t.key) : new Sender.Target(deviceId, null, 0, t.key);
     }
 
+    /** A trusted device with no way to reach it now (its send waits in the outbox). */
+    private Sender.Target awayTarget(String deviceId) {
+        TrustStore.Device t = trustSource.get(deviceId);
+        return t == null ? null : new Sender.Target(deviceId, null, 0, t.key);
+    }
+
+    /** The transport for a device that is away: every request fails "offline" (transient, so auto-resume retries). */
+    private static final Transport AWAY = new Transport() {
+        @Override
+        public String kind() {
+            return "lan";
+        }
+
+        @Override
+        public io.github.hafijbge.meshdrop.engine.net.Http.Response request(String method, String path, byte[] body, String contentType, int timeoutMs,
+                java.util.Set<java.net.Socket> track, java.util.function.BooleanSupplier aborted) throws IOException {
+            throw new Transport.Away();
+        }
+    };
+
     /** A LAN target, or (mesh members while the hub link is up) one without an address that goes through the hub. */
     private Sender.Target target(String deviceId) {
         Discovery d = discovery;
@@ -973,13 +999,15 @@ public final class Engine {
                     Map<String, Route> routes = new LinkedHashMap<>();
                     for (String id : targets) routes.put(id, route(id));
                     long hb = routes.containsValue(Route.HELD) ? holdBytes(p) : 0;
+                    // A device that is away still gets its session: it fails "offline" at once and stays in the
+                    // outbox, so auto-resume sends it when the device is seen again (LAN or hub directory).
                     List<Sender.Target> present = new ArrayList<>();
                     for (String id : targets) {
-                        Sender.Target t = target(id, routes.get(id));
+                        Sender.Target t = routes.get(id) == Route.UNREACHABLE ? awayTarget(id) : target(id, routes.get(id));
                         if (t != null) present.add(t);
                     }
                     Sender.Options so = sendOptions(tag, control);
-                    so.transport = t -> transportFor(t, routes.get(t.deviceId) == Route.HELD, hb);
+                    so.transport = t -> routes.get(t.deviceId) == Route.UNREACHABLE ? AWAY : transportFor(t, routes.get(t.deviceId) == Route.HELD, hb);
                     List<SendResult> sent = new ArrayList<>(MultiSend.send(identity, present, p, so));
                     // A LAN attempt that failed for a transient reason resumes the same session over the hub once.
                     // A relay that found the target gone (our directory was stale) leaves it on the hub instead.

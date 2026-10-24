@@ -127,6 +127,32 @@ public class EngineTest {
     }
 
     @Test
+    public void aSendToADeviceThatIsAwayWaitsAndGoesOutWhenItIsSeen() throws Exception {
+        List<EngineEvent> events = Collections.synchronizedList(new ArrayList<>());
+        Engine e = engine(events);
+        File pcHome = tmp.newFolder();
+        NodeListen pc = NodeListen.start(pcHome);
+        try {
+            pairBoth(e, pc);
+            pc.kill();
+            e.forgetPeer(pc.deviceId);
+            List<SendResult> rs = e.send(List.of(pc.deviceId), List.of(SendItem.text("later")), null).get(60, TimeUnit.SECONDS);
+            assertEquals("failed", rs.get(0).status);
+            assertEquals("offline", rs.get(0).error);
+            List<Engine.OutboxItem> ob = e.listOutbox();
+            assertEquals(1, ob.size());
+            assertEquals(rs.get(0).sessionId, ob.get(0).sessionId);
+            assertTrue(ob.get(0).waiting);
+            pc = NodeListen.start(pcHome, pc.port);
+            e.addNearby("127.0.0.1", pc.port);
+            until(() -> events.stream().anyMatch(x -> x.type.equals("result") && "done".equals(x.data.get("status"))), 60_000);
+            assertEquals(0, e.listOutbox().size());
+        } finally {
+            pc.close();
+        }
+    }
+
+    @Test
     public void pausedReceivingRefusesNodeSends() throws Exception {
         Engine e = engine(null);
         try (NodeListen pc = NodeListen.start(tmp.newFolder())) {

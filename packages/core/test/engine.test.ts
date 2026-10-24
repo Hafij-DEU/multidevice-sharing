@@ -137,7 +137,7 @@ describe('Engine', () => {
     const bShort = b.e.identity.deviceId.slice(0, 8).toUpperCase(); // case-insensitive
     const res = await a.e.send(['ABCD1', bShort], item);
     expect(res).toEqual([
-      { deviceId: 'abcd1' + '0'.repeat(59), status: 'failed', sessionId: '', error: 'offline' },
+      { deviceId: 'abcd1' + '0'.repeat(59), status: 'failed', sessionId: expect.any(String), error: 'offline' },
       { deviceId: b.e.identity.deviceId, status: 'done', sessionId: expect.any(String) },
     ]);
     // 'all' only covers trusted devices that are present.

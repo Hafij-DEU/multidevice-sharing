@@ -189,6 +189,25 @@ describe('AppController', () => {
     expect(A.c.state().transfers).toHaveLength(before);
   }, 60_000);
 
+  it('a send to a device that is away waits, then goes out when the device is seen again', async () => {
+    const A = await make('a');
+    const bHome = tmpDir();
+    const B = await make('b', {}, bHome);
+    await pair(A.c, B.c);
+    const bId = B.c.state().self.deviceId;
+    await B.c.stop();
+    const f = join(tmpDir(), 'later.txt');
+    writeFileSync(f, 'later');
+    await A.c.send([bId], [{ kind: 'file', path: f }]);
+    await until(() => A.c.state().transfers.some((t) => t.deviceId === bId && t.status === 'waiting'), 30_000);
+    expect(A.c.state().outbox).toEqual([expect.objectContaining({ deviceId: bId, waiting: true })]);
+    const B2 = await make('b', {}, bHome);
+    await A.c.addNearby('127.0.0.1', B2.c.state().self.port);
+    await until(() => A.c.state().transfers.some((t) => t.deviceId === bId && t.status === 'done'), 30_000);
+    expect(readFileSync(join(B2.inbox, 'later.txt'), 'utf8')).toBe('later');
+    await until(() => A.c.state().outbox.length === 0);
+  }, 60_000);
+
   it('pausing receiving refuses files but keeps the device and its hub up', async () => {
     const H = await make('hub');
     await H.c.hubInit([]);

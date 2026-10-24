@@ -4,7 +4,7 @@ import { Peer } from '../components/Peer.tsx';
 import { fmtBytes } from '../format.ts';
 import type { Run } from '../App.tsx';
 
-const ACTIVE = new Set(['preparing', 'sending', 'receiving']);
+const ACTIVE = new Set(['preparing', 'sending', 'receiving', 'waiting']);
 
 export function Transfers({ state, run }: { state: AppState; run: Run }) {
   const active = state.transfers.filter((t) => ACTIVE.has(t.status));
@@ -25,9 +25,10 @@ export function Transfers({ state, run }: { state: AppState; run: Run }) {
           {state.outbox.map((o) => (
             <li key={o.sessionId} className="row space">
               <span>
-                To <Peer text={o.alias ?? o.deviceId.slice(0, 8)} /> <span className="muted">· {o.files} file(s), {fmtBytes(o.bytes)}</span>
+                To <Peer text={o.alias ?? o.deviceId.slice(0, 8)} /> <span className="muted">· {o.files} file(s), {fmtBytes(o.bytes)}</span>{' '}
+                <span className={o.waiting ? 'muted' : 'error-text'}>{o.waiting ? '· sends when it is online' : `· stopped${o.error ? `: ${o.error}` : ''}`}</span>
               </span>
-              <button onClick={() => void run(() => window.meshdrop.removeOutbox(o.sessionId), 'Removed')}>Remove</button>
+              <button onClick={() => void run(() => window.meshdrop.removeOutbox(o.sessionId), 'Send cancelled')}>Cancel send</button>
             </li>
           ))}
         </ul>

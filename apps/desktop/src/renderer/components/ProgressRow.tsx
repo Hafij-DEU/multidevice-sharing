@@ -4,7 +4,7 @@ import { Peer } from './Peer.tsx';
 
 const STATUS: Record<TransferView['status'], string> = {
   preparing: 'Preparing', sending: 'Sending', receiving: 'Receiving', done: 'Done',
-  held: 'Held on hub', failed: 'Failed', cancelled: 'Paused',
+  held: 'Held on hub', waiting: 'Waiting for device', failed: 'Failed', cancelled: 'Paused',
 };
 
 export function ProgressRow({ t }: { t: TransferView }) {
