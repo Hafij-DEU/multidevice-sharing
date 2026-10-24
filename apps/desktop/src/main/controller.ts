@@ -786,8 +786,9 @@ export class AppController extends EventEmitter {
     await this.#refreshLinks();
   }
 
-  async createInvite(): Promise<{ uri: string; qrSvg: string; expiresAt: number }> {
-    const { invite, uri } = this.#e.createInvite();
+  /** `group`: one QR for all your devices (up to 20, 15 min); else single use (5 min). */
+  async createInvite(group = false): Promise<{ uri: string; qrSvg: string; expiresAt: number }> {
+    const { invite, uri } = this.#e.createInvite({ group });
     const qrSvg = await QRCode.toString(uri, { type: 'svg', margin: 1, errorCorrectionLevel: 'M' });
     return { uri, qrSvg, expiresAt: invite.expiresAt };
   }

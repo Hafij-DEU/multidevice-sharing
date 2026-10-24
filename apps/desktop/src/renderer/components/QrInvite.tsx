@@ -13,7 +13,7 @@ const fmtLeft = (ms: number) => {
 };
 
 /** A single-use invite: QR image, the link with Copy, and a countdown to its expiry. */
-export function QrInvite({ invite, onRenew, run }: { invite: Invite; onRenew: () => void; run: Run }) {
+export function QrInvite({ invite, onRenew, run, group }: { invite: Invite; onRenew: () => void; run: Run; group?: boolean }) {
   const [now, setNow] = useState(Date.now());
   useEffect(() => {
     const t = setInterval(() => setNow(Date.now()), 250);
@@ -28,7 +28,9 @@ export function QrInvite({ invite, onRenew, run }: { invite: Invite; onRenew: ()
       <img className={`qr${expired ? ' expired' : ''}`} src={src} alt="Invite QR code" width={220} height={220} />
       <div className="invite-side">
         <p>
-          Scan with the MeshDrop app on the other device, or paste the link there. It works once.
+          {group
+            ? 'Scan it with the MeshDrop app on each of your devices (Send → Add a device → Scan QR). They all join, and every device then sees every other one.'
+            : 'Scan with the MeshDrop app on the other device, or paste the link there. It works once.'}
         </p>
         <div className="row">
           <input aria-label="Invite link" readOnly value={invite.uri} className="grow" onFocus={(e) => e.target.select()} />

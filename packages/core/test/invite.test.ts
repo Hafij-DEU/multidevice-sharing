@@ -11,6 +11,8 @@ import { loadOrCreateIdentity, type Identity } from '../src/identity.ts';
 import { Inbox } from '../src/inbox.ts';
 import { spkiSha256 } from '../src/mesh/canonical.ts';
 import {
+  INVITE_GROUP_TTL_MS,
+  INVITE_GROUP_USES,
   INVITE_MAX_ATTEMPTS,
   INVITE_TTL_MS,
   InviteBook,
@@ -134,6 +136,22 @@ describe('InviteBook', () => {
     book.register({ secret: Buffer.alloc(16, 4), inviter: ID1, mesh: ID2, lan: [], hubUrls: [], expiresAt: 0 }, 10 * INVITE_TTL_MS);
     t += INVITE_TTL_MS + 1;
     expect(book.consume(ID2, ID1, joinProof(Buffer.alloc(16, 4), ID2, ID1))).toBe('expired');
+  });
+
+  it('a group invite takes several devices (each once, a retry is free), 15 min, and is not burned by markUsed', () => {
+    let t = 1_000;
+    const book = new InviteBook(() => t);
+    const i = book.create(ID1, ID2, [], [], INVITE_GROUP_USES);
+    expect(i.expiresAt - t).toBe(INVITE_GROUP_TTL_MS);
+    const dev = (k: number) => k.toString(16).padStart(64, '0');
+    expect(book.consume(dev(1), ID1, joinProof(i.secret, dev(1), ID1))).toBe('ok');
+    expect(book.consume(dev(1), ID1, joinProof(i.secret, dev(1), ID1))).toBe('ok');
+    expect(book.markUsed(ID1)).toBe(false);
+    for (let k = 2; k <= INVITE_GROUP_USES; k++) expect(book.consume(dev(k), ID1, joinProof(i.secret, dev(k), ID1))).toBe('ok');
+    expect(book.consume(dev(99), ID1, joinProof(i.secret, dev(99), ID1))).toBe('used');
+    const j = book.create(ID1, ID2, [], [], 50);
+    t += INVITE_GROUP_TTL_MS + 1;
+    expect(book.consume(dev(1), ID1, joinProof(j.secret, dev(1), ID1))).toBe('expired');
   });
 
   it('markUsed burns the live invite of an inviter', () => {

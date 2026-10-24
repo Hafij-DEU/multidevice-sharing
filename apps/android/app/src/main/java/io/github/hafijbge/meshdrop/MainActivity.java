@@ -56,6 +56,19 @@ public final class MainActivity extends Activity {
         handleShare(getIntent());
     }
 
+    /** Back steps back inside the page first; on its first page the app goes to the background (it keeps receiving). */
+    @Override
+    @SuppressWarnings("deprecation")
+    public void onBackPressed() {
+        if (web == null) {
+            super.onBackPressed();
+            return;
+        }
+        web.evaluateJavascript("(window.__mdBack && window.__mdBack()) ? 'y' : 'n'", r -> {
+            if (!"\"y\"".equals(r)) moveTaskToBack(true);
+        });
+    }
+
     @Override
     protected void onResume() {
         super.onResume();

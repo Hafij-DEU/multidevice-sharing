@@ -60,3 +60,24 @@ test('an expired invite greys out and offers a new one', async () => {
     rmSync(home, { recursive: true, force: true });
   }
 });
+
+test('one QR on the Send page adds several devices (this PC becomes the hub)', async () => {
+  const homes = [0, 1, 2].map((k) => mkdtempSync(join(tmpdir(), `md-e2e-g${k}-`)));
+  const apps = await Promise.all(homes.map(async (h) => {
+    const app = await electron.launch({ args: [MAIN], env: appEnv(h) });
+    const win = await app.firstWindow();
+    await expect(win.getByText('Starting…')).toHaveCount(0);
+    return { app, win };
+  }));
+  const [A, B, C] = apps as [(typeof apps)[0], (typeof apps)[0], (typeof apps)[0]];
+  try {
+    await A.win.getByRole('button', { name: 'Show one QR for all my devices' }).click();
+    await expect(A.win.getByRole('img', { name: 'Invite QR code' })).toBeVisible();
+    const uri = await A.win.getByLabel('Invite link').inputValue();
+    for (const d of [B, C]) expect(await d.win.evaluate((u) => window.meshdrop.join(u), uri)).toBe('member');
+    await expect.poll(() => A.win.evaluate(() => window.meshdrop.getState().then((s) => s.members.length)), { timeout: 15_000 }).toBe(3);
+  } finally {
+    for (const a of apps) await a.app.close();
+    for (const h of homes) rmSync(h, { recursive: true, force: true });
+  }
+});

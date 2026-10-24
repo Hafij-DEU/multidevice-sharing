@@ -3,6 +3,7 @@ import type { AppState, SendItemInput } from '../../shared/api.ts';
 import { DeviceCard } from '../components/DeviceCard.tsx';
 import { DropZone } from '../components/DropZone.tsx';
 import { ProgressRow } from '../components/ProgressRow.tsx';
+import { QrInvite, type Invite } from '../components/QrInvite.tsx';
 import { baseName } from '../format.ts';
 import type { Run } from '../App.tsx';
 
@@ -19,6 +20,60 @@ function parseAddress(s: string): { host: string; port: number } | null {
   if (!host) return null;
   if (port !== undefined && !/^\d{1,5}$/.test(port)) return null;
   return { host, port: port ? Number(port) : DEFAULT_PORT };
+}
+
+/**
+ * One QR for all your devices: the PC shows a group invite (making itself the hub first if there is
+ * no mesh yet); a phone scans it. Every device that joins sees every other one, no pairing needed.
+ */
+function OneQr({ state, run }: { state: AppState; run: Run }) {
+  const [invite, setInvite] = useState<Invite | null>(null);
+  const android = state.platform === 'android';
+  const role = state.hub.role;
+  if (android || window.meshdrop.scanQr) {
+    if (!window.meshdrop.scanQr) return null;
+    if (role === 'member' || role === 'hub') return null;
+    return (
+      <div className="one-qr">
+        <p className="muted">Quickest: scan the QR shown on your PC (Send → Add a device there). This {android ? 'phone' : 'device'} joins all your devices at once.</p>
+        <button
+          className="primary"
+          onClick={() =>
+            void run(async () => {
+              const t = await window.meshdrop.scanQr!();
+              if (!t) return;
+              if (!t.startsWith('meshdrop://join?')) throw new Error('That QR code is not a MeshDrop QR.');
+              const r = await window.meshdrop.join(t);
+              return r === 'member' ? 'Joined: your devices are connected.' : 'Joined: it completes when the PC is reachable.';
+            })
+          }
+        >
+          Scan QR
+        </button>
+      </div>
+    );
+  }
+  const show = () =>
+    void run(async () => {
+      if (role === 'none') await window.meshdrop.hubInit([]);
+      setInvite(await window.meshdrop.createInvite(true));
+    });
+  return (
+    <div className="one-qr">
+      {invite ? (
+        <QrInvite invite={invite} onRenew={show} run={run} group />
+      ) : (
+        <>
+          <p className="muted">
+            Quickest: show one QR and scan it with each phone or PC.{role === 'none' ? ' This PC becomes the hub that links them.' : ''}
+          </p>
+          <button className="primary" onClick={show}>
+            Show one QR for all my devices
+          </button>
+        </>
+      )}
+    </div>
+  );
 }
 
 export function Devices({ state, run }: { state: AppState; run: Run }) {
@@ -153,6 +208,7 @@ export function Devices({ state, run }: { state: AppState; run: Run }) {
 
       <details className="add-device" open={adding} onToggle={(e) => setAdding((e.target as HTMLDetailsElement).open)}>
         <summary>Add a device</summary>
+        <OneQr state={state} run={run} />
         <p className="muted">Open MeshDrop on the other device too. Press Pair on both: each side must trust the other.</p>
         {nearby.length === 0 ? (
           <p className="muted">No other MeshDrop devices seen on this network yet.</p>

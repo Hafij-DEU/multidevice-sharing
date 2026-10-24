@@ -712,7 +712,8 @@ export class HubServer extends EventEmitter {
     const mesh = this.#opts.members.list().mesh;
     // The inviter's remaining lifetime, on our clock; never more than a fresh invite.
     const ttl = typeof m.ttlMs === 'number' && Number.isFinite(m.ttlMs) ? m.ttlMs : 0;
-    invites.register({ secret, inviter, mesh, lan: [], hubUrls: [], expiresAt: 0 }, ttl);
+    const uses = typeof m.uses === 'number' ? m.uses : 1; // a group invite (clamped by the book)
+    invites.register({ secret, inviter, mesh, lan: [], hubUrls: [], expiresAt: 0 }, ttl, uses);
   }
 
   /**

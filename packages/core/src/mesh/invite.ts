@@ -8,6 +8,9 @@
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 
 export const INVITE_TTL_MS = 300_000;
+/** A group invite: one QR that adds several devices (each joins once), for a longer while. */
+export const INVITE_GROUP_TTL_MS = 900_000;
+export const INVITE_GROUP_USES = 20;
 export const INVITE_MAX_ATTEMPTS = 5;
 export const JOIN_DOMAIN = 'meshdrop-join-v1';
 const SECRET_BYTES = 16;
@@ -123,7 +126,10 @@ export function joinProof(secret: Buffer, newId: string, inviter: string): strin
 
 export type ConsumeResult = 'ok' | 'expired' | 'used' | 'bad-proof' | 'unknown' | 'burned';
 
-interface Entry { invite: Invite; attempts: number; used: boolean }
+/** `attempts`: wrong proofs so far; `joined`: devices that redeemed it (a group invite takes up to maxUses). */
+interface Entry { invite: Invite; attempts: number; used: boolean; maxUses: number; joined: Set<string> }
+
+const clampUses = (n: number): number => (Number.isInteger(n) ? Math.max(1, Math.min(INVITE_GROUP_USES, n)) : 1);
 
 /**
  * Invites this device enforces. One live invite per inviter: creating or registering a new one
@@ -137,9 +143,12 @@ export class InviteBook {
     this.#now = now;
   }
 
-  create(inviter: string, mesh: string, lan: Invite['lan'], hubUrls: string[]): Invite {
-    const invite: Invite = { secret: randomBytes(SECRET_BYTES), inviter, mesh, lan: [...lan], hubUrls: [...hubUrls], expiresAt: this.#now() + INVITE_TTL_MS };
-    this.#byInviter.set(inviter, { invite, attempts: 0, used: false });
+  /** `maxUses` > 1: a group invite (up to INVITE_GROUP_USES devices, INVITE_GROUP_TTL_MS). */
+  create(inviter: string, mesh: string, lan: Invite['lan'], hubUrls: string[], maxUses = 1): Invite {
+    const uses = clampUses(maxUses);
+    const ttl = uses > 1 ? INVITE_GROUP_TTL_MS : INVITE_TTL_MS;
+    const invite: Invite = { secret: randomBytes(SECRET_BYTES), inviter, mesh, lan: [...lan], hubUrls: [...hubUrls], expiresAt: this.#now() + ttl };
+    this.#byInviter.set(inviter, { invite, attempts: 0, used: false, maxUses: uses, joined: new Set() });
     return invite;
   }
 
@@ -148,18 +157,23 @@ export class InviteBook {
    * book's clock, at most INVITE_TTL_MS. Registering a secret this book already holds for the inviter
    * changes nothing, so a used, burned or expired invite can never be brought back to life.
    */
-  register(i: Invite, ttlMs: number = INVITE_TTL_MS): void {
+  register(i: Invite, ttlMs: number = INVITE_TTL_MS, maxUses = 1): void {
     if (i.secret.length !== SECRET_BYTES) throw new InviteError('invalid invite: secret');
     const cur = this.#byInviter.get(i.inviter);
     if (cur && cur.invite.secret.equals(i.secret)) return;
-    const ttl = Number.isFinite(ttlMs) ? Math.max(0, Math.min(ttlMs, INVITE_TTL_MS)) : 0;
-    this.#byInviter.set(i.inviter, { invite: { ...i, expiresAt: this.#now() + ttl }, attempts: 0, used: false });
+    const uses = clampUses(maxUses);
+    const cap = uses > 1 ? INVITE_GROUP_TTL_MS : INVITE_TTL_MS;
+    const ttl = Number.isFinite(ttlMs) ? Math.max(0, Math.min(ttlMs, cap)) : 0;
+    this.#byInviter.set(i.inviter, { invite: { ...i, expiresAt: this.#now() + ttl }, attempts: 0, used: false, maxUses: uses, joined: new Set() });
   }
 
-  /** Burns the inviter's live invite (it was redeemed elsewhere). False if there is none. */
+  /**
+   * Burns the inviter's live invite (it was redeemed elsewhere). False if there is none, and for a
+   * group invite, which counts its own uses (a redemption elsewhere does not end it).
+   */
   markUsed(inviter: string): boolean {
     const e = this.#byInviter.get(inviter);
-    if (!e) return false;
+    if (!e || e.maxUses > 1) return false;
     e.used = true;
     return true;
   }
@@ -170,11 +184,15 @@ export class InviteBook {
     if (e.used) return 'used';
     if (e.attempts >= INVITE_MAX_ATTEMPTS) return 'burned';
     if (this.#now() > e.invite.expiresAt) return 'expired';
-    e.attempts++;
     const want = Buffer.from(joinProof(e.invite.secret, newId, inviter), 'base64');
     const got = typeof proof === 'string' ? Buffer.from(proof, 'base64') : Buffer.alloc(0);
-    if (got.length !== want.length || !timingSafeEqual(got, want)) return 'bad-proof';
-    e.used = true;
+    if (got.length !== want.length || !timingSafeEqual(got, want)) {
+      e.attempts++;
+      return 'bad-proof';
+    }
+    // The same device again (a retry after a lost answer) is fine and costs no use.
+    e.joined.add(newId);
+    if (e.joined.size >= e.maxUses) e.used = true;
     return 'ok';
   }
 }

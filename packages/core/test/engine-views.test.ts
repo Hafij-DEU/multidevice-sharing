@@ -59,6 +59,30 @@ describe('Engine.devices()', () => {
   });
 });
 
+describe('group invite', () => {
+  it('one QR adds several devices to the mesh; a single-use one adds only the first', async () => {
+    const H = await make({ alias: 'hub' });
+    await H.e.hubInit([]);
+    await H.e.start();
+    const devs = [];
+    for (const alias of ['phone', 'tablet', 'laptop']) {
+      const d = await make({ alias });
+      await d.e.start();
+      devs.push(d);
+    }
+    const group = H.e.createInvite({ group: true }).uri;
+    for (const d of devs) expect(await d.e.join(group)).toBe('member');
+    expect(H.e.members().map((m) => m.alias).sort()).toEqual(['hub', 'laptop', 'phone', 'tablet']);
+    const once = H.e.createInvite().uri;
+    const x = await make({ alias: 'x' });
+    await x.e.start();
+    const y = await make({ alias: 'y' });
+    await y.e.start();
+    expect(await x.e.join(once)).toBe('member');
+    await expect(y.e.join(once)).rejects.toThrow();
+  }, 60_000);
+});
+
 describe('auto-resume', () => {
   it('a send that failed while the receiver was down completes on its own when it is seen again', async () => {
     const A = await make({ alias: 'a', autoResume: true });

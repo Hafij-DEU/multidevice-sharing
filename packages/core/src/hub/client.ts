@@ -138,9 +138,9 @@ export class HubClient extends EventEmitter {
   }
 
   /** Lets the hub enforce an invite this device created, so it can be redeemed over the hub. */
-  registerInvite(i: Invite): boolean {
+  registerInvite(i: Invite, uses = 1): boolean {
     const ttlMs = Math.max(0, i.expiresAt - Date.now());
-    return this.sendControl({ t: 'invite', secret: i.secret.toString('base64url'), ttlMs });
+    return this.sendControl({ t: 'invite', secret: i.secret.toString('base64url'), ttlMs, ...(uses > 1 ? { uses } : {}) });
   }
 
   /**

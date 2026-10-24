@@ -203,7 +203,8 @@ export interface DesktopApi {
   scanSubnet(): Promise<number>;
   hubInit(urls: string[]): Promise<void>;
   setHubUrls(urls: string[]): Promise<void>;
-  createInvite(): Promise<{ uri: string; qrSvg: string; expiresAt: number }>;
+  /** `group`: one QR any of your devices can scan (up to 20, 15 min); default single use (5 min). */
+  createInvite(group?: boolean): Promise<{ uri: string; qrSvg: string; expiresAt: number }>;
   join(uri: string): Promise<'member' | 'provisional'>;
   revoke(deviceId: string): Promise<void>;
   exportRecovery(path: string, passphrase: string): Promise<void>;

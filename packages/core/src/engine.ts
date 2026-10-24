@@ -43,7 +43,7 @@ import { HubClient } from './hub/client.ts';
 import { HeldStore } from './hub/held.ts';
 import { DEFAULT_INGRESS_PORT, HubServer, type DirectoryEntry, type LanAddr } from './hub/server.ts';
 import { spkiSha256 } from './mesh/canonical.ts';
-import { InviteBook, inviteUri, parseInviteUri, type Invite } from './mesh/invite.ts';
+import { INVITE_GROUP_USES, InviteBook, inviteUri, parseInviteUri, type Invite } from './mesh/invite.ts';
 import { completeJoin, createJoinHandler, joinViaHub, joinViaLan } from './mesh/join.ts';
 import { CompositeTrust, MembershipStore } from './mesh/members.ts';
 import { signList, type Member, type MembershipList, type SignedMembership } from './mesh/membership.ts';
@@ -1462,11 +1462,11 @@ export class Engine extends EventEmitter {
     }
   }
 
-  private readInvite(): { secret: string; expiresAt: number; used: boolean } | null {
+  private readInvite(): { secret: string; expiresAt: number; used: boolean; uses: number } | null {
     try {
       const j = JSON.parse(readFileSync(join(this.home, 'invite.json'), 'utf8')) as Record<string, unknown>;
       if (typeof j.secret !== 'string' || typeof j.expiresAt !== 'number') return null;
-      return { secret: j.secret, expiresAt: j.expiresAt, used: j.used === true };
+      return { secret: j.secret, expiresAt: j.expiresAt, used: j.used === true, uses: typeof j.uses === 'number' ? j.uses : 1 };
     } catch {
       return null;
     }
@@ -1475,7 +1475,8 @@ export class Engine extends EventEmitter {
   /** The invite in invite.json was redeemed: it must never be registered again (restart, relink). */
   private markInviteUsed(): void {
     const cur = this.readInvite();
-    if (cur && !cur.used) writeFileAtomic(join(this.home, 'invite.json'), JSON.stringify({ ...cur, used: true }));
+    // A group invite counts its uses in the invite book; one redemption does not end it.
+    if (cur && !cur.used && cur.uses <= 1) writeFileAtomic(join(this.home, 'invite.json'), JSON.stringify({ ...cur, used: true }));
   }
 
   /**
@@ -1490,8 +1491,8 @@ export class Engine extends EventEmitter {
     if (secret.length !== 16) return;
     this.lastInviteSecret = j.secret;
     const invite: Invite = { secret, inviter: this.identity.deviceId, mesh: this.mesh.list().mesh, lan: [], hubUrls: [], expiresAt: j.expiresAt };
-    this.invites.register(invite, j.expiresAt - Date.now());
-    this.running?.client?.registerInvite(invite);
+    this.invites.register(invite, j.expiresAt - Date.now(), j.uses);
+    this.running?.client?.registerInvite(invite, j.uses);
   }
 
   /** A `meshdrop join` run by another process on this home: load the new mesh and link to the hub. */
@@ -1607,15 +1608,19 @@ export class Engine extends EventEmitter {
     return this.directory();
   }
 
-  /** A single-use QR invite (5 min). Also written to invite.json so a running `listen` honours it. */
-  createInvite(): { invite: Invite; uri: string } {
+  /**
+   * A QR invite: single use for 5 min, or with `group` one QR for up to INVITE_GROUP_USES devices
+   * for 15 min. Also written to invite.json so a running `listen` honours it.
+   */
+  createInvite(opts: { group?: boolean } = {}): { invite: Invite; uri: string } {
     if (!this.mesh) throw new Error('invite: this device is not in a mesh (run `meshdrop hub init` or join one)');
     const list = this.mesh.list();
-    const invite = this.invites.create(this.identity.deviceId, list.mesh, this.lanAddrs(this.port), list.hub.urls);
+    const uses = opts.group ? INVITE_GROUP_USES : 1;
+    const invite = this.invites.create(this.identity.deviceId, list.mesh, this.lanAddrs(this.port), list.hub.urls, uses);
     const secret = invite.secret.toString('base64url');
-    writeFileAtomic(join(this.home, 'invite.json'), JSON.stringify({ secret, expiresAt: invite.expiresAt, used: false }));
+    writeFileAtomic(join(this.home, 'invite.json'), JSON.stringify({ secret, expiresAt: invite.expiresAt, used: false, uses }));
     this.lastInviteSecret = secret;
-    this.running?.client?.registerInvite(invite);
+    this.running?.client?.registerInvite(invite, uses);
     return { invite, uri: inviteUri(invite) };
   }
 

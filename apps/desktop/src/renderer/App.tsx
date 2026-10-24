@@ -86,6 +86,29 @@ export function App() {
     open('More', 'Settings');
   }, [state?.platform, state?.keepAlive]);
 
+  // Android back button: the page steps back first (a More page → More, another tab → Send); only
+  // on Send itself does the app go to the background (MainActivity asks window.__mdBack).
+  const nav = useRef({ tab, sub });
+  nav.current = { tab, sub };
+  useEffect(() => {
+    const w = window as unknown as { __mdBack?: () => boolean };
+    w.__mdBack = () => {
+      const { tab: t, sub: s } = nav.current;
+      if (s !== null) {
+        setSub(null);
+        return true;
+      }
+      if (t !== 'Send') {
+        open('Send');
+        return true;
+      }
+      return false;
+    };
+    return () => {
+      delete w.__mdBack;
+    };
+  }, []);
+
   // Files shared into MeshDrop (Android share menu, Files → Send with MeshDrop): show the Send page.
   useEffect(() => {
     if ((state?.sharedPending ?? 0) > 0) open('Send');
