@@ -47,6 +47,7 @@ import { INVITE_GROUP_USES, InviteBook, inviteUri, parseInviteUri, type Invite }
 import { completeJoin, createJoinHandler, joinViaHub, joinViaLan } from './mesh/join.ts';
 import { CompositeTrust, MembershipStore } from './mesh/members.ts';
 import { signList, type Member, type MembershipList, type SignedMembership } from './mesh/membership.ts';
+import { RelayStore, signRelays, type Relay, type RelayList } from './mesh/relays.ts';
 import { pullMembership } from './mesh/propagate.ts';
 import { exportRecovery as sealRecovery, importRecovery as openRecovery } from './mesh/recovery.ts';
 import { hasRootKey, loadOrCreateRootKey, saveRootKey } from './mesh/rootkey.ts';
@@ -95,7 +96,7 @@ export type EngineEvent =
   | { source: 'sync'; type: 'error'; folder: string; partner: string; error: string }
   | {
       source: 'mesh';
-      type: 'online' | 'offline' | 'membership' | 'directory' | 'revoked' | 'held-delivered' | 'held-failed' | 'joined';
+      type: 'online' | 'offline' | 'membership' | 'directory' | 'revoked' | 'held-delivered' | 'held-failed' | 'joined' | 'relays';
       /** membership: the new list version. */
       version?: number;
       /** held-*: the target device and the session. */
@@ -140,6 +141,17 @@ export interface HubStatus {
   version: number;
   members: number;
   hubId: string | null;
+  urls: string[];
+  /** The hub this device's link is on: 'main', a relay hub while the main one is away, or null. */
+  linkedTo?: 'main' | 'relay' | null;
+  /** This device runs a relay hub for the mesh (named so by the main hub). */
+  relayHub?: boolean;
+}
+
+/** A relay hub as the main hub lists it (M9). */
+export interface RelayView {
+  deviceId: string;
+  alias: string;
   urls: string[];
 }
 
@@ -217,6 +229,10 @@ export interface EngineOptions {
   hub?: { ingressPort?: number; heldQuotaBytes?: number; heldTtlMs?: number };
   /** Hub link reconnect backoff (default 1 s .. 60 s). */
   hubBackoffMs?: number[];
+  /** On a relay hub, how often to try the main hub again (default 5 min). */
+  hubFailbackMs?: number;
+  /** On the main hub, how often to fetch what relay hubs held for this device (default 10 min). */
+  hubDrainMs?: number;
   /** LocalSend v2 interop (HTTPS port default 53317, multicast 224.0.0.167:53317); false: off. Only with serve. */
   localsend?: { port?: number; multicastPort?: number; iface?: string; answerTimeoutMs?: number } | false;
   /** Internet reach (M5c) seams for tests: fake CLIs, CA, DuckDNS and router. */
@@ -479,6 +495,8 @@ interface Running {
   abort: AbortController;
   port: number;
   hub: HubServer | null;
+  /** This device is a relay hub for the mesh (no root key; see mesh/relays.ts). */
+  relayHub: HubServer | null;
   ingressPort: number;
   client: HubClient | null;
   timers: NodeJS.Timeout[];
@@ -570,6 +588,8 @@ export class Engine extends EventEmitter {
   private mesh: MembershipStore | null;
   private rootKey: KeyObject | null;
   private readonly invites = new InviteBook();
+  /** The root-signed list of relay hubs (M9): kept by every device, signed on the main hub. */
+  private readonly relayStore: RelayStore;
   private readonly guestBook = new GuestBook();
   private guestUploads: GuestUploads | null = null;
   private guestShared: SharedFile[] = [];
@@ -603,6 +623,7 @@ export class Engine extends EventEmitter {
     this.deviceType = opts.deviceType ?? 'desktop';
     this.mesh = mesh;
     this.rootKey = rootKey;
+    this.relayStore = new RelayStore(home);
   }
 
   /** Loads (or creates) the identity under `home`. Opens no sockets: call start(). */
@@ -686,6 +707,7 @@ export class Engine extends EventEmitter {
       if (hopts.heldTtlMs !== undefined) heldOpts.ttlMs = hopts.heldTtlMs;
       hub = new HubServer({
         id: this.identity, home: this.home, rootKey: this.rootKey, members: this.mesh,
+        relays: () => this.relayStore.current(),
         held: new HeldStore(join(this.home, 'hub', 'held'), heldOpts), invites: this.invites,
         hubLan: () => this.lanAddrs(port),
         ingressHttp: createLinkHandler({ store: this.links(), uploads: (id) => this.linkUploads(id), page: LINK_PAGE }),
@@ -697,6 +719,26 @@ export class Engine extends EventEmitter {
         await hub.close();
         server.close();
         throw e;
+      }
+    }
+    let relayHub: HubServer | null = null;
+    if (server && !hub && this.mesh && this.isNamedRelay()) {
+      const hopts = this.opts.hub ?? {};
+      const heldOpts: { quotaBytes?: number; ttlMs?: number } = {};
+      if (hopts.heldQuotaBytes !== undefined) heldOpts.quotaBytes = hopts.heldQuotaBytes;
+      if (hopts.heldTtlMs !== undefined) heldOpts.ttlMs = hopts.heldTtlMs;
+      relayHub = new HubServer({
+        id: this.identity, home: this.home, members: this.mesh,
+        relays: () => this.relayStore.current(),
+        held: new HeldStore(join(this.home, 'hub', 'held'), heldOpts), invites: this.invites,
+        hubLan: () => this.lanAddrs(port),
+        ingressHttp: createLinkHandler({ store: this.links(), uploads: (id) => this.linkUploads(id), page: LINK_PAGE }),
+      });
+      relayHub.attach(server);
+      try {
+        ingressPort = await relayHub.listenIngress(hopts.ingressPort ?? DEFAULT_INGRESS_PORT);
+      } catch {
+        /* the ingress port is taken: the relay still serves on the LAN port */
       }
     }
     if (hub) {
@@ -793,7 +835,7 @@ export class Engine extends EventEmitter {
       }
     }
 
-    this.running = { server, guest, guestPort, ls, discovery, abort: new AbortController(), port, hub, ingressPort, client: null, timers: [] };
+    this.running = { server, guest, guestPort, ls, discovery, abort: new AbortController(), port, hub, relayHub, ingressPort, client: null, timers: [] };
     if (server) {
       if (this.mesh) this.startClient();
       const r = this.running;
@@ -868,6 +910,7 @@ export class Engine extends EventEmitter {
     await this.reach?.stop(false);
     this.reach = null;
     await r.hub?.close();
+    await r.relayHub?.close();
     await this.endGuest(false);
     if (r.ls) {
       r.ls.discovery?.stop();
@@ -1438,6 +1481,9 @@ export class Engine extends EventEmitter {
         return saved && saved.deviceId === hubId ? { host: saved.host, port: saved.port } : undefined;
       },
       ...(this.opts.hubBackoffMs ? { backoffMs: this.opts.hubBackoffMs } : {}),
+      relays: () => this.relayList()?.relays ?? [],
+      ...(this.opts.hubFailbackMs !== undefined ? { failbackMs: this.opts.hubFailbackMs } : {}),
+      ...(this.opts.hubDrainMs !== undefined ? { drainMs: this.opts.hubDrainMs } : {}),
     });
     const mesh = (type: Extract<EngineEvent, { source: 'mesh' }>['type'], extra: Record<string, unknown> = {}) =>
       this.emitEvent({ source: 'mesh', type, ...extra } as EngineEvent);
@@ -1447,7 +1493,11 @@ export class Engine extends EventEmitter {
       this.syncInvite();
     });
     client.on('offline', () => mesh('offline'));
-    client.on('membership', (sm: SignedMembership) => mesh('membership', { version: sm.list.version }));
+    client.on('membership', (sm: SignedMembership) => {
+      mesh('membership', { version: sm.list.version });
+      r.relayHub?.setMembership(sm); // a relay hub hands the main hub's lists on to its own links
+    });
+    client.on('relays', (s: unknown) => this.onRelays(s));
     client.on('directory', (devs: DirectoryEntry[]) => {
       mesh('directory');
       for (const d of devs ?? []) if (d.online) void this.maybeAutoResume(d.deviceId);
@@ -2115,6 +2165,65 @@ export class Engine extends EventEmitter {
     return hub.revoke(matches[0]!);
   }
 
+  /** The verified relay list for this mesh (null: none). */
+  private relayList(): RelayList | null {
+    const m = this.mesh;
+    return m ? this.relayStore.list(m.anchor, m.list().mesh) : null;
+  }
+
+  private isNamedRelay(): boolean {
+    return (this.relayList()?.relays ?? []).some((r) => r.deviceId === this.identity.deviceId);
+  }
+
+  /** A relay list from a hub: kept if newer; a device newly named (or no longer named) a relay restarts its servers. */
+  private onRelays(s: unknown): void {
+    const m = this.mesh;
+    if (!m) return;
+    const was = this.isNamedRelay();
+    let res: 'updated' | 'same' | 'stale';
+    try {
+      res = this.relayStore.accept(s, m.anchor, m.list().mesh);
+    } catch {
+      return; // not signed by this mesh's root
+    }
+    if (res !== 'updated') return;
+    this.running?.relayHub?.pushRelays(this.relayStore.current()!);
+    this.emitEvent({ source: 'mesh', type: 'relays' });
+    if (was !== this.isNamedRelay()) void this.restartForRelay();
+  }
+
+  private async restartForRelay(): Promise<void> {
+    if (!this.running) return;
+    await this.stop();
+    await this.start();
+  }
+
+  /** The relay hubs of this mesh, with their names. */
+  relays(): RelayView[] {
+    const members = this.mesh?.list().members ?? [];
+    return (this.relayList()?.relays ?? []).map((r) => ({ deviceId: r.deviceId, alias: members.find((x) => x.deviceId === r.deviceId)?.alias ?? r.deviceId.slice(0, 8), urls: [...r.urls] }));
+  }
+
+  /**
+   * Main hub only: names the members that run a relay hub, each with its public wss:// address(es).
+   * Every device gets the signed list and fails over to these hubs while this one is away.
+   */
+  async relaysSet(relays: Relay[]): Promise<RelayView[]> {
+    const m = this.mesh;
+    if (!this.rootKey || !m || m.list().hub.deviceId !== this.identity.deviceId) throw new Error('Relay hubs are set on the main hub.');
+    for (const r of relays) {
+      if (r.deviceId === this.identity.deviceId) throw new Error('The main hub cannot also be a relay hub.');
+      if (!m.list().members.some((x) => x.deviceId === r.deviceId)) throw new Error('A relay hub must be a member of the mesh.');
+      if (r.urls.length === 0) throw new Error('Enter the relay hub\'s public wss:// address.');
+    }
+    const cur = this.relayList();
+    const s = signRelays({ v: 1, mesh: m.list().mesh, version: (cur?.version ?? 0) + 1, issuedAt: Date.now(), relays }, this.rootKey);
+    this.relayStore.accept(s, m.anchor, m.list().mesh);
+    this.running?.hub?.pushRelays(s);
+    this.emitEvent({ source: 'mesh', type: 'relays' });
+    return this.relays();
+  }
+
   hubStatus(): HubStatus {
     if (!this.mesh) {
       const pending = existsSync(join(this.home, 'mesh-pending.json'));
@@ -2129,6 +2238,8 @@ export class Engine extends EventEmitter {
       members: list.members.length,
       hubId: list.hub.deviceId,
       urls: [...list.hub.urls],
+      linkedTo: isHub ? 'main' : this.running?.client?.linkedHub == null ? null : this.running.client.linkedHub === list.hub.deviceId ? 'main' : 'relay',
+      relayHub: this.running?.relayHub != null,
     };
   }
 

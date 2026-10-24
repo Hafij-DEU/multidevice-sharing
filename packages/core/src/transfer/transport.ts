@@ -103,7 +103,8 @@ export class RelayTransport implements Transport {
   }
 
   #check(res: Envelope, id: string, isOffer: boolean): PinnedResponse {
-    const hubId = this.#hub.hubDeviceId;
+    // The hub this link is on: the main hub, or a relay hub (M9) while the main one is away.
+    const hubId = this.#hub.linkedHub ?? this.#hub.hubDeviceId;
     try {
       openEnvelope(res, this.#pubOf);
     } catch {
