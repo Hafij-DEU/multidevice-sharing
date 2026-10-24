@@ -206,6 +206,29 @@ describe('HubClient', () => {
   });
 });
 
+describe('mesh-changing control messages are signed (security review #2)', () => {
+  it('a member adds a device only with a signed, fresh request whose certificate binds id and key', async () => {
+    const mesh = await makeMesh();
+    const hub = await startRealHub(mesh);
+    const a = await device(mesh, A, () => hub.port);
+    a.client.start();
+    await until(() => a.client.state === 'online');
+    const results: Record<string, unknown>[] = [];
+    a.client.on('control', (m: Record<string, unknown>) => { if (m.t === 'join-result') results.push(m); });
+    const cert = C.certDer.toString('base64');
+    // Injected by someone who can write on the link (a TLS-terminating tunnel): no signature.
+    a.client.sendControl({ t: 'join', reqId: 'r1', newMember: { deviceId: C.deviceId, alias: 'evil', publicKeyPem: spkiPem(C), cert } });
+    await until(() => results.length === 1);
+    expect(results[0]).toMatchObject({ reqId: 'r1', ok: false, error: 'unsigned' });
+    // Signed, but the certificate is another device's: refused.
+    await expect(a.client.requestJoin({ deviceId: C.deviceId, alias: 'c', publicKeyPem: spkiPem(B), cert })).rejects.toThrow('bad-request');
+    expect(a.members.list().members.some((m) => m.deviceId === C.deviceId)).toBe(false);
+    // Signed and bound: added.
+    const s = await a.client.requestJoin({ deviceId: C.deviceId, alias: 'c', publicKeyPem: spkiPem(C), cert });
+    expect(s.list.members.some((m) => m.deviceId === C.deviceId)).toBe(true);
+  });
+});
+
 describe('link liveness', () => {
   it('a hub that stops answering pings is dropped and relinked', async () => {
     const mesh = await makeMesh();

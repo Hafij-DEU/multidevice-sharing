@@ -1,4 +1,4 @@
-import { createPublicKey, randomBytes } from 'node:crypto';
+import { createHash, createPublicKey, randomBytes } from 'node:crypto';
 import { chmodSync, closeSync, fsyncSync, linkSync, mkdirSync, openSync, readFileSync, renameSync, unlinkSync, writeSync } from 'node:fs';
 import { dirname } from 'node:path';
 
@@ -178,4 +178,15 @@ export function writeFileAtomic(file: string, data: string | Buffer, opts: { noC
   } catch {
     /* ignore */
   }
+}
+
+/**
+ * The pairing code both devices show (6 digits, "123 456"): the same on both sides only when each
+ * talks to the other and not to someone in between. The user compares them before trusting.
+ */
+export function pairingCode(a: string, b: string): string {
+  const [x, y] = [a, b].sort();
+  const n = createHash('sha256').update(`meshdrop-pair-v1\0${x}\0${y}`).digest().readUInt32BE(0) % 1_000_000;
+  const s = String(n).padStart(6, '0');
+  return `${s.slice(0, 3)} ${s.slice(3)}`;
 }

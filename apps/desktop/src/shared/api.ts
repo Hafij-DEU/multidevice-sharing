@@ -200,7 +200,10 @@ export interface DesktopApi {
   sendClipboard(targets: string[] | 'all'): Promise<void>;
   resumeOutbox(): Promise<void>;
   removeOutbox(sessionId: string): Promise<void>;
-  addByAddress(host: string, port: number, alias: string): Promise<void>;
+  /** Looks at the device at host:port without trusting it; `code` is the pairing code both screens show. */
+  pairProbe(host: string, port: number): Promise<{ deviceId: string; alias: string; code: string }>;
+  /** `expectDeviceId`: the device whose pairing code the user checked; another one answering is refused. */
+  addByAddress(host: string, port: number, alias: string, expectDeviceId?: string): Promise<void>;
   scanSubnet(): Promise<number>;
   hubInit(urls: string[]): Promise<void>;
   setHubUrls(urls: string[]): Promise<void>;

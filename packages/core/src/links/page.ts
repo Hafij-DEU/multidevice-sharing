@@ -52,6 +52,15 @@ function linkOpen(key, linkId, fileIdx, chunkIdx, last, sealed) {
   return crypto.subtle.decrypt({ name: 'AES-GCM', iv: linkNonce(fileIdx, chunkIdx), additionalData: linkAad(linkId, fileIdx, chunkIdx, last), tagLength: 128 }, key, sealed)
     .then(function (b) { return new Uint8Array(b); });
 }
+// One upload offer's own key: HKDF-SHA256(link key, a fresh 16-byte salt, "meshdrop-link-upload-v1" 0 linkId).
+function linkUploadKey(rawKey, linkId, salt) {
+  var info = new Uint8Array(new TextEncoder().encode('meshdrop-link-upload-v1').length + 1 + new TextEncoder().encode(linkId).length);
+  info.set(new TextEncoder().encode('meshdrop-link-upload-v1'), 0);
+  info.set(new TextEncoder().encode(linkId), info.length - new TextEncoder().encode(linkId).length);
+  return crypto.subtle.importKey('raw', rawKey, 'HKDF', false, ['deriveKey']).then(function (base) {
+    return crypto.subtle.deriveKey({ name: 'HKDF', hash: 'SHA-256', salt: salt, info: info }, base, { name: 'AES-GCM', length: 256 }, false, ['encrypt']);
+  });
+}
 function linkSeal(key, linkId, fileIdx, chunkIdx, last, plain) {
   return crypto.subtle.encrypt({ name: 'AES-GCM', iv: linkNonce(fileIdx, chunkIdx), additionalData: linkAad(linkId, fileIdx, chunkIdx, last), tagLength: 128 }, key, plain)
     .then(function (b) { return new Uint8Array(b); });
@@ -206,9 +215,12 @@ const app = `(function () {
     var offer = { files: files.map(function (f) { var o = { name: f.name, size: f.size }; if (f.type) o.type = f.type; return o; }) };
     if (text.trim() !== '') offer.text = text;
     var oid;
+    var upKey;
+    var salt = crypto.getRandomValues(new Uint8Array(16));
     api('key', { method: 'POST', headers: { 'x-link-key': bytesToB64url(rawKey) } })
-      .then(function () { return linkSeal(key, id, OFFER_FILE, 0, true, new TextEncoder().encode(JSON.stringify(offer))); })
-      .then(function (sealed) { return api('offers', { method: 'POST', body: sealed }); })
+      .then(function () { return linkUploadKey(rawKey, id, salt); })
+      .then(function (k) { upKey = k; return linkSeal(upKey, id, OFFER_FILE, 0, true, new TextEncoder().encode(JSON.stringify(offer))); })
+      .then(function (sealed) { return api('offers', { method: 'POST', headers: { 'x-upload-salt': bytesToB64url(salt) }, body: sealed }); })
       .then(function (r) { return r.json(); })
       .then(function (j) { oid = j.id; status('Waiting for the owner to accept…', 'muted'); return answer(); })
       .then(function (s) {
@@ -246,7 +258,7 @@ const app = `(function () {
           if (off >= f.size) { done += f.size; i++; return file(); }
           var end = Math.min(f.size, off + LINK_CHUNK);
           return f.slice(off, end).arrayBuffer().then(function (b) {
-            return linkSeal(key, id, UPLOAD_BASE + i, off / LINK_CHUNK, end >= f.size, new Uint8Array(b));
+            return linkSeal(upKey, id, UPLOAD_BASE + i, off / LINK_CHUNK, end >= f.size, new Uint8Array(b));
           }).then(function (sealed) {
             return api('offers/' + oid + '/' + i + '?offset=' + off, { method: 'PUT', body: sealed });
           }).then(function () {

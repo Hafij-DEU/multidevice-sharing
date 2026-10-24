@@ -13,7 +13,7 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { Readable } from 'node:stream';
 import { GuestError, type GuestUploads } from '../guest/uploads.ts';
-import { LINK_CHUNK, LinkCryptoError, OFFER_FILE, UPLOAD_BASE, keyHash, openChunk } from './crypto.ts';
+import { keyHash, LINK_CHUNK, LinkCryptoError, OFFER_FILE, openChunk, UPLOAD_BASE, UPLOAD_SALT_BYTES, uploadKey } from './crypto.ts';
 import { LinkError, type LinkStore } from './store.ts';
 
 const ID_RE = /^[A-Za-z0-9_-]{22}$/;
@@ -50,9 +50,14 @@ async function readBody(req: IncomingMessage, max: number): Promise<Buffer> {
 }
 
 /** Returns a request handler; it answers false for paths outside /l/ (the caller 404s them). */
+/** Upload offer keys kept (oldest dropped first); far above what pending offers can be. */
+const MAX_OFFER_KEYS = 1000;
+
 export function createLinkHandler(o: LinkHandlerOptions): (req: IncomingMessage, res: ServerResponse) => boolean {
   /** Upload keys presented by open sessions (memory only: never on disk). */
   const keys = new Map<string, Buffer>();
+  /** Each upload offer's own key (derived from the link key and the offer's salt), by offer id. */
+  const offerKeys = new Map<string, Buffer>();
 
   const handle = async (req: IncomingMessage, res: ServerResponse, url: URL): Promise<void> => {
     const send = (status: number, body: Buffer | string, type: string) => {
@@ -112,14 +117,22 @@ export function createLinkHandler(o: LinkHandlerOptions): (req: IncomingMessage,
     if (!key) return json(403, { error: 'no-key' });
     if (!uploads) return json(503, { error: 'unavailable' });
     if (method === 'POST' && api.length === 1) {
-      const plain = openChunk(key, id, OFFER_FILE, 0, true, await readBody(req, MAX_SEALED_OFFER));
+      // Each offer brings its own salt: its offer and slices are sealed with a key of their own.
+      const s = req.headers['x-upload-salt'];
+      const salt = typeof s === 'string' ? Buffer.from(s, 'base64url') : Buffer.alloc(0);
+      if (salt.length !== UPLOAD_SALT_BYTES) return json(400, { error: 'no-salt' });
+      const upKey = uploadKey(key, id, salt);
+      const plain = openChunk(upKey, id, OFFER_FILE, 0, true, await readBody(req, MAX_SEALED_OFFER));
       let offer: unknown;
       try {
         offer = JSON.parse(plain.toString('utf8'));
       } catch {
         return json(400, { error: 'bad-offer' });
       }
-      return json(201, uploads.offer(offer));
+      const made = uploads.offer(offer);
+      offerKeys.set(made.id, upKey);
+      while (offerKeys.size > MAX_OFFER_KEYS) offerKeys.delete(offerKeys.keys().next().value as string);
+      return json(201, made);
     }
     if (method === 'GET' && api.length === 2) return json(200, uploads.status(api[1]!));
     if (method === 'PUT' && api.length === 3 && /^\d+$/.test(api[2]!)) {
@@ -131,7 +144,9 @@ export function createLinkHandler(o: LinkHandlerOptions): (req: IncomingMessage,
       if (!f) return json(404, { error: 'not-found' });
       const sealed = await readBody(req, LINK_CHUNK + 16);
       const last = offset + Math.max(0, sealed.length - 16) >= f.size;
-      const plain = openChunk(key, id, UPLOAD_BASE + i, offset / LINK_CHUNK, last, sealed);
+      const upKey = offerKeys.get(api[1]!);
+      if (!upKey) return json(403, { error: 'no-key' });
+      const plain = openChunk(upKey, id, UPLOAD_BASE + i, offset / LINK_CHUNK, last, sealed);
       return json(200, { received: await uploads.write(api[1]!, i, offset, Readable.from([plain])) });
     }
     return json(404, { error: 'not-found' });

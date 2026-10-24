@@ -4,8 +4,11 @@
 //   AAD   = utf8("meshdrop-link-v1") ‖ 0x00 ‖ utf8(linkId) ‖ 0x00 ‖ u32be(fileIdx) ‖ u64be(chunkIdx) ‖ u8(last)
 //   chunk = ciphertext ‖ 16-byte tag
 // The manifest ({v:1, files:[{name,size,type?}], text?}) is file 0xffffffff, chunk 0, last. Guest
-// uploads use file 0xfffffffe for their offer and 0x80000000 + i for the slices of offered file i.
-import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto';
+// uploads use file 0xfffffffe for their offer and 0x80000000 + i for the slices of offered file i,
+// sealed with a key of their own per offer, so no two offers ever share a nonce under one key:
+//   uploadKey = HKDF-SHA256(ikm = link key, salt = 16 random bytes from the browser (X-Upload-Salt),
+//                           info = utf8("meshdrop-link-upload-v1") ‖ 0x00 ‖ utf8(linkId), 32 bytes)
+import { createCipheriv, createDecipheriv, createHash, hkdfSync, randomBytes } from 'node:crypto';
 
 export const LINK_DOMAIN = 'meshdrop-link-v1';
 export const LINK_CHUNK = 4 * 1024 * 1024;
@@ -24,6 +27,15 @@ export interface LinkManifest {
   v: 1;
   files: { name: string; size: number; type?: string }[];
   text?: string;
+}
+
+export const UPLOAD_SALT_BYTES = 16;
+export const UPLOAD_KEY_DOMAIN = 'meshdrop-link-upload-v1';
+
+/** The key one upload offer (and its slices) is sealed with: derived from the link key and the offer's salt. */
+export function uploadKey(linkKey: Buffer, linkId: string, salt: Buffer): Buffer {
+  if (linkKey.length !== 32 || salt.length !== UPLOAD_SALT_BYTES) throw new LinkCryptoError('bad upload key input');
+  return Buffer.from(hkdfSync('sha256', linkKey, salt, Buffer.concat([Buffer.from(UPLOAD_KEY_DOMAIN), Buffer.of(0), Buffer.from(linkId)]), 32));
 }
 
 export const newLinkKey = (): Buffer => randomBytes(32);

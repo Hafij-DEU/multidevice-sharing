@@ -34,7 +34,8 @@ export class JoinError extends Error {
   }
 }
 
-interface NewMember { deviceId: string; alias: string; publicKeyPem: string }
+/** `cert`: the new device's certificate (base64 DER): the hub checks that it binds deviceId to publicKeyPem. */
+interface NewMember { deviceId: string; alias: string; publicKeyPem: string; cert: string }
 
 export interface JoinHandlerOptions {
   id: Identity;
@@ -86,7 +87,7 @@ export function createJoinHandler(o: JoinHandlerOptions): (peer: string, body: u
     if (!store) return { status: 409, body: { error: 'no-mesh' } };
     const result = o.invites.consume(peer, o.id.deviceId, b.proof);
     if (result !== 'ok') return { status: 403, body: { error: result } };
-    const nm: NewMember = { deviceId: peer, alias: b.alias, publicKeyPem: spkiPemOf(pub) };
+    const nm: NewMember = { deviceId: peer, alias: b.alias, publicKeyPem: spkiPemOf(pub), cert: b.cert };
     const anchorPem = spkiPemOf(store.anchor);
 
     if (o.hub) {

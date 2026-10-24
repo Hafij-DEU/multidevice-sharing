@@ -18,7 +18,7 @@ import type { TLSSocket } from 'node:tls';
 import { WebSocketServer, type RawData, type WebSocket } from 'ws';
 import { MAX_OFFER_BODY } from '../api/handler.ts';
 import { deviceIdOf, type Identity } from '../identity.ts';
-import { signDomain, verifyDomain } from '../mesh/canonical.ts';
+import { canonicalJson, signDomain, verifyDomain } from '../mesh/canonical.ts';
 import { decodeFrame, encodeFrame, openEnvelope, sealEnvelope, type Envelope } from '../mesh/envelope.ts';
 import { heldSessionOf, type HeldSession, type HeldStore } from './held.ts';
 import type { InviteBook } from '../mesh/invite.ts';
@@ -28,6 +28,10 @@ import { peerDeviceId } from '../tls.ts';
 import { canonicalSpki } from '../trust.ts';
 
 export const HUB_AUTH_DOMAIN = 'meshdrop-hub-auth-v1';
+/** Signs control messages that change the mesh (invite, join): see #verifyControl. */
+export const HUB_CTL_DOMAIN = 'meshdrop-hub-ctl-v1';
+/** How far a signed control message's timestamp may be from the hub's clock. */
+const CTL_MAX_SKEW_MS = 10 * 60_000;
 export const HUB_PATH = '/mesh/v1/hub';
 export const DEFAULT_INGRESS_PORT = 53319;
 export const DEFAULT_HEARTBEAT_TIMEOUT_MS = 510_000;
@@ -698,9 +702,30 @@ export class HubServer extends EventEmitter {
       c.ws.send(JSON.stringify({ t: 'pong' }));
       return;
     }
-    if (m.t === 'invite') return this.#onInvite(deviceId, m);
-    if (m.t === 'join') return this.#onMemberJoin(c, deviceId, m);
+    if (m.t === 'invite') {
+      if (this.#verifyControl(deviceId, m)) this.#onInvite(deviceId, m);
+      return;
+    }
+    if (m.t === 'join') {
+      if (!this.#verifyControl(deviceId, m)) {
+        if (typeof m.reqId === 'string' && /^[A-Za-z0-9_-]{1,32}$/.test(m.reqId)) c.ws.send(JSON.stringify({ t: 'join-result', reqId: m.reqId, ok: false, error: 'unsigned' }));
+        return;
+      }
+      return this.#onMemberJoin(c, deviceId, m);
+    }
     this.emit('message', deviceId, m);
+  }
+
+  /**
+   * A control message that changes the mesh must carry the member's signature over its canonical
+   * JSON (without `sig`) and a timestamp near our clock: the WebSocket alone is not enough, since a
+   * tunnel or proxy in front of the hub terminates TLS and could inject frames.
+   */
+  #verifyControl(deviceId: string, m: Record<string, unknown>): boolean {
+    const { sig, ...body } = m;
+    if (typeof sig !== 'string' || typeof body.ts !== 'number' || Math.abs(this.#now() - body.ts) > CTL_MAX_SKEW_MS) return false;
+    const pub = this.#pubOf(deviceId);
+    return !!pub && verifyDomain(HUB_CTL_DOMAIN, canonicalJson(body), sig, pub);
   }
 
   /** A member registers an invite it created, so the invited device can redeem it over the hub. */
@@ -726,6 +751,15 @@ export class HubServer extends EventEmitter {
     const nm = m.newMember as Record<string, unknown> | undefined;
     const answer = (o: Record<string, unknown>) => c.ws.send(JSON.stringify({ t: 'join-result', reqId, ...o }));
     if (!nm || typeof nm.deviceId !== 'string' || !DEVICE_ID_RE.test(nm.deviceId) || !isAlias(nm.alias) || typeof nm.publicKeyPem !== 'string') {
+      return answer({ ok: false, error: 'bad-request' });
+    }
+    // The certificate must bind the id to the key: no member can sign another device's id in with its own key.
+    if (typeof nm.cert !== 'string' || !B64_RE.test(nm.cert) || nm.cert.length > 8192) return answer({ ok: false, error: 'bad-request' });
+    try {
+      const der = Buffer.from(nm.cert, 'base64');
+      const spki = new X509Certificate(der).publicKey.export({ type: 'spki', format: 'pem' }) as string;
+      if (deviceIdOf(der) !== nm.deviceId || canonicalSpki(spki) !== canonicalSpki(nm.publicKeyPem)) return answer({ ok: false, error: 'bad-request' });
+    } catch {
       return answer({ ok: false, error: 'bad-request' });
     }
     if (nm.deviceId === inviter) return answer({ ok: false, error: 'bad-request' });

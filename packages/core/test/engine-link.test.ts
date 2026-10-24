@@ -3,7 +3,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { Engine, type EngineEvent } from '../src/engine.ts';
-import { OFFER_FILE, UPLOAD_BASE, openChunk, sealChunk } from '../src/links/crypto.ts';
+import { randomBytes } from 'node:crypto';
+import { OFFER_FILE, UPLOAD_BASE, openChunk, sealChunk, uploadKey } from '../src/links/crypto.ts';
 
 const tmps: string[] = [];
 const engines: Engine[] = [];
@@ -34,12 +35,14 @@ describe('engine internet links', () => {
     expect(openChunk(key, l.id, 0, 0, true, sealed).toString()).toBe('for the world');
     expect((await e.linkList())[0]).toMatchObject({ id: l.id, url: l.url, downloads: 1, allowUploads: true });
 
-    const offer = sealChunk(key, l.id, OFFER_FILE, 0, true, Buffer.from(JSON.stringify({ files: [{ name: 'back.txt', size: 4 }] })));
-    const { id: oid } = (await (await fetch(`${api}/offers`, { method: 'POST', headers: h, body: offer })).json()) as { id: string };
+    const salt = randomBytes(16);
+    const upKey = uploadKey(key, l.id, salt);
+    const offer = sealChunk(upKey, l.id, OFFER_FILE, 0, true, Buffer.from(JSON.stringify({ files: [{ name: 'back.txt', size: 4 }] })));
+    const { id: oid } = (await (await fetch(`${api}/offers`, { method: 'POST', headers: { ...h, 'x-upload-salt': salt.toString('base64url') }, body: offer })).json()) as { id: string };
     expect(events.find((x) => x.source === 'guest' && x.type === 'offer')).toMatchObject({ id: oid, via: 'link', link: l.id });
     expect(e.guestState().offers).toEqual([expect.objectContaining({ id: oid, via: 'link' })]);
     await e.guestAccept(oid);
-    await fetch(`${api}/offers/${oid}/0?offset=0`, { method: 'PUT', headers: h, body: sealChunk(key, l.id, UPLOAD_BASE, 0, true, Buffer.from('back')) });
+    await fetch(`${api}/offers/${oid}/0?offset=0`, { method: 'PUT', headers: h, body: sealChunk(upKey, l.id, UPLOAD_BASE, 0, true, Buffer.from('back')) });
     expect(readFileSync(join(d, 'inbox', 'back.txt'), 'utf8')).toBe('back');
 
     await e.linkRevoke(l.id);

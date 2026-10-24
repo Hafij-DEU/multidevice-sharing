@@ -4,7 +4,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { GuestUploads } from '../src/guest/uploads.ts';
-import { OFFER_FILE, UPLOAD_BASE, openChunk, openManifest, sealChunk } from '../src/links/crypto.ts';
+import { OFFER_FILE, UPLOAD_BASE, openChunk, openManifest, sealChunk, uploadKey } from '../src/links/crypto.ts';
+import { randomBytes } from 'node:crypto';
 import { createLinkHandler } from '../src/links/server.ts';
 import { LinkStore } from '../src/links/store.ts';
 
@@ -61,15 +62,22 @@ describe('link routes', () => {
     const o = (await (await fetch(`${base}/l/${id}/api/open`, { method: 'POST', headers: { 'x-link-key': key.toString('base64url') } })).json()) as { session: string; allowUploads: boolean };
     expect(o.allowUploads).toBe(true);
     const h = { 'x-link-session': o.session };
-    const offer = sealChunk(key, id, OFFER_FILE, 0, true, Buffer.from(JSON.stringify({ files: [{ name: 'back.txt', size: 5 }] })));
-    const r = await fetch(`${base}/l/${id}/api/offers`, { method: 'POST', headers: h, body: offer });
+    const plainOffer = Buffer.from(JSON.stringify({ files: [{ name: 'back.txt', size: 5 }] }));
+    // Without a salt (an old page) the hub refuses: every offer needs its own key.
+    expect((await fetch(`${base}/l/${id}/api/offers`, { method: 'POST', headers: h, body: sealChunk(key, id, OFFER_FILE, 0, true, plainOffer) })).status).toBe(400);
+    const salt = randomBytes(16);
+    const upKey = uploadKey(key, id, salt);
+    const r = await fetch(`${base}/l/${id}/api/offers`, { method: 'POST', headers: { ...h, 'x-upload-salt': salt.toString('base64url') }, body: sealChunk(upKey, id, OFFER_FILE, 0, true, plainOffer) });
     expect(r.status).toBe(201);
     const { id: oid } = (await r.json()) as { id: string };
+    // Two offers never share key and nonce: a second salt gives other ciphertext for the same bytes.
+    expect(sealChunk(uploadKey(key, id, randomBytes(16)), id, UPLOAD_BASE, 0, true, Buffer.from('hello'))).not.toEqual(sealChunk(upKey, id, UPLOAD_BASE, 0, true, Buffer.from('hello')));
     await uploads.accept(oid);
-    const bad = Buffer.from(sealChunk(key, id, UPLOAD_BASE, 0, true, Buffer.from('hello')));
+    expect((await fetch(`${base}/l/${id}/api/offers/${oid}/0?offset=0`, { method: 'PUT', headers: h, body: sealChunk(key, id, UPLOAD_BASE, 0, true, Buffer.from('hello')) })).status).toBe(400); // sealed with the link key itself
+    const bad = Buffer.from(sealChunk(upKey, id, UPLOAD_BASE, 0, true, Buffer.from('hello')));
     bad[0]! ^= 1;
     expect((await fetch(`${base}/l/${id}/api/offers/${oid}/0?offset=0`, { method: 'PUT', headers: h, body: bad })).status).toBe(400);
-    const good = sealChunk(key, id, UPLOAD_BASE, 0, true, Buffer.from('hello'));
+    const good = sealChunk(upKey, id, UPLOAD_BASE, 0, true, Buffer.from('hello'));
     expect(await (await fetch(`${base}/l/${id}/api/offers/${oid}/0?offset=0`, { method: 'PUT', headers: h, body: good })).json()).toEqual({ received: 5 });
     expect(readFileSync(join(d, 'inbox', 'back.txt'), 'utf8')).toBe('hello');
   });

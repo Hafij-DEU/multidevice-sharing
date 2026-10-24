@@ -55,7 +55,7 @@ import { syncRound } from './sync/client.ts';
 import { ignored as syncIgnored } from './sync/ignore.ts';
 import { syncRoutes } from './sync/server.ts';
 import { MAX_SYNC_FOLDERS, SyncStore, defaultSyncName, validSyncName, type SyncConfig, type SyncFolderConfig } from './sync/store.ts';
-import { writeFileAtomic } from './trust.ts';
+import { pairingCode, writeFileAtomic } from './trust.ts';
 import { DEFAULT_MESH_PORT, Discovery, MAX_ALIAS_CHARS, type Announce, type DiscoveryOptions, type PeerInfo } from './discovery.ts';
 import { deviceIdOf, loadOrCreateIdentity, type Identity } from './identity.ts';
 import { Inbox } from './inbox.ts';
@@ -1145,12 +1145,36 @@ export class Engine extends EventEmitter {
    * device id and public key from the certificate it presents, adds it to the trust store under
    * `alias` and keeps it as a manual peer (also after a restart). The other side must pair back.
    */
-  async pairManual(host: string, port: number, alias: string): Promise<TrustedDevice> {
+  /**
+   * Looks at the device at host:port without trusting it: its id, its name, and the pairing code to
+   * compare with what that device shows (both compute it from the two ids).
+   */
+  async pairProbe(host: string, port: number): Promise<{ deviceId: string; alias: string; code: string }> {
+    const r = this.requireRunning();
+    if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error(`pair: invalid port ${String(port)}`);
+    const deviceId = deviceIdOf(await fetchPeerCert(host, port, PAIR_TIMEOUT_MS));
+    if (deviceId === this.identity.deviceId) throw new Error('pair: that is this device; you cannot pair with yourself');
+    await r.discovery.probe(host, port, { timeoutMs: PAIR_TIMEOUT_MS }).catch(() => {});
+    const alias = r.discovery.peers().find((p) => p.deviceId === deviceId)?.alias ?? host;
+    return { deviceId, alias, code: pairingCode(this.identity.deviceId, deviceId) };
+  }
+
+  /** The pairing code with a device (the same number that device shows for this one). */
+  pairingCode(deviceId: string): string {
+    return pairingCode(this.identity.deviceId, deviceId);
+  }
+
+  /**
+   * Trusts the device at host:port. `expectDeviceId`: the device whose pairing code the user checked
+   * (pairProbe); a different certificate answering now is refused.
+   */
+  async pairManual(host: string, port: number, alias: string, expectDeviceId?: string): Promise<TrustedDevice> {
     const r = this.requireRunning();
     if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error(`pair: invalid port ${String(port)}`);
     const der = await fetchPeerCert(host, port, PAIR_TIMEOUT_MS);
     const deviceId = deviceIdOf(der);
     if (deviceId === this.identity.deviceId) throw new Error('pair: that is this device; you cannot pair with yourself');
+    if (expectDeviceId !== undefined && deviceId !== expectDeviceId) throw new Error('pair: another device answered at that address than the one whose code you checked');
     const publicKeyPem = new X509Certificate(der).publicKey.export({ type: 'spki', format: 'pem' }) as string;
 
     // Enter it in discovery as a manual peer; the probe derives the id from the certificate again,

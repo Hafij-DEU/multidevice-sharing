@@ -9,12 +9,12 @@ import type { TLSSocket } from 'node:tls';
 import WebSocket, { type RawData } from 'ws';
 import type { MeshRequest, MeshResponse } from '../api/handler.ts';
 import { deviceIdOf, type Identity } from '../identity.ts';
-import { signDomain, verifyDomain } from '../mesh/canonical.ts';
+import { canonicalJson, signDomain, verifyDomain } from '../mesh/canonical.ts';
 import { ReplayGuard, decodeFrame, encodeFrame, openEnvelope, sealEnvelope, type Envelope } from '../mesh/envelope.ts';
 import type { MembershipStore } from '../mesh/members.ts';
 import { verifySigned, type SignedMembership } from '../mesh/membership.ts';
 import type { Invite } from '../mesh/invite.ts';
-import { CLOSE_REVOKED, HUB_AUTH_DOMAIN, HUB_PATH, MAX_FRAME_BYTES, type DirectoryEntry, type LanAddr } from './server.ts';
+import { CLOSE_REVOKED, HUB_AUTH_DOMAIN, HUB_CTL_DOMAIN, HUB_PATH, MAX_FRAME_BYTES, type DirectoryEntry, type LanAddr } from './server.ts';
 
 export const DEFAULT_BACKOFF_MS: readonly number[] = Object.freeze([1000, 2000, 5000, 10000, 30000, 60000]);
 export const DEFAULT_PING_MS = 240_000;
@@ -140,14 +140,23 @@ export class HubClient extends EventEmitter {
   /** Lets the hub enforce an invite this device created, so it can be redeemed over the hub. */
   registerInvite(i: Invite, uses = 1): boolean {
     const ttlMs = Math.max(0, i.expiresAt - Date.now());
-    return this.sendControl({ t: 'invite', secret: i.secret.toString('base64url'), ttlMs, ...(uses > 1 ? { uses } : {}) });
+    return this.sendControl(this.#signed({ t: 'invite', secret: i.secret.toString('base64url'), ttlMs, ...(uses > 1 ? { uses } : {}) }));
+  }
+
+  /**
+   * Control messages that change the mesh (invite, join) are signed with this device's key, so a
+   * party that terminates TLS in front of the hub (a tunnel, a proxy) cannot inject them.
+   */
+  #signed(m: Record<string, unknown>): Record<string, unknown> {
+    const body = { ...m, ts: Date.now() };
+    return { ...body, sig: signDomain(HUB_CTL_DOMAIN, canonicalJson(body), this.#o.id.privateKey) };
   }
 
   /**
    * Asks the hub to sign `newMember` into the mesh (this device already admitted it with a QR
    * invite). Resolves with the new list; rejects if the hub refuses or does not answer in time.
    */
-  requestJoin(newMember: { deviceId: string; alias: string; publicKeyPem: string }, timeoutMs = 10_000): Promise<SignedMembership> {
+  requestJoin(newMember: { deviceId: string; alias: string; publicKeyPem: string; cert: string }, timeoutMs = 10_000): Promise<SignedMembership> {
     const reqId = randomBytes(9).toString('base64url');
     return new Promise((resolve, reject) => {
       const onControl = (m: Record<string, unknown>) => {
@@ -165,7 +174,7 @@ export class HubClient extends EventEmitter {
         this.off('control', onControl);
       };
       this.on('control', onControl);
-      if (!this.sendControl({ t: 'join', reqId, newMember })) {
+      if (!this.sendControl(this.#signed({ t: 'join', reqId, newMember }))) {
         done();
         reject(new HubOfflineError());
       }

@@ -79,6 +79,34 @@ public class EngineTest {
     }
 
     @Test
+    public void pairingCodeMatchesTheNodeEngine() {
+        // vectors from packages/core pairingCode()
+        assertEquals("719 208", io.github.hafijbge.meshdrop.engine.net.TrustStore.pairingCode("a".repeat(52), "b".repeat(52)));
+        assertEquals("719 208", io.github.hafijbge.meshdrop.engine.net.TrustStore.pairingCode("b".repeat(52), "a".repeat(52)));
+        assertEquals("017 909", io.github.hafijbge.meshdrop.engine.net.TrustStore.pairingCode("zz9", "aa1"));
+    }
+
+    @Test
+    public void pairProbeTrustsNothingAndAnotherDeviceAnsweringIsRefused() throws Exception {
+        Engine e = engine(null);
+        try (NodeListen pc = NodeListen.start(tmp.newFolder())) {
+            Engine.PairProbe p = e.pairProbe("127.0.0.1", pc.port);
+            assertEquals(pc.deviceId, p.deviceId);
+            assertEquals(e.pairingCode(pc.deviceId), p.code);
+            assertTrue(e.devices().stream().noneMatch(x -> x.deviceId.equals(pc.deviceId) && x.trusted));
+            try {
+                e.pairManual("127.0.0.1", pc.port, "pc", "someone-else");
+                throw new AssertionError("paired with an unexpected device");
+            } catch (java.io.IOException expected) {
+                assertTrue(expected.getMessage().contains("another device"));
+            }
+            assertTrue(e.devices().stream().noneMatch(x -> x.deviceId.equals(pc.deviceId) && x.trusted));
+            e.pairManual("127.0.0.1", pc.port, "pc", p.deviceId);
+            assertTrue(e.devices().stream().anyMatch(x -> x.deviceId.equals(pc.deviceId) && x.trusted));
+        }
+    }
+
+    @Test
     public void unpairForgetsTheDeviceAndPairReTrustsIt() throws Exception {
         Engine e = engine(null);
         try (NodeListen pc = NodeListen.start(tmp.newFolder())) {

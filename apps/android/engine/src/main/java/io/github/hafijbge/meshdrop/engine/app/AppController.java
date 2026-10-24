@@ -900,9 +900,24 @@ public final class AppController {
     }
 
     public void addByAddress(String host, int port, String alias) throws IOException {
+        addByAddress(host, port, alias, null);
+    }
+
+    public Map<String, Object> pairProbe(String host, int port) throws IOException {
+        if (host == null || host.trim().isEmpty()) throw new IllegalArgumentException("Enter an address.");
+        Engine.PairProbe p = e().pairProbe(host.trim(), port);
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("deviceId", p.deviceId);
+        m.put("alias", p.alias);
+        m.put("code", p.code);
+        return m;
+    }
+
+    /** {@code expectDeviceId}: the device whose pairing code the user checked (null: none). */
+    public void addByAddress(String host, int port, String alias, String expectDeviceId) throws IOException {
         if (host == null || host.trim().isEmpty()) throw new IllegalArgumentException("Enter an address.");
         String a = alias == null || alias.trim().isEmpty() ? host.trim() : alias;
-        e().pairManual(host.trim(), port, a);
+        e().pairManual(host.trim(), port, a, expectDeviceId);
         changed();
     }
 
@@ -1012,8 +1027,10 @@ public final class AppController {
             case "removeOutbox":
                 removeOutbox(str(a0));
                 return null;
+            case "pairProbe":
+                return pairProbe(str(a0), integer(args.get(1)));
             case "addByAddress":
-                addByAddress(str(a0), integer(args.get(1)), str(args.get(2)));
+                addByAddress(str(a0), integer(args.get(1)), str(args.get(2)), args.size() > 3 && args.get(3) != null ? str(args.get(3)) : null);
                 return null;
             case "scanSubnet":
                 return (long) scanSubnet();

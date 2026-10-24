@@ -32,6 +32,10 @@ test('a nearby device pairs with one click on its card', async () => {
     const card = A.win.locator(`.device-card[data-device="${b.self.deviceId}"]`);
     await expect(card.getByRole('button', { name: 'Pair' })).toBeVisible();
     await card.getByRole('button', { name: 'Pair' }).click();
+    // The pairing code: the same number B computes for A; nothing is trusted before the user confirms.
+    const code = await B.win.evaluate(async ([p]) => (await window.meshdrop.pairProbe('127.0.0.1', p!)).code, [(await stateOf(A.win)).self.port]);
+    await expect(A.win.getByLabel('Pairing code')).toHaveText(code);
+    await A.win.getByRole('button', { name: 'Same code, pair' }).click();
     await expect(A.win.getByText(/Paired with/)).toBeVisible();
     await expect(card.getByRole('checkbox')).toBeVisible();
 
@@ -66,6 +70,12 @@ test('pair two apps by address, send a file, see it in the other inbox', async (
     await B.win.getByLabel('Address').fill(`127.0.0.1:${a.self.port}`);
     await B.win.getByLabel('Name').fill('ay');
     await B.win.getByRole('button', { name: 'Add by address' }).click();
+    // Both screens show the same pairing code; each side confirms it.
+    const code = await A.win.getByLabel('Pairing code').innerText();
+    expect(code).toMatch(/^\d{3} \d{3}$/);
+    await expect(B.win.getByLabel('Pairing code')).toHaveText(code);
+    await A.win.getByRole('button', { name: 'Same code, pair' }).click();
+    await B.win.getByRole('button', { name: 'Same code, pair' }).click();
 
     const card = A.win.locator(`.device-card[data-device="${b.self.deviceId}"]`);
     await expect(card).toBeVisible();

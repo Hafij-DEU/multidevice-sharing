@@ -1099,6 +1099,57 @@ public final class Engine {
      * must pair back). The address is kept in manual-peers.json and re-probed on every start.
      */
     public TrustStore.Device pairManual(String host, int port, String alias) throws IOException {
+        return pairManual(host, port, alias, null);
+    }
+
+    /** Pairing details of the device at host:port, without trusting it. */
+    public static final class PairProbe {
+        public final String deviceId;
+        public final String alias;
+        public final String code;
+
+        PairProbe(String deviceId, String alias, String code) {
+            this.deviceId = deviceId;
+            this.alias = alias;
+            this.code = code;
+        }
+    }
+
+    /**
+     * Looks at the device at host:port without trusting it: its id, its name, and the pairing code to
+     * compare with what that device shows (both compute it from the two ids).
+     */
+    public PairProbe pairProbe(String host, int port) throws IOException {
+        Discovery d = requireRunning();
+        if (port < 1 || port > 65535) throw new IOException("pair: invalid port " + port);
+        SSLSocket s = Tls.connect(Tls.probeClient(), host, port, PAIR_TIMEOUT_MS);
+        String deviceId;
+        try {
+            deviceId = Identity.deviceIdOf(Tls.peerCertDer(s));
+        } finally {
+            s.close();
+        }
+        if (deviceId.equals(identity.deviceId())) throw new IOException("pair: that is this device; you cannot pair with yourself");
+        String alias = host;
+        try {
+            Discovery.PeerInfo p = d.probe(host, port, PAIR_TIMEOUT_MS);
+            if (p.deviceId.equals(deviceId)) alias = p.alias;
+        } catch (IOException ignored) {
+            // the name is only a label here
+        }
+        return new PairProbe(deviceId, alias, TrustStore.pairingCode(identity.deviceId(), deviceId));
+    }
+
+    /** The pairing code with a device (the same number that device shows for this one). */
+    public String pairingCode(String deviceId) {
+        return TrustStore.pairingCode(identity.deviceId(), deviceId);
+    }
+
+    /**
+     * Same, and {@code expectDeviceId} (may be null) is the device whose pairing code the user checked
+     * (pairProbe): a different certificate answering now is refused.
+     */
+    public TrustStore.Device pairManual(String host, int port, String alias, String expectDeviceId) throws IOException {
         Discovery d = requireRunning();
         if (port < 1 || port > 65535) throw new IOException("pair: invalid port " + port);
         SSLSocket s = Tls.connect(Tls.probeClient(), host, port, PAIR_TIMEOUT_MS);
@@ -1110,6 +1161,9 @@ public final class Engine {
         }
         String deviceId = Identity.deviceIdOf(der);
         if (deviceId.equals(identity.deviceId())) throw new IOException("pair: that is this device; you cannot pair with yourself");
+        if (expectDeviceId != null && !deviceId.equals(expectDeviceId)) {
+            throw new IOException("pair: another device answered at that address than the one whose code you checked");
+        }
         String pem;
         try {
             pem = TrustStore.pem(io.github.hafijbge.meshdrop.engine.identity.X509.publicKey(der));

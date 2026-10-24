@@ -315,7 +315,8 @@ function wireIpc(): void {
   handle('sendClipboard', (_e, t) => ctl().sendClipboard(targets(t)));
   handle('resumeOutbox', (_e) => ctl().resumeOutbox());
   handle('removeOutbox', (_e, id) => ctl().removeOutbox(str(id, 128)));
-  handle('addByAddress', (_e, h, p, a) => ctl().addByAddress(str(h, 255), int(p), str(a, 64)));
+  handle('pairProbe', (_e, h, p) => ctl().pairProbe(str(h, 255), int(p)));
+  handle('addByAddress', (_e, h, p, a, id) => ctl().addByAddress(str(h, 255), int(p), str(a, 64), id === undefined ? undefined : str(id, 128)));
   handle('scanSubnet', (_e) => ctl().scanSubnet());
   handle('hubInit', (_e, u) => ctl().hubInit(strs(u, 16)));
   handle('setHubUrls', (_e, u) => ctl().setHubUrls(strs(u, 16)));

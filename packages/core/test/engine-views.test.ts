@@ -290,3 +290,22 @@ describe('M3 review fixes: client-only discovery', () => {
     expect(S.e.peers().some((p) => p.deviceId === C.e.identity.deviceId)).toBe(false);
   }, 20_000);
 });
+
+describe('Engine pairing code (security review #3)', () => {
+  it('probe shows the same code on both sides and trusts nothing; a different device answering is refused', async () => {
+    const A = await make({ alias: 'ay' });
+    await A.e.start();
+    const B = await make({ alias: 'bee' });
+    await B.e.start();
+    const C = await make({ alias: 'sea' });
+    await C.e.start();
+    const p = await A.e.pairProbe('127.0.0.1', B.e.port);
+    expect(p.deviceId).toBe(B.e.identity.deviceId);
+    expect(p.code).toBe(B.e.pairingCode(A.e.identity.deviceId));
+    expect(A.e.devices().find((d) => d.deviceId === B.e.identity.deviceId)?.trusted ?? false).toBe(false);
+    await expect(A.e.pairManual('127.0.0.1', C.e.port, 'bee', p.deviceId)).rejects.toThrow(/another device/);
+    expect(A.e.devices().find((d) => d.deviceId === C.e.identity.deviceId)?.trusted ?? false).toBe(false);
+    await A.e.pairManual('127.0.0.1', B.e.port, 'bee', p.deviceId);
+    expect(A.e.devices().find((d) => d.deviceId === B.e.identity.deviceId)?.trusted).toBe(true);
+  });
+});

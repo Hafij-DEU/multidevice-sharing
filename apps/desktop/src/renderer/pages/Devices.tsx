@@ -83,6 +83,7 @@ export function Devices({ state, run }: { state: AppState; run: Run }) {
   const [text, setText] = useState<string | null>(null);
   const [addr, setAddr] = useState('');
   const [name, setName] = useState('');
+  const [pairing, setPairing] = useState<{ host: string; port: number; name: string; deviceId: string; alias: string; code: string } | null>(null);
   const [busy, setBusy] = useState(false);
   const [adding, setAdding] = useState(state.devices.every((d) => !d.trusted && d.role !== 'localsend'));
 
@@ -132,7 +133,23 @@ export function Devices({ state, run }: { state: AppState; run: Run }) {
       await run(() => Promise.reject(new Error('Enter an address like 192.168.1.20 or 192.168.1.20:53318.')));
       return;
     }
-    const ok = await run(() => window.meshdrop.addByAddress(a.host, a.port, name.trim()), 'Device added');
+    await startPair(a.host, a.port, name.trim());
+  };
+
+  /** Shows the pairing code first: trust is added only after the user saw the same code on both screens. */
+  const startPair = async (host: string, port: number, alias: string) => {
+    const p = await run(() => window.meshdrop.pairProbe(host, port));
+    if (p !== undefined) setPairing({ host, port, name: alias, ...p });
+  };
+  const confirmPair = async () => {
+    if (!pairing) return;
+    const { host, port, name: alias, deviceId } = pairing;
+    const who = alias || pairing.alias;
+    setPairing(null);
+    const ok = await run(
+      () => window.meshdrop.addByAddress(host, port, who, deviceId),
+      `Paired with ${who}. Now press Pair for this ${android ? 'phone' : 'PC'} on ${who} too: both sides must trust each other.`,
+    );
     if (ok !== undefined) {
       setAddr('');
       setName('');
@@ -221,11 +238,7 @@ export function Devices({ state, run }: { state: AppState; run: Run }) {
                 checked={false}
                 {...(d.host && d.port
                   ? {
-                      onPair: () =>
-                        void run(
-                          () => window.meshdrop.addByAddress(d.host!, d.port!, d.alias),
-                          `Paired with ${d.alias}. Now press Pair for this ${android ? 'phone' : 'PC'} on ${d.alias} too: both sides must trust each other.`,
-                        ),
+                      onPair: () => void startPair(d.host!, d.port!, d.alias),
                     }
                   : {})}
               />
@@ -252,6 +265,24 @@ export function Devices({ state, run }: { state: AppState; run: Run }) {
           </button>
         </div>
       </details>
+      {pairing && (
+        <div className="modal-backdrop">
+          <div role="dialog" aria-modal="true" aria-labelledby="pair-title" className="modal">
+            <h2 id="pair-title">Pair with {pairing.name || pairing.alias}?</h2>
+            <p className="pair-code" aria-label="Pairing code">{pairing.code}</p>
+            <p className="muted">
+              Press Pair for this {android ? 'phone' : 'PC'} on {pairing.name || pairing.alias} too. Pair only if it shows the same code. A different code means
+              another device is in between.
+            </p>
+            <div className="row">
+              <button className="primary" onClick={() => void confirmPair()}>
+                Same code, pair
+              </button>
+              <button onClick={() => setPairing(null)}>Cancel</button>
+            </div>
+          </div>
+        </div>
+      )}
     </section>
   );
 }

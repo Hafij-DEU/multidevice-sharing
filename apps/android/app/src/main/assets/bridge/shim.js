@@ -39,7 +39,7 @@
   };
   for (const m of [
     'getState', 'pickFiles', 'pickFolder', 'pickSavePath', 'pickOpenPath', 'pickItems', 'scanQr', 'send', 'sendClipboard', 'resumeOutbox',
-    'removeOutbox', 'addByAddress', 'scanSubnet', 'hubInit', 'setHubUrls', 'createInvite', 'join', 'revoke', 'exportRecovery',
+    'removeOutbox', 'pairProbe', 'addByAddress', 'scanSubnet', 'hubInit', 'setHubUrls', 'createInvite', 'join', 'revoke', 'exportRecovery',
     'importRecovery', 'setSettings', 'openInbox', 'reveal', 'registerClipboardShortcut', 'openConfigFolder', 'takeSharedItems',
     'keepAliveAction', 'guestStart', 'guestEnd', 'guestShare', 'guestUnshare', 'guestAccept', 'guestReject', 'openFile', 'thumb', 'unpair', 'syncPut', 'syncRemove', 'syncNow', 'backupSet', 'backupPermission',
   ]) {

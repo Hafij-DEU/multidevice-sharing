@@ -131,4 +131,22 @@ public final class TrustStore implements TrustSource {
         Atomic.write(file, (Json.stringify(root) + "\n").getBytes(StandardCharsets.UTF_8));
         loadedStamp = stamp();
     }
+
+    /**
+     * The pairing code both devices show (6 digits, "123 456"): the same on both sides only when each
+     * talks to the other and not to someone in between. Same as the Node engine's pairingCode.
+     */
+    public static String pairingCode(String a, String b) {
+        String x = a.compareTo(b) <= 0 ? a : b;
+        String y = x == a ? b : a;
+        byte[] h;
+        try {
+            h = java.security.MessageDigest.getInstance("SHA-256").digest(("meshdrop-pair-v1\0" + x + "\0" + y).getBytes(StandardCharsets.UTF_8));
+        } catch (java.security.NoSuchAlgorithmException e) {
+            throw new IllegalStateException(e);
+        }
+        long n = (((h[0] & 0xffL) << 24) | ((h[1] & 0xffL) << 16) | ((h[2] & 0xffL) << 8) | (h[3] & 0xffL)) % 1_000_000L;
+        String s = String.format(java.util.Locale.ROOT, "%06d", n);
+        return s.substring(0, 3) + " " + s.substring(3);
+    }
 }

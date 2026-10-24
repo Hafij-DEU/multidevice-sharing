@@ -697,9 +697,14 @@ export class AppController extends EventEmitter {
     this.#changed();
   }
 
-  async addByAddress(host: string, port: number, alias: string): Promise<void> {
+  async pairProbe(host: string, port: number): Promise<{ deviceId: string; alias: string; code: string }> {
     if (host.trim() === '') throw new Error('Enter an address.');
-    await this.#e.pairManual(host.trim(), port, alias.trim() === '' ? host.trim() : alias);
+    return this.#e.pairProbe(host.trim(), port);
+  }
+
+  async addByAddress(host: string, port: number, alias: string, expectDeviceId?: string): Promise<void> {
+    if (host.trim() === '') throw new Error('Enter an address.');
+    await this.#e.pairManual(host.trim(), port, alias.trim() === '' ? host.trim() : alias, expectDeviceId);
     this.#changed();
   }
 
