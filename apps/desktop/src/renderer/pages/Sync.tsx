@@ -25,14 +25,18 @@ export function Sync({ state, run }: { state: AppState; run: Run }) {
       <h2>Folder</h2>
       {s.folder === '' ? (
         <div className="row">
-          <button className="primary" onClick={() => void set(s.suggested, [...ticked])}>
-            Use {s.suggested}
+          {s.suggested !== '' && (
+            <button className="primary" onClick={() => void set(s.suggested, [...ticked])}>
+              Use {s.suggested}
+            </button>
+          )}
+          <button className={s.suggested === '' ? 'primary' : ''} onClick={choose}>
+            {s.suggested === '' ? 'Choose a folder…' : 'Choose another…'}
           </button>
-          <button onClick={choose}>Choose another…</button>
         </div>
       ) : (
         <div className="row">
-          <code className="grow">{s.folder}</code>
+          <code className="grow">{s.folder.startsWith('content://') ? decodeURIComponent(s.folder.split('/tree/')[1] ?? s.folder).replace(/^primary:/, '') : s.folder}</code>
           {window.meshdrop.openSyncFolder && <button onClick={() => void run(() => window.meshdrop.openSyncFolder!())}>Open</button>}
           <button onClick={choose}>Change…</button>
           <button onClick={() => void set('', [...ticked])}>Turn off</button>

@@ -286,6 +286,9 @@ public final class AppController {
         Map<String, Object> guest = x.guestState();
         if (guestQr != null && Boolean.TRUE.equals(guest.get("active"))) guest.put("qrSvg", guestQr);
         m.put("guest", guest);
+        Map<String, Object> sync = x.syncStatus();
+        sync.put("suggested", ""); // Android: the folder is always picked (system folder picker)
+        m.put("sync", sync);
         platform.decorate(m);
         return m;
     }
@@ -390,6 +393,11 @@ public final class AppController {
             else if (ev.source.equals("receiver")) onReceiver(ev);
             else if (ev.source.equals("mesh")) onMesh(ev);
             else if (ev.source.equals("guest")) onGuest(ev);
+            else if (ev.source.equals("sync") && ev.type.equals("round") && ev.data.get("conflicts") instanceof Long && (Long) ev.data.get("conflicts") > 0
+                    && settings.get().notifications) {
+                platform.notify("Sync conflict", "A file changed on both " + aliasOf((String) ev.data.get("partner"))
+                        + " and this phone. Both versions are kept: look for \"(conflict from …)\" in the sync folder.", null);
+            }
         } catch (RuntimeException ignored) {
             // never let a bookkeeping error break the engine thread
         }
@@ -851,6 +859,17 @@ public final class AppController {
                 return platform.thumbnail(str(a0));
             case "join":
                 return join(str(a0));
+            case "syncSet": {
+                List<String> ps = new ArrayList<>();
+                for (Object p : (List<Object>) args.get(1)) ps.add(str(p));
+                e().syncSet(str(a0), ps);
+                changed();
+                return null;
+            }
+            case "syncNow":
+                e().syncNow();
+                changed();
+                return null;
             case "guestStart": {
                 Map<String, Object> g = e().guestStart(settings.get().guestMinutes, 0);
                 guestQr = (String) g.get("qrSvg");

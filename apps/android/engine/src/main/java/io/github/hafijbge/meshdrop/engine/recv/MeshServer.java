@@ -57,6 +57,13 @@ public final class MeshServer {
         public LongSupplier meshVersion = () -> 0;
         /** The signed membership list served to trusted peers by GET /mesh/v1/membership (null: none). */
         public java.util.function.Supplier<Map<String, Object>> membership = () -> null;
+        /** Folder sync routes (sync/..., trusted peers, LAN only: never through the hub). Null: 404. */
+        public SyncHandler sync;
+    }
+
+    /** Folder sync routes (sync/SyncRoutes). `seg` is the path after sync/. */
+    public interface SyncHandler {
+        Reply handle(String peer, String method, String[] seg, Map<String, String> query) throws IOException;
     }
 
     /** Receiver events: {type, sessionId, from, …} as in docs/protocol.md "Receiver events". */
@@ -213,9 +220,9 @@ public final class MeshServer {
             }
             if (req == null) return;
             deadline.cancel(false);
-            Reply r = dispatch(req, peer);
+            Reply r = dispatch(req, peer, true);
             if (r == null) return;
-            reply(out, r.status, r.body);
+            Http.writeResponse(out, r.status, r.body, r.contentType);
         } catch (IOException e) {
             // client gone or handshake failed
         } finally {
@@ -223,14 +230,20 @@ public final class MeshServer {
         }
     }
 
-    /** A response from the receiver API: `body` is JSON (null for 204). */
+    /** A response from the receiver API: `body` is JSON (null for 204), or raw bytes of `contentType`. */
     public static final class Reply {
         public final int status;
         public final byte[] body;
+        public final String contentType;
 
         public Reply(int status, byte[] body) {
+            this(status, body, "application/json");
+        }
+
+        public Reply(int status, byte[] body, String contentType) {
             this.status = status;
             this.body = body;
+            this.contentType = contentType;
         }
     }
 
@@ -241,12 +254,24 @@ public final class MeshServer {
     public Reply handle(String peer, String method, String path, String contentType, byte[] body) {
         Map<String, String> h = new LinkedHashMap<>();
         if (contentType != null) h.put("content-type", contentType);
-        Reply r = dispatch(Http.requestOf(method, path, h, body), peer);
+        Reply r = dispatch(Http.requestOf(method, path, h, body), peer, false);
         return r != null ? r : new Reply(500, err("internal"));
     }
 
     /** Routes one request and maps every failure to its status; null: the client went away mid-read. */
-    private Reply dispatch(Http.Request req, String peer) {
+    private Reply dispatch(Http.Request req, String peer, boolean lan) {
+        String target = req.path == null ? "" : req.path;
+        int qi = target.indexOf('?');
+        String path = qi < 0 ? target : target.substring(0, qi);
+        if (path.startsWith(PREFIX + "sync/")) {
+            if (!lan || opts.sync == null) return new Reply(404, err("not-found"));
+            if (peer == null || !trust.isTrusted(peer)) return new Reply(403, err("untrusted"));
+            try {
+                return opts.sync.handle(peer, req.method, path.substring((PREFIX + "sync/").length()).split("/", -1), query(qi < 0 ? "" : target.substring(qi + 1)));
+            } catch (IOException | RuntimeException e) {
+                return new Reply(500, err("internal"));
+            }
+        }
         int[] status = new int[1];
         byte[] body;
         try {
@@ -372,6 +397,22 @@ public final class MeshServer {
             return null;
         }
         throw new HttpError(404, "not-found");
+    }
+
+    private static Map<String, String> query(String q) {
+        Map<String, String> m = new LinkedHashMap<>();
+        for (String kv : q.split("&")) {
+            if (kv.isEmpty()) continue;
+            int eq = kv.indexOf('=');
+            try {
+                String k = java.net.URLDecoder.decode(eq < 0 ? kv : kv.substring(0, eq), "UTF-8");
+                String v = java.net.URLDecoder.decode(eq < 0 ? "" : kv.substring(eq + 1), "UTF-8");
+                if (!m.containsKey(k)) m.put(k, v);
+            } catch (IOException | IllegalArgumentException e) {
+                // a malformed pair is skipped
+            }
+        }
+        return m;
     }
 
     private static String sessionParam(String s) throws HttpError {

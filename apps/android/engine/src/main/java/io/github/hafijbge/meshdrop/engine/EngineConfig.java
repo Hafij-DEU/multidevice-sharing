@@ -40,6 +40,13 @@ public final class EngineConfig {
     /** Look for a device at the LAN addresses the hub's directory lists for it before relaying (tests turn it off to force the relay). */
     public boolean probeDirectoryAddrs = true;
     public long[] hubBackoffMs = io.github.hafijbge.meshdrop.engine.hub.HubClient.DEFAULT_BACKOFF_MS;
+    /** Opens the synced folder named in the sync config (a path; Android also takes a SAF tree URI). */
+    public SyncFolders syncFolders = folder -> new io.github.hafijbge.meshdrop.engine.sync.PathSyncFolder(java.nio.file.Paths.get(folder));
+
+    public interface SyncFolders {
+        io.github.hafijbge.meshdrop.engine.sync.SyncFolder open(String folder) throws java.io.IOException;
+    }
+
     /** The LAN guest server's port (plain HTTP; 0: any free port, tests); -1: no guest server. */
     public int guestPort = 53320;
 
