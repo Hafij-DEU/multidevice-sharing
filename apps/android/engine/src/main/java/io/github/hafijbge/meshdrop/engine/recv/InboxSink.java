@@ -22,4 +22,7 @@ public interface InboxSink {
 
     /** Reads a landed file (crash recovery verifies its hash), or null if there is none. */
     InputStream open(String rel) throws IOException;
+
+    /** How the app refers to a landed file locally (an absolute path, or a content URI on Android). */
+    String locate(String rel);
 }

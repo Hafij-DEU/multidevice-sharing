@@ -73,4 +73,9 @@ public final class DirectorySink implements InboxSink {
         File f = path(rel).toFile();
         return f.isFile() && !Files.isSymbolicLink(f.toPath()) ? new FileInputStream(f) : null;
     }
+
+    @Override
+    public String locate(String rel) {
+        return path(rel).toAbsolutePath().toString();
+    }
 }

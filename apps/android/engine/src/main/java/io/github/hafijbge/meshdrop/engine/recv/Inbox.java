@@ -519,6 +519,11 @@ public final class Inbox {
         }
     }
 
+    /** The local reference for a landed file (see InboxSink.locate). */
+    public String locate(String rel) {
+        return sink.locate(rel);
+    }
+
     // ---- tombstones, pruning, cancel -------------------------------------------------------------
 
     public void markFinished(String sid, String from, List<String> files) throws IOException {
