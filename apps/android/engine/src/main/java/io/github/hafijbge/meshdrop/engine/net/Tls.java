@@ -159,6 +159,31 @@ public final class Tls {
         });
     }
 
+    private static final java.util.Map<String, SSLContext> CA = new java.util.concurrent.ConcurrentHashMap<>();
+
+    /** Our device certificate as the client cert; the server is checked against the platform's CAs. */
+    public static SSLContext caClient(Identity me) {
+        return CA.computeIfAbsent(me.deviceId(), k -> {
+            try {
+                javax.net.ssl.TrustManagerFactory f = javax.net.ssl.TrustManagerFactory.getInstance(javax.net.ssl.TrustManagerFactory.getDefaultAlgorithm());
+                f.init((java.security.KeyStore) null);
+                return context(new DeviceKeyManager(me), f.getTrustManagers()[0]);
+            } catch (GeneralSecurityException e) {
+                throw new IllegalStateException(e);
+            }
+        });
+    }
+
+    /** As connect(), then the certificate must name `host` (CA-validated links only). */
+    public static SSLSocket connectVerified(SSLContext ctx, String host, int port, int timeoutMs) throws IOException {
+        SSLSocket s = connect(ctx, host, port, timeoutMs);
+        if (!javax.net.ssl.HttpsURLConnection.getDefaultHostnameVerifier().verify(host, s.getSession())) {
+            s.close();
+            throw new javax.net.ssl.SSLPeerUnverifiedException("certificate does not match " + host);
+        }
+        return s;
+    }
+
     public static SSLContext probeClient() {
         SSLContext c = probe;
         if (c == null) probe = c = context(null, new AnyCert());
