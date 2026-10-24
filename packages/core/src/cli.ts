@@ -23,6 +23,8 @@ import {
   type SendResult,
 } from './engine.ts';
 import { DEFAULT_MESH_PORT, type DeviceType } from './discovery.ts';
+import { DEFAULT_INGRESS_PORT } from './hub/server.ts';
+import { ReachManager } from './reach/manager.ts';
 import { configDir } from './paths.ts';
 import { installStopSignals } from './signals.ts';
 import { writeFileAtomic } from './trust.ts';
@@ -42,6 +44,8 @@ commands:
   hub init [--url wss://...]...         make this device the hub of a new mesh
   hub status                            this device's role, list version, members and hub URLs
   hub revoke <deviceId-prefix>          remove a device from the mesh for good (hub only)
+  hub reach [status|detect|off|tailscale|cloudflare <host>|port-forward <name> --token-file F [--manual]]
+                                        how this hub is reached from the internet (applied by listen)
   hub recovery-export <file>            save the mesh root key + device list, passphrase-encrypted
   hub recovery-import <file>            restore a mesh on this (fresh) device; it becomes the hub
   invite                                print a single-use QR invite (valid 5 minutes)
@@ -145,6 +149,8 @@ async function main(argv: string[]): Promise<number> {
       days: { type: 'string' },
       'max-downloads': { type: 'string' },
       'allow-uploads': { type: 'boolean' },
+      'token-file': { type: 'string' },
+      manual: { type: 'boolean' },
       help: { type: 'boolean', short: 'h' },
     },
   });
@@ -184,7 +190,7 @@ async function main(argv: string[]): Promise<number> {
     case 'outbox':
       return cmdOutbox(base, args);
     case 'hub':
-      return cmdHub(base, args, values.url ?? [], values['passphrase-file']);
+      return args[0] === 'reach' ? cmdReach(base, args.slice(1), values) : cmdHub(base, args, values.url ?? [], values['passphrase-file']);
     case 'invite':
       noArgs('invite', args);
       return cmdInvite(base);
@@ -644,6 +650,51 @@ async function cmdMembers(base: EngineOptions): Promise<number> {
     out(`${printable(m.alias).padEnd(20)} ${m.role.padEnd(6)} ${short(m.deviceId)}${me}`);
   }
   return 0;
+}
+
+// ---- internet reach (M5c) -----------------------------------------------------------------------
+
+async function cmdReach(base: EngineOptions, args: string[], values: { 'token-file'?: string; manual?: boolean }): Promise<number> {
+  const home = base.home!;
+  const m = new ReachManager({ home, ingressPort: () => DEFAULT_INGRESS_PORT, attachPublic: () => {}, publish: async () => {} });
+  const [sub, ...rest] = args;
+  const applied = () => out(listenerRunning(home) ? 'saved; restart `meshdrop listen` (or the MeshDrop app) to apply it' : 'saved; `meshdrop listen` applies it');
+  switch (sub ?? 'status') {
+    case 'status': {
+      const c = m.config;
+      out(`mode:  ${c.mode}${c.cloudflareHost ? ` (${printable(c.cloudflareHost)})` : ''}${c.duckdnsDomain ? ` (${printable(c.duckdnsDomain)}.duckdns.org)` : ''}`);
+      out(`token: ${m.status().tokenSet ? 'set' : 'not set'}`);
+      return 0;
+    }
+    case 'detect': {
+      const d = await m.detect();
+      out(`router WAN address: ${d.wanIp ?? 'unknown'}${d.upnp ? ' (UPnP)' : d.natpmp ? ' (NAT-PMP)' : ''}`);
+      out(`public address:     ${d.publicIp ?? 'unknown'}`);
+      out(`suggestion:         ${d.suggestion}`);
+      out(d.reason);
+      return 0;
+    }
+    case 'off':
+    case 'tailscale':
+      m.save({ mode: sub as "off" | "tailscale" });
+      applied();
+      return 0;
+    case 'cloudflare':
+      if (rest.length !== 1) throw new UsageError('hub reach cloudflare: expected <hostname on your Cloudflare domain>');
+      m.save({ mode: 'cloudflare', cloudflareHost: rest[0]! });
+      applied();
+      return 0;
+    case 'port-forward': {
+      if (rest.length !== 1) throw new UsageError('hub reach port-forward: expected <duckdns name> --token-file F');
+      const token = values['token-file'] !== undefined ? readFileSync(values['token-file'], 'utf8').trim() : undefined;
+      if (token === undefined && !m.status().tokenSet) throw new UsageError('hub reach port-forward: --token-file F (your DuckDNS token) is needed once');
+      m.save({ mode: 'port-forward', duckdnsDomain: rest[0]!, mapping: values.manual ? 'manual' : 'auto' }, token !== undefined ? { duckdnsToken: token } : {});
+      applied();
+      return 0;
+    }
+    default:
+      throw new UsageError(`hub reach: unknown subcommand "${sub}"`);
+  }
 }
 
 // ---- internet guest links (M5b) ----------------------------------------------------------------

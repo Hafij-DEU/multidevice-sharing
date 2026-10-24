@@ -1574,6 +1574,10 @@ export class Engine extends EventEmitter {
     return this.reach ? { ...this.reach.status(), detection: this.reach.lastDetection() } : null;
   }
 
+  reachConfig(): ReachConfig {
+    return this.reach?.config ?? { mode: 'off' };
+  }
+
   reachDetect(): Promise<ReturnType<ReachManager['lastDetection']>> {
     if (!this.reach) throw new Error('internet access is set up on the running hub');
     return this.reach.detect();

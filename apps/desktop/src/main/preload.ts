@@ -16,7 +16,7 @@ const api = {
       'pickFiles', 'pickFolder', 'pickSavePath', 'pickOpenPath', 'send', 'sendClipboard', 'resumeOutbox', 'removeOutbox',
       'addByAddress', 'scanSubnet', 'hubInit', 'setHubUrls', 'createInvite', 'join', 'revoke', 'exportRecovery',
       'importRecovery', 'setSettings', 'openInbox', 'reveal', 'registerClipboardShortcut', 'openConfigFolder',
-      'guestStart', 'guestEnd', 'guestShare', 'guestUnshare', 'guestAccept', 'guestReject', 'linkCreate', 'linkRevoke',
+      'guestStart', 'guestEnd', 'guestShare', 'guestUnshare', 'guestAccept', 'guestReject', 'linkCreate', 'linkRevoke', 'reachDetect', 'reachSet',
     ].map((m) => [m, call(m)]),
   ),
 };

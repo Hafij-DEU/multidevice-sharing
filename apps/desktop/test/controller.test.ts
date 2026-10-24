@@ -308,3 +308,35 @@ describe('AppController internet links', () => {
     await expect(A.c.linkCreate({ files: [f], days: 1, allowUploads: false })).rejects.toThrow(/hub/);
   });
 });
+
+describe('AppController internet access', () => {
+  it('turns Tailscale Funnel on for the hub and reports a missing CLI with its fix', async () => {
+    const home = tmpDir();
+    const inbox = join(home, 'inbox');
+    let installed = false;
+    const settings = new SettingsStore(join(home, 'desktop-settings.json'), defaultSettings({ alias: 'hub', inbox, port: 0, discovery: false }));
+    const c = new AppController({
+      home, settings, history: new HistoryStore(join(home, 'desktop-history.json')), platform: fakePlatform(),
+      engineOptions: {
+        hub: { ingressPort: 0 }, guest: { port: 0 },
+        reach: {
+          runner: async (cmd, args) => {
+            if (!installed) return { code: 127, stdout: '', stderr: 'not found' };
+            if (args[0] === 'status') return { code: 0, stdout: JSON.stringify({ BackendState: 'Running', Self: { DNSName: 'hub.tail1.ts.net.' } }), stderr: '' };
+            return { code: 0, stdout: '{}', stderr: '' };
+          },
+        },
+      },
+    });
+    ctls.push(c);
+    await c.start();
+    await c.hubInit([]);
+    await until(() => c.state().reach !== undefined);
+    await expect(c.reachSet({ mode: 'tailscale' })).rejects.toThrow(/tailscale\.com\/download/);
+    installed = true;
+    await c.reachSet({ mode: 'tailscale' });
+    await until(() => c.state().reach?.state === 'on');
+    expect(c.state().reach).toMatchObject({ mode: 'tailscale', url: 'wss://hub.tail1.ts.net/mesh/v1/hub' });
+    expect(c.state().hub.urls).toEqual(['wss://hub.tail1.ts.net/mesh/v1/hub']);
+  });
+});

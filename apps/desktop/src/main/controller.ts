@@ -12,7 +12,7 @@ import { CHUNK_SIZE } from '@meshdrop/core/src/chunk.ts';
 import { Engine, liveListener, type EngineEvent, type EngineOptions, type SendItem } from '@meshdrop/core/src/engine.ts';
 import { loadOrCreateIdentity } from '@meshdrop/core/src/identity.ts';
 import { writeFileAtomic } from '@meshdrop/core/src/trust.ts';
-import type { AppState, DeviceView, GuestView, LinkCreateInput, LinkView, SendItemInput, Settings, TransferView } from '../shared/api.ts';
+import type { AppState, DeviceView, GuestView, LinkCreateInput, LinkView, ReachInput, ReachView, SendItemInput, Settings, TransferView } from '../shared/api.ts';
 import type { HistoryStore } from './history.ts';
 import { SettingsError, type SettingsStore } from './settings.ts';
 
@@ -273,6 +273,7 @@ export class AppController extends EventEmitter {
       members: e.members().map((m) => ({ deviceId: m.deviceId, alias: m.alias, role: m.role, self: m.deviceId === me })),
       guest: this.#guestView(e),
       ...(st.role === 'hub' ? { links: this.#links.map((l) => ({ ...l })) } : {}),
+      ...(this.#reachView(e) ? { reach: this.#reachView(e)! } : {}),
     };
   }
 
@@ -609,6 +610,36 @@ export class AppController extends EventEmitter {
   async guestReject(id: string): Promise<void> {
     await this.#e.guestReject(id);
     this.#changed();
+  }
+
+  // ---- internet reach (hub PC) -------------------------------------------------------------------
+
+  #reachView(e: Engine): ReachView | null {
+    const r = e.reachStatus();
+    if (!r) return null;
+    const { detection, ...st } = r;
+    const cfg = e.reachConfig();
+    return {
+      ...st,
+      detection,
+      config: { ...(cfg.cloudflareHost ? { cloudflareHost: cfg.cloudflareHost } : {}), ...(cfg.duckdnsDomain ? { duckdnsDomain: cfg.duckdnsDomain } : {}), ...(cfg.mapping ? { mapping: cfg.mapping } : {}) },
+    };
+  }
+
+  async reachDetect(): Promise<void> {
+    await this.#e.reachDetect();
+    this.#changed();
+  }
+
+  async reachSet(input: ReachInput): Promise<void> {
+    const { duckdnsToken, ...cfg } = input;
+    try {
+      await this.#e.reachSet(cfg, duckdnsToken !== undefined ? { duckdnsToken } : {});
+    } finally {
+      this.#changed();
+    }
+    const st = this.#e.reachStatus();
+    if (st && (st.state === 'error' || st.state === 'missing' || st.state === 'logged-out')) throw new Error([st.error, st.fix].filter(Boolean).join(' — ') || st.state);
   }
 
   // ---- internet guest links (hub PC) -------------------------------------------------------------

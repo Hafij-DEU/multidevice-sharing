@@ -124,19 +124,27 @@ export class ReachManager {
 
   /** Switches mode (the previous one is turned off first) and remembers the choice. */
   async set(cfg: ReachConfig, secrets: { duckdnsToken?: string } = {}): Promise<ReachStatus> {
+    this.#validate(cfg, secrets);
+    await this.stop(true);
+    this.save(cfg, secrets);
+    return this.start();
+  }
+
+  #validate(cfg: ReachConfig, secrets: { duckdnsToken?: string }): void {
     if (!['off', 'tailscale', 'cloudflare', 'port-forward'].includes(cfg.mode)) throw new Error('unknown mode');
     if (cfg.mode === 'cloudflare' && !HOST_RE.test(cfg.cloudflareHost ?? '')) throw new Error('enter the hostname on your Cloudflare domain, e.g. drop.example.com');
     if (cfg.mode === 'port-forward' && !/^[a-z0-9-]{1,63}(\.duckdns\.org)?$/i.test(cfg.duckdnsDomain ?? '')) throw new Error('enter your DuckDNS name, e.g. myhub (for myhub.duckdns.org)');
     for (const p of [cfg.externalPort, cfg.internalPort]) if (p !== undefined && (!Number.isInteger(p) || p < 0 || p > 65535)) throw new Error('invalid port');
-    if (secrets.duckdnsToken !== undefined) {
-      if (!/^[A-Za-z0-9-]{8,64}$/.test(secrets.duckdnsToken)) throw new Error('that does not look like a DuckDNS token');
-      this.#secret('duckdns-token', secrets.duckdnsToken);
-    }
-    await this.stop(true);
+    if (secrets.duckdnsToken !== undefined && !/^[A-Za-z0-9-]{8,64}$/.test(secrets.duckdnsToken)) throw new Error('that does not look like a DuckDNS token');
+  }
+
+  /** Validates and remembers the choice without applying it (the CLI next to a running listener). */
+  save(cfg: ReachConfig, secrets: { duckdnsToken?: string } = {}): void {
+    this.#validate(cfg, secrets);
+    if (secrets.duckdnsToken !== undefined) this.#secret('duckdns-token', secrets.duckdnsToken);
     this.#cfg = { ...cfg, ...(cfg.duckdnsDomain ? { duckdnsDomain: cfg.duckdnsDomain.replace(/\.duckdns\.org$/i, '').toLowerCase() } : {}) };
     mkdirSync(this.#dir, { recursive: true, mode: 0o700 });
     writeFileAtomic(join(this.#dir, 'config.json'), JSON.stringify(this.#cfg, null, 2));
-    return this.start();
   }
 
   /** Brings the saved mode up (engine start, or after set()). Never throws: errors land in status(). */

@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import type { AppState } from '../../shared/api.ts';
+import { InternetAccess } from '../components/InternetAccess.tsx';
 import { Peer } from '../components/Peer.tsx';
 import { QrInvite, type Invite } from '../components/QrInvite.tsx';
 import type { Run } from '../App.tsx';
@@ -124,6 +125,12 @@ export function Mesh({ state, run }: { state: AppState; run: Run }) {
         {isHub && hub.ingressPort > 0 && <> · tunnel ingress 127.0.0.1:{hub.ingressPort}</>}
       </p>
 
+      {!android && isHub && state.reach && (
+        <>
+          <h2>Internet access</h2>
+          <InternetAccess key={`${state.reach.mode}:${state.reach.config.cloudflareHost ?? ''}:${state.reach.config.duckdnsDomain ?? ''}`} reach={state.reach} run={run} />
+        </>
+      )}
       {!android && (
         <>
           <h2>Hub address on the internet</h2>

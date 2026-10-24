@@ -6,7 +6,7 @@ import { execFile } from 'node:child_process';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { configDir } from '@meshdrop/core/src/paths.ts';
-import type { AppState, LinkCreateInput, ReceivedRecord, SendItemInput, Settings } from '../shared/api.ts';
+import type { AppState, LinkCreateInput, ReachInput, ReceivedRecord, SendItemInput, Settings } from '../shared/api.ts';
 import { AppController, type Platform } from './controller.ts';
 import { autostartDir, gnomeShortcutCommands, parseStrList, READ_KEYBINDINGS, setAutostart, validBinding } from './desktop.ts';
 import { HistoryStore } from './history.ts';
@@ -200,6 +200,19 @@ const linkInput = (x: unknown): LinkCreateInput => {
   };
 };
 
+const reachInput = (x: unknown): ReachInput => {
+  if (typeof x !== 'object' || x === null || Array.isArray(x)) throw new ArgError('invalid argument');
+  const o = x as Record<string, unknown>;
+  if (!['off', 'tailscale', 'cloudflare', 'port-forward'].includes(o.mode as string)) throw new ArgError('invalid mode');
+  return {
+    mode: o.mode as ReachInput['mode'],
+    ...(o.cloudflareHost !== undefined ? { cloudflareHost: str(o.cloudflareHost, 253) } : {}),
+    ...(o.duckdnsDomain !== undefined ? { duckdnsDomain: str(o.duckdnsDomain, 80) } : {}),
+    ...(o.duckdnsToken !== undefined && o.duckdnsToken !== '' ? { duckdnsToken: str(o.duckdnsToken, 64) } : {}),
+    ...(o.mapping === 'manual' || o.mapping === 'auto' ? { mapping: o.mapping } : {}),
+  };
+};
+
 function ctl(): AppController {
   if (!controller) throw new Error('MeshDrop is still starting');
   return controller;
@@ -271,6 +284,8 @@ function wireIpc(): void {
   handle('guestReject', (_e, id) => ctl().guestReject(str(id, 64)));
   handle('linkCreate', (_e, x) => ctl().linkCreate(linkInput(x)));
   handle('linkRevoke', (_e, id) => ctl().linkRevoke(str(id, 64)));
+  handle('reachDetect', (_e) => ctl().reachDetect());
+  handle('reachSet', (_e, x) => ctl().reachSet(reachInput(x)));
   handle('openInbox', (_e) => ctl().openInbox());
   handle('reveal', (_e, p) => ctl().reveal(str(p)));
   handle('registerClipboardShortcut', async (_e, b) => {

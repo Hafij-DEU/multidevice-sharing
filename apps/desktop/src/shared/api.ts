@@ -92,6 +92,32 @@ export interface LinkView {
   url?: string;
 }
 
+export type ReachMode = 'off' | 'tailscale' | 'cloudflare' | 'port-forward';
+
+/** How the hub PC is reached from the internet (hub only). */
+export interface ReachView {
+  mode: ReachMode;
+  state: 'off' | 'starting' | 'on' | 'error' | 'missing' | 'logged-out';
+  url?: string;
+  host?: string;
+  error?: string;
+  fix?: string;
+  certExpiresAt?: number;
+  tokenSet: boolean;
+  mapped?: 'upnp' | 'natpmp' | 'manual';
+  listenPort?: number;
+  config: { cloudflareHost?: string; duckdnsDomain?: string; mapping?: 'auto' | 'manual' };
+  detection: { wanIp?: string; publicIp?: string; upnp: boolean; natpmp: boolean; cgnat: boolean; suggestion: 'tunnel' | 'port-forward'; reason: string } | null;
+}
+
+export interface ReachInput {
+  mode: ReachMode;
+  cloudflareHost?: string;
+  duckdnsDomain?: string;
+  duckdnsToken?: string;
+  mapping?: 'auto' | 'manual';
+}
+
 export interface LinkCreateInput {
   files: string[];
   text?: string;
@@ -128,6 +154,8 @@ export interface AppState {
   guest?: GuestView;
   /** Internet guest links (present on the hub PC). */
   links?: LinkView[];
+  /** Internet access of the hub PC. */
+  reach?: ReachView;
 }
 
 export interface DesktopApi {
@@ -160,6 +188,8 @@ export interface DesktopApi {
   guestReject(id: string): Promise<void>;
   linkCreate(input: LinkCreateInput): Promise<{ id: string; url: string; qrSvg: string; expiresAt: number }>;
   linkRevoke(id: string): Promise<void>;
+  reachDetect(): Promise<void>;
+  reachSet(input: ReachInput): Promise<void>;
   openInbox(): Promise<void>;
   reveal(path: string): Promise<void>;
   registerClipboardShortcut(binding: string): Promise<void>;
