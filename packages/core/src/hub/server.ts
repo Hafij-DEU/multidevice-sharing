@@ -24,6 +24,7 @@ import { heldSessionOf, type HeldSession, type HeldStore } from './held.ts';
 import type { InviteBook } from '../mesh/invite.ts';
 import type { MembershipStore } from '../mesh/members.ts';
 import { signList, verifySigned, type Member, type MembershipList, type SignedMembership } from '../mesh/membership.ts';
+import type { SignedRelays } from '../mesh/relays.ts';
 import { peerDeviceId } from '../tls.ts';
 import { canonicalSpki } from '../trust.ts';
 
@@ -48,7 +49,14 @@ export interface DirectoryEntry { deviceId: string; online: boolean; lastSeen: n
 export interface HubServerOptions {
   id: Identity;
   home: string;
-  rootKey: KeyObject;
+  /**
+   * The mesh root key: this is the main hub, the membership authority. Without it this is a relay
+   * hub (M9a): links, relay, held files and the directory work; joins, revokes and list changes
+   * need the main hub, and membership lists arrive signed from outside (setMembership).
+   */
+  rootKey?: KeyObject;
+  /** The current root-signed relay list, sent on welcome (devices fail over to these hubs). */
+  relays?: () => SignedRelays | null;
   /** The hub's own view of the mesh; every list change goes through accept(). */
   members: MembershipStore;
   /** A link with no traffic for this long is dropped (default 510 000 ms). */
@@ -450,9 +458,19 @@ export class HubServer extends EventEmitter {
   #adoptNewer(raw: unknown): void {
     const members = this.#opts.members;
     const cur = members.current();
+    const rootKey = this.#opts.rootKey;
+    if (!rootKey) {
+      // A relay hub cannot sign: it just takes a newer root-signed list and passes it on.
+      try {
+        if (members.accept(raw as SignedMembership) === 'updated') this.setMembership(members.current());
+      } catch {
+        /* not root-signed, or older */
+      }
+      return;
+    }
     let theirs: MembershipList;
     try {
-      theirs = verifySigned(raw as SignedMembership, createPublicKey(this.#opts.rootKey));
+      theirs = verifySigned(raw as SignedMembership, createPublicKey(rootKey));
     } catch {
       return;
     }
@@ -473,7 +491,7 @@ export class HubServer extends EventEmitter {
       members: [...byId.values(), { ...self, role: 'hub' }],
       revoked: [...revoked].map(([deviceId, revokedAt]) => ({ deviceId, revokedAt })),
     };
-    const s = signList(list, this.#opts.rootKey);
+    const s = signList(list, rootKey);
     if (members.accept(s) !== 'updated') return;
     this.#broadcast(JSON.stringify({ t: 'membership', s }));
     this.emit('membership', s);
@@ -481,10 +499,32 @@ export class HubServer extends EventEmitter {
 
   /** The mesh root public key as SPKI PEM (what a joining device pins). */
   get anchorPem(): string {
-    return createPublicKey(this.#opts.rootKey).export({ type: 'spki', format: 'pem' }) as string;
+    return this.#opts.members.anchor.export({ type: 'spki', format: 'pem' }) as string;
+  }
+
+  /** True on a relay hub (no root key): membership changes happen on the main hub. */
+  get isRelay(): boolean {
+    return !this.#opts.rootKey;
+  }
+
+  #requireRoot(): KeyObject {
+    if (!this.#opts.rootKey) throw new Error('This is a relay hub: do that on the main hub.');
+    return this.#opts.rootKey;
+  }
+
+  /** Relay hub: a newer root-signed list arrived (from the main hub); hand it to every link. */
+  setMembership(s: SignedMembership): void {
+    this.#broadcast(JSON.stringify({ t: 'membership', s }));
+    this.emit('membership', s);
+  }
+
+  /** A new root-signed relay list: every link gets it. */
+  pushRelays(s: SignedRelays): void {
+    this.#broadcast(JSON.stringify({ t: 'relays', s }));
   }
 
   #addMemberSync(m: Omit<Member, 'role' | 'addedAt'>): SignedMembership {
+    this.#requireRoot();
     const list = this.#opts.members.list();
     if (list.revoked.some((r) => r.deviceId === m.deviceId)) throw new Error('device was revoked and cannot rejoin');
     const pem = canonicalSpki(m.publicKeyPem);
@@ -498,6 +538,7 @@ export class HubServer extends EventEmitter {
   }
 
   async revoke(deviceId: string): Promise<SignedMembership> {
+    this.#requireRoot();
     const list = this.#opts.members.list();
     if (deviceId === list.hub.deviceId) throw new Error('the hub cannot revoke itself');
     if (list.revoked.some((r) => r.deviceId === deviceId)) return this.#opts.members.current();
@@ -523,7 +564,7 @@ export class HubServer extends EventEmitter {
   #publish(next: Omit<MembershipList, 'version' | 'issuedAt'> & Partial<MembershipList>): SignedMembership {
     const cur = this.#opts.members.list();
     const list: MembershipList = { ...next, version: cur.version + 1, issuedAt: this.#now() } as MembershipList;
-    const s = signList(list, this.#opts.rootKey);
+    const s = signList(list, this.#requireRoot());
     if (this.#opts.members.accept(s) !== 'updated') throw new Error('membership update was not accepted');
     this.#broadcast(JSON.stringify({ t: 'membership', s }));
     this.emit('membership', s);
@@ -628,6 +669,11 @@ export class HubServer extends EventEmitter {
 
     const members = this.#opts.members;
     if (m.membership !== undefined) this.#adoptNewer(m.membership);
+    if (joining && !members.isTrusted(deviceId) && !this.#opts.rootKey) {
+      c.ws.send(JSON.stringify({ t: 'join-failed', error: 'relay-hub' }));
+      c.ws.close(CLOSE_REVOKED);
+      return;
+    }
     if (joining && !members.isTrusted(deviceId)) {
       // A QR invite redeemed over the internet: the invite must be one this hub enforces.
       const inviter = m.inviter as string;
@@ -671,6 +717,8 @@ export class HubServer extends EventEmitter {
     const current = members.current();
     if ((mv as number) < current.list.version) welcome.membership = current;
     if (joining) welcome.anchorPem = this.anchorPem;
+    const relays = this.#opts.relays?.();
+    if (relays) welcome.relays = relays;
     c.ws.send(JSON.stringify(welcome));
     this.emit('online', deviceId);
     this.#pushDirectory(deviceId);
