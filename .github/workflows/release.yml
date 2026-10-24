@@ -54,7 +54,7 @@ jobs:
           MESHDROP_KEY_PASS: ${{ secrets.MESHDROP_KEY_PASS }}
         working-directory: apps/android
         run: |
-          if [ -z "$KS_B64" ]; then echo "::error::MESHDROP_KEYSTORE_B64 is not set: the APK must be signed with the owner's release key"; exit 1; fi
+          if [ -z "$KS_B64" ]; then echo "::warning::MESHDROP_KEYSTORE_B64 is not set: no APK here (the owner builds it with scripts/release.sh)"; exit 0; fi
           echo "$KS_B64" | base64 -d > "$RUNNER_TEMP/meshdrop.jks"
           export MESHDROP_KS="$RUNNER_TEMP/meshdrop.jks"
           gradle :app:lintRelease :app:assembleRelease
@@ -65,6 +65,7 @@ jobs:
         with:
           name: apk
           path: apps/android/dist-apk/*.apk
+          if-no-files-found: ignore
 
   windows:
     runs-on: windows-latest
@@ -96,6 +97,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then echo "release $GITHUB_REF_NAME exists already (made locally)"; exit 0; fi
           find out -type f \( -name '*.deb' -o -name '*.apk' -o -name '*.exe' \) -exec sha256sum {} \; | sed 's# out/[^/]*/# #' > SHA256SUMS
           gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --draft --title "MeshDrop ${GITHUB_REF_NAME#v}" --generate-notes \
             $(find out -type f \( -name '*.deb' -o -name '*.apk' -o -name '*.exe' \)) SHA256SUMS
