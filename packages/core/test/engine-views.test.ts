@@ -70,7 +70,7 @@ describe('auto-resume', () => {
     await A.e.pairManual('127.0.0.1', bPort, 'bee');
     await B.e.pairManual('127.0.0.1', A.e.port, 'ay');
     const f = join(tmpDir(), 'auto.bin');
-    const data = randomBytes(3 * 4 * 1024 * 1024);
+    const data = randomBytes(64 * 1024 * 1024); // big enough that a fast runner cannot finish before B stops
     writeFileSync(f, data);
     const p = A.e.send([B.e.identity.deviceId.slice(0, 8)], [{ kind: 'file', srcPath: f }]);
     await until(() => A.events.some((x) => x.source === 'sender' && x.type === 'progress'));
