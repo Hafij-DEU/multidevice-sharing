@@ -82,6 +82,14 @@ public final class SettingsStore {
                 else if (k.equals("clipboardSync")) s.clipboardSync = b;
                 else s.notifications = b;
                 break;
+            case "backupTarget":
+                if (!(v instanceof String) || !((String) v).matches("^([0-9a-f]{64})?$")) throw new SettingsError("Invalid value for backupTarget.");
+                s.backupTarget = (String) v;
+                break;
+            case "backupSince":
+                if (!(v instanceof Long) || (Long) v < 0) throw new SettingsError("Invalid value for backupSince.");
+                s.backupSince = (Long) v;
+                break;
             case "guestMinutes":
                 if (!(v instanceof Long) && !(v instanceof Integer)) throw new SettingsError("Invalid value for guestMinutes.");
                 long gm = ((Number) v).longValue();

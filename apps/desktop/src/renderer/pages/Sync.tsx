@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import type { AppState } from '../../shared/api.ts';
 import type { Run } from '../App.tsx';
 import { Peer } from '../components/Peer.tsx';
@@ -79,6 +80,58 @@ export function Sync({ state, run }: { state: AppState; run: Run }) {
         </ul>
       )}
       <p className="muted hint">Replaced and deleted files are kept 30 days in the folder&apos;s .meshdrop-trash. If a file changed on both sides, both versions are kept.</p>
+      <PhotoBackup state={state} run={run} />
     </section>
+  );
+}
+
+/** Android: new camera photos and videos go to a PC whenever both are on the same Wi-Fi. */
+function PhotoBackup({ state, run }: { state: AppState; run: Run }) {
+  const b = state.backup;
+  const [existing, setExisting] = useState(false);
+  if (!b || !window.meshdrop.backupSet) return null;
+  const pcs = state.devices.filter((d) => d.trusted && d.role !== 'localsend' && d.deviceType !== 'mobile');
+  const target = state.devices.find((d) => d.deviceId === b.target);
+  return (
+    <>
+      <h2>Photo backup</h2>
+      <p className="muted">New photos and videos from the camera go to a PC by themselves when both are on the same Wi-Fi. On the PC they land in Pictures/MeshDrop Backup.</p>
+      {!b.permission && (
+        <div className="row">
+          <button className="primary" onClick={() => void run(() => window.meshdrop.backupPermission!())}>
+            Allow access to photos and videos
+          </button>
+        </div>
+      )}
+      {b.target === '' ? (
+        <>
+          <label className="toggle">
+            <input type="checkbox" checked={existing} onChange={() => setExisting(!existing)} /> Also back up the photos already on this phone
+          </label>
+          {pcs.length === 0 ? (
+            <p className="muted">Pair with your PC first (Send → Add a device).</p>
+          ) : (
+            <div className="row">
+              {pcs.map((d) => (
+                <button key={d.deviceId} className="primary" disabled={!b.permission} onClick={() => void run(() => window.meshdrop.backupSet!(d.deviceId, existing), 'Photo backup is on')}>
+                  Back up to {d.alias}
+                </button>
+              ))}
+            </div>
+          )}
+        </>
+      ) : (
+        <div className="row space">
+          <span>
+            To <strong>{target?.alias ?? b.target.slice(0, 8)}</strong>
+            <span className={b.error ? 'error-text' : 'muted'}>
+              {' · '}
+              {b.error ?? (b.running ? 'Backing up…' : target?.reach === 'lan' ? (b.lastAt ? `${b.count} sent since the app started` : 'Up to date') : 'Waiting for it on this Wi-Fi')}
+            </span>
+          </span>
+          <button onClick={() => void run(() => window.meshdrop.backupSet!('', false), 'Photo backup is off')}>Turn off</button>
+        </div>
+      )}
+    </>
   );
 }

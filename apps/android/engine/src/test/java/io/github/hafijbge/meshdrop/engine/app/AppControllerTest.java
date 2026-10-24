@@ -1,6 +1,7 @@
 package io.github.hafijbge.meshdrop.engine.app;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 
@@ -37,7 +38,7 @@ public class AppControllerTest {
         for (AppController c : ctls) c.stop();
     }
 
-    static final class FakePlatform implements Platform {
+    static class FakePlatform implements Platform {
         final List<String> clip = Collections.synchronizedList(new ArrayList<>());
         final List<String> notes = Collections.synchronizedList(new ArrayList<>());
         volatile String clipboardText = "";
@@ -159,6 +160,77 @@ public class AppControllerTest {
         assertEquals(List.of(new File(b.inbox, "hello.txt").getAbsolutePath()), r.get("files"));
         assertEquals("android", state(b.c).get("platform"));
         assertEquals(1, b.p.notes.size());
+    }
+
+    /** A phone with a camera roll: files in a folder, MediaStore ids 1, 2, 3… */
+    static final class CameraPlatform extends FakePlatform {
+        final List<File> roll = Collections.synchronizedList(new ArrayList<>());
+
+        @Override
+        public boolean supportsBackup() {
+            return true;
+        }
+
+        @Override
+        public boolean mediaPermission() {
+            return true;
+        }
+
+        @Override
+        public List<Platform.Media> cameraMediaAfter(long afterId, int limit) {
+            List<Platform.Media> out = new ArrayList<>();
+            for (int i = 0; i < roll.size() && out.size() < limit; i++) if (i + 1 > afterId) out.add(new Platform.Media(i + 1, roll.get(i).getPath()));
+            return out;
+        }
+
+        @Override
+        public long cameraMediaMaxId() {
+            return roll.size();
+        }
+    }
+
+    @Test
+    public void photoBackupSendsOnlyNewCameraPhotosToThePcOnce() throws Exception {
+        File pcHome = tmp.newFolder();
+        try (io.github.hafijbge.meshdrop.engine.testutil.NodeListen pc = io.github.hafijbge.meshdrop.engine.testutil.NodeListen.start(pcHome)) {
+            File home = tmp.newFolder();
+            Settings defaults = Settings.defaults("Pixel");
+            defaults.port = 0;
+            defaults.discovery = false;
+            CameraPlatform p = new CameraPlatform();
+            File roll = tmp.newFolder("DCIM");
+            for (String n : new String[] {"old1.jpg", "old2.jpg"}) {
+                File f = new File(roll, n);
+                Files.write(f.toPath(), n.getBytes(StandardCharsets.UTF_8));
+                p.roll.add(f);
+            }
+            AppController c = new AppController(new SettingsStore(new File(home, "android-settings.json"), defaults), new HistoryStore(new File(home, "h.json")), p, s -> {
+                EngineConfig cfg = new EngineConfig(home, new PlainKeyVault(), new DirectorySink(new File(home, "inbox")));
+                cfg.port = s.port;
+                cfg.alias = s.alias;
+                cfg.discovery = false;
+                cfg.guestPort = -1;
+                return Engine.create(cfg);
+            });
+            ctls.add(c);
+            c.start();
+            c.addByAddress("127.0.0.1", pc.port, "pc");
+            io.github.hafijbge.meshdrop.engine.testutil.Node.Result r = io.github.hafijbge.meshdrop.engine.testutil.Node.run("pair", "127.0.0.1:" + selfPort(c), "Pixel", "--home", pcHome.getPath());
+            assertEquals(r.out, 0, r.code);
+            c.backupSet(pc.deviceId, false); // only new ones: old1/old2 stay
+            File shot = new File(roll, "IMG_3.jpg");
+            Files.write(shot.toPath(), "new".getBytes(StandardCharsets.UTF_8));
+            p.roll.add(shot);
+            c.backupNow();
+            File landed = new File(pcHome, "backup/Pixel/IMG_3.jpg");
+            until(landed::exists, 20_000);
+            until(() -> ((Map<?, ?>) state(c).get("backup")).get("count").equals(1L), 10_000);
+            c.backupNow(); // nothing new: nothing sent again
+            Thread.sleep(1500);
+            assertFalse(new File(pcHome, "backup/Pixel/IMG_3 (1).jpg").exists());
+            assertFalse(new File(pcHome, "backup/Pixel/old1.jpg").exists());
+            assertEquals(3L, ((Map<?, ?>) state(c).get("settings")).get("backupSince"));
+        }
     }
 
     @Test

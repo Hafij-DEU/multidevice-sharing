@@ -32,7 +32,7 @@ const ICON: Record<Sub, string> = {
 };
 const MORE_HINT: Record<Sub, string> = {
   Devices: 'Paired devices: unpair, or pair again',
-  Sync: 'Keep one folder the same on your devices',
+  Sync: 'Keep one folder the same on your devices; phone photo backup',
   Guests: 'Let someone without the app send or get files from a browser',
   Mesh: 'Link your devices so they reach each other from anywhere',
   Transfers: 'Unfinished sends and transfer history',

@@ -175,6 +175,8 @@ export interface AppState {
   joinLink?: string;
   /** Mesh members (for the Mesh page). */
   members: { deviceId: string; alias: string; role: 'hub' | 'member'; self: boolean }[];
+  /** Photo backup (Android): new camera photos and videos go to a PC on the same Wi-Fi. */
+  backup?: { target: string; permission: boolean; running: boolean; count: number; lastAt?: number; error?: string };
   /** Folder sync (absent where the platform has none yet). */
   sync?: SyncView;
   /** LAN guests (absent where the platform has no guest server). */
@@ -219,6 +221,9 @@ export interface DesktopApi {
   reachSet(input: ReachInput): Promise<void>;
   syncSet(folder: string, partners: string[]): Promise<void>;
   syncNow(): Promise<void>;
+  /** Android: photo backup to `target` ('' = off); `includeExisting`: also the photos already on the phone. */
+  backupSet?(target: string, includeExisting: boolean): Promise<void>;
+  backupPermission?(): Promise<void>;
   /** Desktop: shows the sync folder in the file manager. */
   openSyncFolder?(): Promise<void>;
   openInbox(): Promise<void>;

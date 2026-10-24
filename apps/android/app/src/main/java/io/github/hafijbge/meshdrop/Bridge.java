@@ -106,6 +106,13 @@ public final class Bridge {
                 return null;
             case "scanQr":
                 return pickers.scanQr();
+            case "backupPermission": {
+                String[] perms = android.os.Build.VERSION.SDK_INT >= 33
+                        ? new String[] {android.Manifest.permission.READ_MEDIA_IMAGES, android.Manifest.permission.READ_MEDIA_VIDEO}
+                        : new String[] {android.Manifest.permission.READ_EXTERNAL_STORAGE};
+                activity.runOnUiThread(() -> activity.requestPermissions(perms, 9));
+                return null;
+            }
             case "takeSharedItems":
                 return new ArrayList<Object>(p.takeShared());
             case "keepAliveAction":

@@ -10,6 +10,7 @@ import io.github.hafijbge.meshdrop.engine.mesh.MembershipStore;
 import io.github.hafijbge.meshdrop.engine.proto.Chunks;
 import io.github.hafijbge.meshdrop.engine.proto.Manifest;
 import io.github.hafijbge.meshdrop.engine.send.SendItem;
+import io.github.hafijbge.meshdrop.engine.send.SendResult;
 import io.github.hafijbge.meshdrop.engine.send.Source;
 import io.github.hafijbge.meshdrop.engine.util.Json;
 import java.io.IOException;
@@ -22,6 +23,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.Collections;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
@@ -120,6 +122,12 @@ public final class AppController {
     /** The guest link's QR code (the engine keeps the rest of the session). */
     private volatile String guestQr;
     private ScheduledFuture<?> pending;
+    /** Photo backup: one batch at a time; what this run handed over (for the status line). */
+    private final java.util.concurrent.atomic.AtomicBoolean backupBusy = new java.util.concurrent.atomic.AtomicBoolean();
+    private volatile long backupCount;
+    private volatile long backupLastAt;
+    private volatile String backupError;
+    private ScheduledFuture<?> backupTimer;
     /** Shared clipboard: the poll, and the last text seen (copied here or received), so nothing echoes back. */
     private ScheduledFuture<?> clipTick;
     private volatile String lastClip;
@@ -147,6 +155,7 @@ public final class AppController {
         stopped = false;
         boot();
         if (clipTick == null) clipTick = timer.scheduleWithFixedDelay(this::clipTick, 1, 1, TimeUnit.SECONDS);
+        if (backupTimer == null) backupTimer = timer.scheduleWithFixedDelay(this::backupSoon, 5, 60, TimeUnit.SECONDS);
     }
 
     public synchronized void stop() {
@@ -289,6 +298,7 @@ public final class AppController {
         Map<String, Object> sync = x.syncStatus();
         sync.put("suggested", ""); // Android: the folder is always picked (system folder picker)
         m.put("sync", sync);
+        if (platform.supportsBackup()) m.put("backup", backupView());
         platform.decorate(m);
         return m;
     }
@@ -708,6 +718,99 @@ public final class AppController {
         if (!ids.isEmpty()) x.sendClipboard(ids, text, null);
     }
 
+    // ---- photo backup (M8b) --------------------------------------------------------------------
+
+    /** Starts a backup pass now (the app also does every minute). */
+    public void backupNow() {
+        backupSoon();
+    }
+
+    /** Starts a backup pass on its own thread (a pass may wait for a whole batch to send). */
+    private void backupSoon() {
+        if (settings.get().backupTarget.isEmpty() || !backupBusy.compareAndSet(false, true)) return;
+        Thread t = new Thread(() -> {
+            try {
+                while (backupPass()) {
+                    // more waiting: next batch right away
+                }
+            } catch (RuntimeException ignored) {
+                // next tick
+            } finally {
+                backupBusy.set(false);
+            }
+        }, "meshdrop-backup");
+        t.setDaemon(true);
+        t.start();
+    }
+
+    /**
+     * One batch: new camera photos and videos go to the backup PC, only while it is on this Wi-Fi.
+     * Once the send has a session (done, or kept in the outbox to finish by itself) they count as
+     * handed over, so nothing is sent twice. Returns whether there may be more.
+     */
+    private boolean backupPass() {
+        Settings s = settings.get();
+        Engine x = engine;
+        if (x == null || stopped || s.backupTarget.isEmpty()) return false;
+        if (!platform.mediaPermission()) {
+            backupError = "MeshDrop needs permission to read your photos and videos.";
+            changed();
+            return false;
+        }
+        EngineDevice pc = null;
+        for (EngineDevice d : x.devices()) if (d.deviceId.equals(s.backupTarget)) pc = d;
+        if (pc == null || !pc.trusted || !"lan".equals(pc.reach)) return false;
+        List<Platform.Media> batch = platform.cameraMediaAfter(s.backupSince, 50);
+        if (batch.isEmpty()) return false;
+        List<SendItem> items = new ArrayList<>();
+        try {
+            for (Platform.Media m : batch) items.add(platform.item("file", m.uri));
+            List<SendResult> rs = x.send(Collections.singletonList(s.backupTarget), items, "backup:" + UUID.randomUUID(), true).get(6, TimeUnit.HOURS);
+            SendResult r = rs.isEmpty() ? null : rs.get(0);
+            if (r == null || r.sessionId == null || r.sessionId.isEmpty()) {
+                backupError = r == null || r.error == null ? "The backup could not start." : r.error;
+                changed();
+                return false;
+            }
+            Map<String, Object> patch = new LinkedHashMap<>();
+            patch.put("backupSince", batch.get(batch.size() - 1).id);
+            settings.set(patch);
+            backupCount += batch.size();
+            backupLastAt = System.currentTimeMillis();
+            backupError = null;
+            changed();
+            return "done".equals(r.status) && batch.size() == 50;
+        } catch (Exception e) {
+            backupError = e.getMessage();
+            changed();
+            return false;
+        }
+    }
+
+    /** Turns photo backup on (to `target`; existing photos too, or only new ones) or off (""). */
+    public void backupSet(String target, boolean includeExisting) throws IOException {
+        Map<String, Object> patch = new LinkedHashMap<>();
+        String id = target == null || target.isEmpty() ? "" : e().resolveDeviceId(target);
+        patch.put("backupTarget", id);
+        if (!id.isEmpty()) patch.put("backupSince", includeExisting ? 0L : platform.cameraMediaMaxId());
+        settings.set(patch);
+        backupError = null;
+        changed();
+        if (!id.isEmpty()) backupSoon();
+    }
+
+    private Map<String, Object> backupView() {
+        Settings s = settings.get();
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("target", s.backupTarget);
+        m.put("permission", platform.mediaPermission());
+        m.put("running", backupBusy.get());
+        m.put("count", backupCount);
+        if (backupLastAt > 0) m.put("lastAt", backupLastAt);
+        if (backupError != null) m.put("error", backupError);
+        return m;
+    }
+
     public void sendClipboard(Object targets) {
         String text = platform.readClipboard();
         if (text == null || text.isEmpty()) throw new IllegalArgumentException("The clipboard is empty.");
@@ -871,6 +974,9 @@ public final class AppController {
                 changed();
                 return null;
             }
+            case "backupSet":
+                backupSet(str(a0), Boolean.TRUE.equals(args.size() > 1 ? args.get(1) : null));
+                return null;
             case "syncNow":
                 e().syncNow();
                 changed();
