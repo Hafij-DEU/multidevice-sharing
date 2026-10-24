@@ -136,14 +136,6 @@ public final class Engine {
         this.inbox = new Inbox(new File(cfg.home, "inbox-state"), cfg.sink);
         this.outbox = new Outbox(new File(cfg.home, "outbox"));
         this.syncState = new io.github.hafijbge.meshdrop.engine.sync.SyncState(cfg.home);
-        String sf = syncState.config().folder;
-        if (!sf.isEmpty()) {
-            try {
-                syncFolder = cfg.syncFolders.open(sf);
-            } catch (IOException | RuntimeException e) {
-                syncFolder = null; // gone or permission revoked: sync stays off until set again
-            }
-        }
         this.manualFile = new File(cfg.home, "manual-peers.json");
         this.port = cfg.port;
         this.trustSource = new CompositeTrust(() -> mesh, trust);
@@ -240,7 +232,7 @@ public final class Engine {
             MembershipStore m = mesh;
             return m == null ? null : m.current();
         };
-        so.sync = new io.github.hafijbge.meshdrop.engine.sync.SyncRoutes(syncState, () -> syncFolder, peer -> scheduleSync(peer, 300));
+        so.sync = new io.github.hafijbge.meshdrop.engine.sync.SyncRoutes(syncState, this::openSyncFolder, (peer, f) -> scheduleSync(f, peer, 300));
         MeshServer s = new MeshServer(identity, trustSource, inbox, ev -> {
             touch();
             Map<String, Object> d = new LinkedHashMap<>(ev);
@@ -536,7 +528,7 @@ public final class Engine {
                 emit("discovery", "peer", m);
                 maybeAutoResume(p.deviceId);
                 execute(() -> maybePull(p));
-                if (syncState.config().partners.contains(p.deviceId)) scheduleSync(p.deviceId, 1000);
+                scheduleSync(null, p.deviceId, 1000);
                 MembershipStore ms = mesh;
                 HubClient h = hub;
                 // The hub showed up on the LAN (or moved): link to it there now instead of waiting out the backoff.
@@ -617,117 +609,192 @@ public final class Engine {
 
     private static final long SYNC_INTERVAL_MS = 60_000;
     private final io.github.hafijbge.meshdrop.engine.sync.SyncState syncState;
-    private volatile io.github.hafijbge.meshdrop.engine.sync.SyncFolder syncFolder;
+    /** Opened folders by sync name (a picked Android folder whose grant is gone opens as null). */
+    private final Map<String, io.github.hafijbge.meshdrop.engine.sync.SyncFolder> syncOpen = new ConcurrentHashMap<>();
     private final Set<String> syncRunning = ConcurrentHashMap.newKeySet();
     private final Map<String, Object> syncLocks = new ConcurrentHashMap<>();
     private final Map<String, Map<String, Object>> syncLast = new ConcurrentHashMap<>();
 
+    /** The folder for a sync name, opened on first use; null if there is none or it cannot be opened. */
+    private io.github.hafijbge.meshdrop.engine.sync.SyncFolder openSyncFolder(String name) {
+        io.github.hafijbge.meshdrop.engine.sync.SyncFolder f = syncOpen.get(name);
+        if (f != null) return f;
+        for (io.github.hafijbge.meshdrop.engine.sync.SyncState.FolderConfig c : syncState.folders()) {
+            if (!c.name.equals(name)) continue;
+            try {
+                f = cfg.syncFolders.open(c.folder);
+                syncOpen.put(name, f);
+                return f;
+            } catch (IOException | RuntimeException e) {
+                return null; // gone or permission revoked: choose it again
+            }
+        }
+        return null;
+    }
+
+    public List<io.github.hafijbge.meshdrop.engine.sync.SyncState.FolderConfig> syncFolders() {
+        return syncState.folders();
+    }
+
     /**
-     * Sets the synced folder ("" turns sync off; a path, or on Android a picked folder's URI) and the
-     * partners (trusted device id prefixes).
+     * Adds or changes a synced folder (a path, or on Android a picked folder's URI). `name` matches it
+     * with the partners' folders (null/empty: the folder's own name); `previousName` renames that entry.
      */
-    public synchronized void syncSet(String folder, List<String> partners) throws IOException {
+    public synchronized io.github.hafijbge.meshdrop.engine.sync.SyncState.FolderConfig syncPut(String name, String folder, List<String> partners, String previousName) throws IOException {
         String f = folder == null ? "" : folder.trim();
-        io.github.hafijbge.meshdrop.engine.sync.SyncFolder sf = f.isEmpty() ? null : cfg.syncFolders.open(f);
+        if (f.isEmpty()) throw new IllegalArgumentException("Choose a folder.");
+        String n = name == null || name.trim().isEmpty() ? io.github.hafijbge.meshdrop.engine.sync.SyncState.defaultName(f) : name.trim();
+        if (!io.github.hafijbge.meshdrop.engine.sync.SyncState.validName(n)) throw new IllegalArgumentException("A sync name is 1–64 characters, without \"/\".");
+        String key = previousName != null ? previousName : n;
+        List<io.github.hafijbge.meshdrop.engine.sync.SyncState.FolderConfig> cur = syncState.folders();
+        List<io.github.hafijbge.meshdrop.engine.sync.SyncState.FolderConfig> next = new ArrayList<>();
+        int at = -1;
+        for (io.github.hafijbge.meshdrop.engine.sync.SyncState.FolderConfig c : cur) {
+            if (c.name.equals(key)) {
+                at = next.size();
+                next.add(c);
+                continue;
+            }
+            if (c.name.equals(n)) throw new IllegalArgumentException("Another synced folder is already called \"" + n + "\".");
+            if (c.folder.equals(f)) throw new IllegalArgumentException("That folder is already synced as \"" + c.name + "\".");
+            next.add(c);
+        }
+        if (at < 0 && next.size() >= io.github.hafijbge.meshdrop.engine.sync.SyncState.MAX_FOLDERS) throw new IllegalArgumentException("At most " + io.github.hafijbge.meshdrop.engine.sync.SyncState.MAX_FOLDERS + " synced folders.");
+        io.github.hafijbge.meshdrop.engine.sync.SyncFolder opened = cfg.syncFolders.open(f);
         List<String> ids = new ArrayList<>();
         for (String q : partners) {
             String id = resolveDeviceId(q);
             if (!ids.contains(id)) ids.add(id);
         }
-        syncState.setConfig(new io.github.hafijbge.meshdrop.engine.sync.SyncState.Config(f, ids));
-        syncFolder = sf;
-        for (String id : ids) scheduleSync(id, 500);
-    }
-
-    public io.github.hafijbge.meshdrop.engine.sync.SyncState.Config syncConfig() {
-        return syncState.config();
-    }
-
-    /** {folder, partners:[{deviceId, alias?, present, syncing, last?}]} as the desktop's syncStatus(). */
-    public Map<String, Object> syncStatus() {
-        io.github.hafijbge.meshdrop.engine.sync.SyncState.Config c = syncState.config();
-        Discovery d = discovery;
-        Map<String, Object> m = new LinkedHashMap<>();
-        m.put("folder", syncFolder == null ? "" : c.folder);
-        List<Object> ps = new ArrayList<>();
-        for (String id : c.partners) {
-            Map<String, Object> p = new LinkedHashMap<>();
-            p.put("deviceId", id);
-            TrustStore.Device t = trustSource.get(id);
-            if (t != null) p.put("alias", t.alias);
-            p.put("present", d != null && d.peer(id) != null);
-            p.put("syncing", syncRunning.contains(id));
-            if (syncLast.containsKey(id)) p.put("last", new LinkedHashMap<>(syncLast.get(id)));
-            ps.add(p);
+        io.github.hafijbge.meshdrop.engine.sync.SyncState.FolderConfig entry = new io.github.hafijbge.meshdrop.engine.sync.SyncState.FolderConfig(n, f, ids);
+        if (at >= 0) next.set(at, entry);
+        else next.add(entry);
+        syncState.setFolders(next);
+        if (previousName != null && !previousName.equals(n)) {
+            syncState.forget(previousName);
+            syncOpen.remove(previousName);
         }
-        m.put("partners", ps);
+        syncOpen.put(n, opened);
+        for (String id : ids) scheduleSync(n, id, 500);
+        return entry;
+    }
+
+    /** Stops syncing a folder (its files stay). */
+    public synchronized void syncRemove(String name) throws IOException {
+        List<io.github.hafijbge.meshdrop.engine.sync.SyncState.FolderConfig> next = new ArrayList<>();
+        for (io.github.hafijbge.meshdrop.engine.sync.SyncState.FolderConfig c : syncState.folders()) if (!c.name.equals(name)) next.add(c);
+        syncState.setFolders(next);
+        syncState.forget(name);
+        syncOpen.remove(name);
+    }
+
+    /** {folders:[{name, folder, partners:[{deviceId, alias?, present, syncing, last?}]}]} as the desktop's. */
+    public Map<String, Object> syncStatus() {
+        Discovery d = discovery;
+        List<Object> fs = new ArrayList<>();
+        for (io.github.hafijbge.meshdrop.engine.sync.SyncState.FolderConfig c : syncState.folders()) {
+            Map<String, Object> fm = new LinkedHashMap<>();
+            fm.put("name", c.name);
+            fm.put("folder", c.folder);
+            List<Object> ps = new ArrayList<>();
+            for (String id : c.partners) {
+                String key = c.name + "\0" + id;
+                Map<String, Object> p = new LinkedHashMap<>();
+                p.put("deviceId", id);
+                TrustStore.Device t = trustSource.get(id);
+                if (t != null) p.put("alias", t.alias);
+                p.put("present", d != null && d.peer(id) != null);
+                p.put("syncing", syncRunning.contains(key));
+                if (syncLast.containsKey(key)) p.put("last", new LinkedHashMap<>(syncLast.get(key)));
+                ps.add(p);
+            }
+            fm.put("partners", ps);
+            fs.add(fm);
+        }
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("folders", fs);
         return m;
     }
 
-    /** Runs a round now with every partner on the LAN (blocks until they finished). */
-    public void syncNow() {
+    /** Runs a round now with every partner on the LAN, for one folder (or null: all), and waits for them. */
+    public void syncNow(String name) {
         Discovery d = requireRunning();
-        for (String id : syncState.config().partners) if (d.peer(id) != null) runSync(id);
+        for (io.github.hafijbge.meshdrop.engine.sync.SyncState.FolderConfig c : syncState.folders()) {
+            if (name != null && !c.name.equals(name)) continue;
+            for (String id : c.partners) if (d.peer(id) != null) runSync(c.name, id);
+        }
     }
 
     private void syncPresent() {
         Discovery d = discovery;
         if (d == null) return;
-        for (String id : syncState.config().partners) if (d.peer(id) != null) execute(() -> runSync(id));
+        for (io.github.hafijbge.meshdrop.engine.sync.SyncState.FolderConfig c : syncState.folders()) for (String id : c.partners) if (d.peer(id) != null) execute(() -> runSync(c.name, id));
     }
 
-    private void scheduleSync(String partner, long delayMs) {
+    /** Rounds with `partner` for folder `name`, or (null) every folder shared with it. */
+    private void scheduleSync(String name, String partner, long delayMs) {
         java.util.concurrent.ScheduledExecutorService t = ticker;
         if (t == null) return;
         try {
-            t.schedule(() -> execute(() -> runSync(partner)), delayMs, java.util.concurrent.TimeUnit.MILLISECONDS);
+            t.schedule(() -> {
+                for (io.github.hafijbge.meshdrop.engine.sync.SyncState.FolderConfig c : syncState.folders()) {
+                    if ((name == null || c.name.equals(name)) && c.partners.contains(partner)) execute(() -> runSync(c.name, partner));
+                }
+            }, delayMs, java.util.concurrent.TimeUnit.MILLISECONDS);
         } catch (java.util.concurrent.RejectedExecutionException ignored) {
             // stopping
         }
     }
 
-    /** One round with `partner` at a time: a caller during a round waits for it, then runs its own (so it sees the latest). */
-    private void runSync(String partner) {
-        Object lock = syncLocks.computeIfAbsent(partner, k -> new Object());
+    /** One round per folder and partner at a time: a caller during a round waits for it, then runs its own. */
+    private void runSync(String name, String partner) {
+        String key = name + "\0" + partner;
+        Object lock = syncLocks.computeIfAbsent(key, k -> new Object());
         synchronized (lock) {
-            syncRunning.add(partner);
+            syncRunning.add(key);
             try {
-                syncOnce(partner);
+                syncOnce(name, partner);
             } finally {
-                syncRunning.remove(partner);
+                syncRunning.remove(key);
             }
         }
     }
 
-    private void syncOnce(String partner) {
-        io.github.hafijbge.meshdrop.engine.sync.SyncFolder f = syncFolder;
+    private void syncOnce(String name, String partner) {
+        io.github.hafijbge.meshdrop.engine.sync.SyncState.FolderConfig c = null;
+        for (io.github.hafijbge.meshdrop.engine.sync.SyncState.FolderConfig x : syncState.folders()) if (x.name.equals(name)) c = x;
         Discovery d = discovery;
         TrustStore.Device t = trustSource.get(partner);
-        if (f == null || d == null || server == null || t == null || !syncState.config().partners.contains(partner)) return;
+        if (c == null || d == null || server == null || t == null || !c.partners.contains(partner)) return;
         Discovery.PeerInfo p = d.peer(partner);
         if (p == null) return; // LAN only
+        String key = name + "\0" + partner;
         Map<String, Object> last = new LinkedHashMap<>();
         last.put("at", System.currentTimeMillis());
         try {
+            io.github.hafijbge.meshdrop.engine.sync.SyncFolder f = openSyncFolder(name);
+            if (f == null) throw new IOException("MeshDrop lost access to this folder: choose it again");
             touch();
-            io.github.hafijbge.meshdrop.engine.sync.SyncRound.Result r = io.github.hafijbge.meshdrop.engine.sync.SyncRound.run(f, syncState,
+            io.github.hafijbge.meshdrop.engine.sync.SyncRound.Result r = io.github.hafijbge.meshdrop.engine.sync.SyncRound.run(f, name, syncState,
                     new LanTransport(identity, new Sender.Target(partner, p.host, p.port, t.key), 10_000), identity.deviceId(), partner, t.alias,
                     () -> server == null, System.currentTimeMillis());
             last.put("pulled", (long) r.pulled);
             last.put("deleted", (long) r.deleted);
             last.put("conflicts", (long) r.conflicts);
             last.put("errors", (long) r.errors.size());
-            syncLast.put(partner, last);
+            syncLast.put(key, last);
             // Our own edits (no file watcher on Android): tell the partner to pull now.
             if (r.localChanged || r.pulled + r.deleted + r.conflicts > 0) {
                 try {
-                    new LanTransport(identity, new Sender.Target(partner, p.host, p.port, t.key), 10_000).request("POST", "/mesh/v1/sync/poke", null, null, 10_000, null, null);
+                    new LanTransport(identity, new Sender.Target(partner, p.host, p.port, t.key), 10_000).request("POST",
+                            "/mesh/v1/sync/poke?f=" + java.net.URLEncoder.encode(name, "UTF-8"), null, null, 10_000, null, null);
                 } catch (IOException ignored) {
                     // it pulls on its own timer
                 }
             }
             Map<String, Object> ev = new LinkedHashMap<>(last);
             ev.remove("at");
+            ev.put("folder", name);
             ev.put("partner", partner);
             emit("sync", "round", ev);
         } catch (IOException | RuntimeException e) {
@@ -736,8 +803,9 @@ public final class Engine {
             last.put("conflicts", 0L);
             last.put("errors", 0L);
             last.put("error", e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage());
-            syncLast.put(partner, last);
+            syncLast.put(key, last);
             Map<String, Object> ev = new LinkedHashMap<>();
+            ev.put("folder", name);
             ev.put("partner", partner);
             ev.put("error", last.get("error"));
             emit("sync", "error", ev);
@@ -1041,12 +1109,14 @@ public final class Engine {
         manual.removeIf(x -> id.equals(x.get("deviceId")));
         writeManual(manual);
         for (Outbox.Entry e : outbox.list()) if (id.equals(e.targetId)) outbox.remove(e.sessionId);
-        io.github.hafijbge.meshdrop.engine.sync.SyncState.Config sc = syncState.config();
-        if (sc.partners.contains(id)) {
-            List<String> ps = new ArrayList<>(sc.partners);
-            ps.remove(id);
-            syncState.setConfig(new io.github.hafijbge.meshdrop.engine.sync.SyncState.Config(sc.folder, ps));
+        List<io.github.hafijbge.meshdrop.engine.sync.SyncState.FolderConfig> fs = new ArrayList<>();
+        boolean changed = false;
+        for (io.github.hafijbge.meshdrop.engine.sync.SyncState.FolderConfig f : syncState.folders()) {
+            List<String> ps = new ArrayList<>(f.partners);
+            changed |= ps.remove(id);
+            fs.add(new io.github.hafijbge.meshdrop.engine.sync.SyncState.FolderConfig(f.name, f.folder, ps));
         }
+        if (changed) syncState.setFolders(fs);
     }
 
     public void forgetPeer(String deviceId) {

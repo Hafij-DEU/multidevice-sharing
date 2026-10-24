@@ -57,8 +57,8 @@ async function pairSync() {
   const B = await mk('beta');
   await A.e.pairManual('127.0.0.1', B.e.port, 'beta');
   await B.e.pairManual('127.0.0.1', A.e.port, 'alpha');
-  A.e.syncSet({ folder: A.folder, partners: [B.e.identity.deviceId] });
-  B.e.syncSet({ folder: B.folder, partners: [A.e.identity.deviceId] });
+  A.e.syncPut({ name: 'Shared', folder: A.folder, partners: [B.e.identity.deviceId] });
+  B.e.syncPut({ name: 'Shared', folder: B.folder, partners: [A.e.identity.deviceId] });
   await A.e.syncNow();
   await B.e.syncNow();
   return { A, B };
@@ -135,15 +135,67 @@ describe('folder sync', () => {
     const C = await mk('gamma');
     await A.e.pairManual('127.0.0.1', C.e.port, 'gamma');
     await C.e.pairManual('127.0.0.1', A.e.port, 'alpha');
-    A.e.syncSet({ folder: A.folder, partners: [] }); // C not ticked
+    A.e.syncPut({ name: 'Shared', folder: A.folder, partners: [] }); // C not ticked
     writeFileSync(join(A.folder, 'secret.txt'), 's');
-    C.e.syncSet({ folder: C.folder, partners: [A.e.identity.deviceId] });
+    C.e.syncPut({ name: 'Shared', folder: C.folder, partners: [A.e.identity.deviceId] });
     await C.e.syncNow();
-    expect(C.e.syncStatus().partners[0]!.last?.error).toMatch(/403/);
+    expect(C.e.syncStatus().folders[0]!.partners[0]!.last?.error).toMatch(/403/);
     expect(existsSync(join(C.folder, 'secret.txt'))).toBe(false);
-    expect(() => A.e.syncSet({ folder: join(A.folder, '..', 'inbox', 'x'), partners: [] })).toThrow(/separate/);
-    expect(() => A.e.syncSet({ folder: 'relative', partners: [] })).toThrow(/full path/);
+    expect(() => A.e.syncPut({ folder: join(A.folder, '..', 'inbox', 'x'), partners: [] })).toThrow(/separate/);
+    expect(() => A.e.syncPut({ folder: 'relative', partners: [] })).toThrow(/full path/);
+    expect(() => A.e.syncPut({ name: 'Other', folder: join(A.folder, 'inner'), partners: [] })).toThrow(/another synced folder/);
+    A.e.syncPut({ name: 'Two', folder: join(A.folder, '..', 'Elsewhere'), partners: [] });
+    expect(() => A.e.syncPut({ name: 'Shared', folder: join(A.folder, '..', 'Elsewhere'), partners: [] }, 'Two')).toThrow(/already called/);
   }, 30_000);
+});
+
+describe('several folders', () => {
+  it('folders sync by name, each with its own partners; a folder only one side has stays put', async () => {
+    const A = await mk('alpha');
+    const B = await mk('beta');
+    await A.e.pairManual('127.0.0.1', B.e.port, 'beta');
+    await B.e.pairManual('127.0.0.1', A.e.port, 'alpha');
+    const [a, b] = [A.e.identity.deviceId, B.e.identity.deviceId];
+    const A1 = join(A.folder, '..', 'Documents');
+    const A2 = join(A.folder, '..', 'Photos');
+    const B1 = join(B.folder, '..', 'Docs on phone');
+    A.e.syncPut({ name: 'Docs', folder: A1, partners: [b] });
+    A.e.syncPut({ folder: A2, partners: [b] }); // named after its folder: "Photos"
+    B.e.syncPut({ name: 'Docs', folder: B1, partners: [a] });
+    expect(A.e.syncConfig().folders.map((f) => f.name)).toEqual(['Docs', 'Photos']);
+    writeFileSync(join(A1, 'cv.txt'), 'cv');
+    writeFileSync(join(A2, 'cat.jpg'), 'meow');
+    await B.e.syncNow();
+    expect(tree(B1)).toEqual({ 'cv.txt': 'cv' });
+    expect(B.e.syncStatus().folders.map((f) => f.name)).toEqual(['Docs']);
+    // A asks B for "Photos": B has no such folder.
+    await A.e.syncNow('Photos');
+    expect(A.e.syncStatus().folders[1]!.partners[0]!.last?.error).toMatch(/404/);
+    // Rename on B keeps its files; remove stops syncing but keeps them.
+    B.e.syncPut({ name: 'Docs', folder: B1, partners: [] });
+    writeFileSync(join(A1, 'new.txt'), 'n');
+    await B.e.syncNow();
+    expect(existsSync(join(B1, 'new.txt'))).toBe(false);
+    B.e.syncRemove('Docs');
+    expect(B.e.syncConfig().folders).toEqual([]);
+    expect(readFileSync(join(B1, 'cv.txt'), 'utf8')).toBe('cv');
+  }, 30_000);
+
+  it('a 0.3.0 config (one folder) becomes a folder named after its directory and keeps its base', async () => {
+    const A = await mk('alpha');
+    const home = join(A.folder, '..');
+    const id = 'ab'.repeat(32);
+    mkdirSync(join(home, 'sync'), { recursive: true });
+    writeFileSync(join(home, 'sync', 'config.json'), JSON.stringify({ folder: join(home, 'My Sync'), partners: [id] }));
+    writeFileSync(join(home, 'sync', `base-${id}.json`), JSON.stringify({ 'a.txt': 'h1' }));
+    const { SyncStore } = await import('../src/sync/store.ts');
+    const st = new SyncStore(home);
+    expect(st.config()).toEqual({ folders: [{ name: 'My Sync', folder: join(home, 'My Sync'), partners: [id] }] });
+    expect(st.base('My Sync', id).get('a.txt')).toBe('h1');
+    st.setConfig(st.config());
+    expect(new SyncStore(home).base('My Sync', id).get('a.txt')).toBe('h1');
+    expect(new SyncStore(home).base('Other', id).size).toBe(0);
+  });
 });
 
 describe('photo backup', () => {

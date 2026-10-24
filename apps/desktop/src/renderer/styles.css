@@ -49,6 +49,8 @@ button.big { display: block; width: 100%; padding: 12px; font-size: 16px; font-w
 .hint { font-size: 13px; margin: 4px 0; }
 .send h2:first-child, .send .row:first-child h2 { margin-top: 0; }
 .add-device { margin-top: 26px; border-top: 1px solid var(--border); padding-top: 12px; }
+.sync-folder { border: 1px solid var(--border); border-radius: var(--radius); background: var(--panel); box-shadow: var(--shadow); padding: 12px 14px; margin: 12px 0; }
+.sync-folder .list > li { border: 0; box-shadow: none; padding: 4px 0; margin: 0; background: none; }
 .one-qr { margin: 12px 0 18px; padding-bottom: 14px; border-bottom: 1px solid var(--border); }
 .add-device summary { cursor: pointer; font-weight: 600; color: var(--accent); }
 h1 { font-size: 20px; margin: 0 0 16px; }

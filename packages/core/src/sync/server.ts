@@ -1,8 +1,9 @@
 // Folder sync routes on the receiver API (mesh/v1/sync/...), for partners this device ticked only:
-//   GET  sync/index                                  {v:1, files:[{rel,size,mtime,hash}]}
-//   GET  sync/file?rel=&hash=&offset=&len=           raw bytes (len <= 4 MiB); 409 'changed' if the
+//   GET  sync/index?f=<name>                         {v:1, files:[{rel,size,mtime,hash}]}
+//   GET  sync/file?f=<name>&rel=&hash=&offset=&len=  raw bytes (len <= 4 MiB); 409 'changed' if the
 //                                                    file no longer has that hash
-//   POST sync/poke                                   "I changed": the partner pulls soon (204)
+//   POST sync/poke?f=<name>                          "I changed": the partner pulls soon (204)
+// Folders are matched by name; without f (a 0.3.0 partner) the first folder shared with the peer.
 import * as fsp from 'node:fs/promises';
 import { join } from 'node:path';
 import type { MeshResponse } from '../api/handler.ts';
@@ -18,8 +19,8 @@ const json = (status: number, body?: unknown): MeshResponse =>
 
 export interface SyncRouteOptions {
   store: SyncStore;
-  /** The partner asked us to pull from it. */
-  onPoke: (peer: string) => void;
+  /** The partner asked us to pull from it (`folder`: that one only; absent: every folder we share). */
+  onPoke: (peer: string, folder?: string) => void;
 }
 
 /** One file's current state (hash from the cache when size and mtime match), or null when it is not a syncable file. */
@@ -39,15 +40,22 @@ export async function fileState(folder: string, rel: string, cache: Map<string, 
 
 export function syncRoutes(o: SyncRouteOptions) {
   return async (peer: string, method: string, seg: string[], q: URLSearchParams): Promise<MeshResponse> => {
-    const cfg = o.store.config();
-    if (cfg.folder === '' || !cfg.partners.includes(peer)) return json(403, { error: 'not-a-sync-partner' });
+    const folders = o.store.config().folders;
+    // ?f=<name> picks the folder; without it (a 0.3.0 partner) the first folder this peer may use.
+    const f = q.get('f');
+    const mine = folders.filter((x) => x.partners.includes(peer));
     if (method === 'POST' && seg.length === 1 && seg[0] === 'poke') {
-      o.onPoke(peer);
+      if (mine.length === 0) return json(403, { error: 'not-a-sync-partner' });
+      o.onPoke(peer, f ?? undefined);
       return json(204);
     }
+    const cfg = f === null ? mine[0] : folders.find((x) => x.name === f);
+    if (!cfg) return json(404, { error: 'no-such-folder' });
+    if (!cfg.partners.includes(peer)) return json(403, { error: 'not-a-sync-partner' });
+    const name = cfg.name;
     if (method === 'GET' && seg.length === 1 && seg[0] === 'index') {
-      const files = await scan(cfg.folder, o.store.cache());
-      o.store.setCache(files);
+      const files = await scan(cfg.folder, o.store.cache(name));
+      o.store.setCache(name, files);
       return json(200, { v: 1, files: [...files.values()] });
     }
     if (method === 'GET' && seg.length === 1 && seg[0] === 'file') {
@@ -60,7 +68,7 @@ export function syncRoutes(o: SyncRouteOptions) {
       const offset = Number(q.get('offset') ?? '0');
       const len = Number(q.get('len') ?? String(SYNC_SLICE));
       if (rel === '' || ignored(rel) || !Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(len) || len < 1 || len > SYNC_SLICE) return json(400, { error: 'bad-request' });
-      const st = await fileState(cfg.folder, rel, o.store.cache());
+      const st = await fileState(cfg.folder, rel, o.store.cache(name));
       if (!st) return json(404, { error: 'not-found' });
       if (st.hash !== q.get('hash')) return json(409, { error: 'changed' });
       const h = await fsp.open(join(cfg.folder, rel), 'r');

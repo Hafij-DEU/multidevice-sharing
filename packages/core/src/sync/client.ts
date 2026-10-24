@@ -21,6 +21,8 @@ const REQ_TIMEOUT_MS = 60_000;
 
 export interface RoundOptions {
   folder: string;
+  /** The folder's sync name (matches the partner's folder; sent as ?f=). */
+  name: string;
   store: SyncStore;
   transport: Transport;
   /** This device's id and the partner's (for tie-breaks), and the partner's name (for conflict copies). */
@@ -101,7 +103,7 @@ async function download(o: RoundOptions, r: FileState): Promise<string> {
   try {
     while (have < r.size) {
       const len = Math.min(SYNC_SLICE, r.size - have);
-      const q = new URLSearchParams({ rel: r.rel, hash: r.hash, offset: String(have), len: String(len) });
+      const q = new URLSearchParams({ f: o.name, rel: r.rel, hash: r.hash, offset: String(have), len: String(len) });
       const res = await o.transport.request('GET', `/mesh/v1/sync/file?${q}`, undefined, {}, { timeoutMs: REQ_TIMEOUT_MS, ...(o.signal ? { signal: o.signal } : {}) });
       if (res.status === 409) throw new Error('changed on the partner');
       if (res.status !== 200 || res.body.length === 0) throw new Error(`http-${res.status}`);
@@ -121,12 +123,12 @@ async function download(o: RoundOptions, r: FileState): Promise<string> {
 export async function syncRound(o: RoundOptions): Promise<RoundResult> {
   const now = (o.now ?? Date.now)();
   const round = stamp(now);
-  const cache = o.store.cache();
+  const cache = o.store.cache(o.name);
   const local = await scan(o.folder, cache);
-  const res = await o.transport.request('GET', '/mesh/v1/sync/index', undefined, {}, { timeoutMs: REQ_TIMEOUT_MS, ...(o.signal ? { signal: o.signal } : {}) });
+  const res = await o.transport.request('GET', `/mesh/v1/sync/index?${new URLSearchParams({ f: o.name })}`, undefined, {}, { timeoutMs: REQ_TIMEOUT_MS, ...(o.signal ? { signal: o.signal } : {}) });
   if (res.status !== 200) throw new Error(`sync: the partner answered ${res.status}${typeof (res.json as { error?: unknown })?.error === 'string' ? ` ${(res.json as { error: string }).error}` : ''}`);
   const remote = parseIndex(res.json);
-  const base = o.store.base(o.partner);
+  const base = o.store.base(o.name, o.partner);
   const out: RoundResult = { pulled: 0, deleted: 0, conflicts: 0, errors: [] };
   const rels = new Set([...local.keys(), ...remote.keys(), ...base.keys()]);
   for (const rel of [...rels].sort()) {
@@ -170,8 +172,8 @@ export async function syncRound(o: RoundOptions): Promise<RoundResult> {
       out.errors.push({ rel, error: e instanceof Error ? e.message : String(e) });
     }
   }
-  o.store.setCache(local);
-  o.store.setBase(o.partner, base);
+  o.store.setCache(o.name, local);
+  o.store.setBase(o.name, o.partner, base);
   await pruneTrash(o.folder, now).catch(() => {});
   return out;
 }

@@ -229,16 +229,16 @@ describe('AppController', () => {
     await pair(A.c, B.c);
     const fa = join(tmpDir(), 'SyncA');
     const fb = join(tmpDir(), 'SyncB');
-    await A.c.syncSet(fa, [B.c.state().self.deviceId]);
-    await B.c.syncSet(fb, [A.c.state().self.deviceId]);
+    await A.c.syncPut('Shared', fa, [B.c.state().self.deviceId]);
+    await B.c.syncPut('Shared', fb, [A.c.state().self.deviceId]);
     writeFileSync(join(fa, 'shared.txt'), 'both');
     await B.c.syncNow();
     expect(readFileSync(join(fb, 'shared.txt'), 'utf8')).toBe('both');
-    const p = B.c.state().sync!.partners[0]!;
+    const p = B.c.state().sync!.folders[0]!.partners[0]!;
     expect(p).toMatchObject({ deviceId: A.c.state().self.deviceId, present: true, last: { errors: 0 } }); // pulled by syncNow or already by the poke
-    expect(B.c.state().sync!.folder).toBe(fb);
-    await B.c.syncSet('', []);
-    expect(B.c.state().sync!.folder).toBe('');
+    expect(B.c.state().sync!.folders.map((f) => [f.name, f.folder])).toEqual([['Shared', fb]]);
+    await B.c.syncRemove('Shared');
+    expect(B.c.state().sync!.folders).toEqual([]);
   }, 30_000);
 
   it('files handed in from Files wait for the Send page, once', async () => {

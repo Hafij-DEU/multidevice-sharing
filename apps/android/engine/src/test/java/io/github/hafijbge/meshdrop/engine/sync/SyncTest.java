@@ -19,6 +19,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 import org.junit.After;
 import org.junit.Rule;
 import org.junit.Test;
@@ -91,35 +92,35 @@ public class SyncTest {
         b.pairManual("127.0.0.1", a.port(), "alpha");
         File fa = tmp.newFolder("A");
         File fb = tmp.newFolder("B");
-        a.syncSet(fa.getPath(), Collections.singletonList(b.identity().deviceId()));
-        b.syncSet(fb.getPath(), Collections.singletonList(a.identity().deviceId()));
+        a.syncPut("Shared", fa.getPath(), Collections.singletonList(b.identity().deviceId()), null);
+        b.syncPut("Shared", fb.getPath(), Collections.singletonList(a.identity().deviceId()), null);
         write(fa, "docs/x.txt", "one");
         write(fa, "skip.part", "temp");
-        b.syncNow();
-        a.syncNow();
+        b.syncNow(null);
+        a.syncNow(null);
         assertEquals("one", read(fb, "docs/x.txt"));
         assertFalse(new File(fb, "skip.part").exists());
 
         write(fb, "docs/x.txt", "two");
-        a.syncNow();
+        a.syncNow(null);
         assertEquals("two", read(fa, "docs/x.txt"));
         assertTrue(new File(fa, ".meshdrop-trash").isDirectory());
-        b.syncNow(); // B learns A has it (A's poke does this by itself)
+        b.syncNow(null); // B learns A has it (A's poke does this by itself)
 
         new File(fa, "docs/x.txt").delete();
-        b.syncNow();
+        b.syncNow(null);
         assertFalse(new File(fb, "docs/x.txt").exists());
 
         write(fa, "n.txt", "base");
-        b.syncNow();
-        a.syncNow();
+        b.syncNow(null);
+        a.syncNow(null);
         write(fa, "n.txt", "from A");
         write(fb, "n.txt", "from B");
         long t = System.currentTimeMillis();
         Files.setLastModifiedTime(new File(fa, "n.txt").toPath(), FileTime.fromMillis(t + 60_000));
         Files.setLastModifiedTime(new File(fb, "n.txt").toPath(), FileTime.fromMillis(t));
-        b.syncNow();
-        a.syncNow();
+        b.syncNow(null);
+        a.syncNow(null);
         assertEquals("from A", read(fb, "n.txt"));
         String[] copies = fa.list((d, n) -> n.startsWith("n (conflict from alpha"));
         assertEquals(Arrays.toString(fa.list()), 1, copies.length);
@@ -144,16 +145,48 @@ public class SyncTest {
                     ("{\"folder\":" + io.github.hafijbge.meshdrop.engine.util.Json.stringify(nf.getPath()) + ",\"partners\":[\"" + e.identity().deviceId() + "\"]}").getBytes(StandardCharsets.UTF_8));
             write(nf, "from pc/ü 😀.txt", "pc");
             pc = NodeListen.start(pcHome, port); // knows the phone's address from the pairing
-            e.syncSet(jf.getPath(), Collections.singletonList(pc.deviceId));
-            e.syncNow();
+            e.syncPut("pc-sync", jf.getPath(), Collections.singletonList(pc.deviceId), null); // the PC's 0.3.0-style config: its folder is named after its directory
+            e.syncNow(null);
             assertEquals("pc", read(jf, "from pc/ü 😀.txt"));
             write(jf, "from phone.txt", "phone");
-            e.syncNow(); // a local change: the phone pokes the PC, which pulls
+            e.syncNow(null); // a local change: the phone pokes the PC, which pulls
             until(() -> new File(nf, "from phone.txt").exists(), 20_000);
             assertEquals("phone", read(nf, "from phone.txt"));
         } finally {
             pc.close();
         }
+    }
+
+    @Test
+    public void severalFoldersSyncByNameEachWithItsOwnPartners() throws Exception {
+        Engine a = engine("alpha");
+        Engine b = engine("beta");
+        a.pairManual("127.0.0.1", b.port(), "beta");
+        b.pairManual("127.0.0.1", a.port(), "alpha");
+        String ia = a.identity().deviceId(), ib = b.identity().deviceId();
+        File docsA = tmp.newFolder("Documents"), photosA = tmp.newFolder("Photos"), docsB = tmp.newFolder("Docs on tablet");
+        a.syncPut("Docs", docsA.getPath(), Collections.singletonList(ib), null);
+        a.syncPut(null, photosA.getPath(), Collections.singletonList(ib), null);
+        b.syncPut("Docs", docsB.getPath(), Collections.singletonList(ia), null);
+        assertEquals("Photos", a.syncFolders().get(1).name);
+        write(docsA, "cv.txt", "cv");
+        write(photosA, "cat.jpg", "meow");
+        b.syncNow(null);
+        assertEquals("cv", read(docsB, "cv.txt"));
+        assertFalse(new File(docsB, "cat.jpg").exists());
+        a.syncNow("Photos");
+        @SuppressWarnings("unchecked")
+        Map<String, Object> photos = (Map<String, Object>) ((List<Object>) a.syncStatus().get("folders")).get(1);
+        @SuppressWarnings("unchecked")
+        Map<String, Object> last = (Map<String, Object>) ((Map<String, Object>) ((List<Object>) photos.get("partners")).get(0)).get("last");
+        assertTrue(String.valueOf(last.get("error")), String.valueOf(last.get("error")).contains("404"));
+        b.syncPut("Paperwork", docsB.getPath(), Collections.singletonList(ia), "Docs"); // renamed: no longer matches A's "Docs"
+        write(docsA, "new.txt", "n");
+        b.syncNow(null);
+        assertFalse(new File(docsB, "new.txt").exists());
+        b.syncRemove("Paperwork");
+        assertTrue(b.syncFolders().isEmpty());
+        assertEquals("cv", read(docsB, "cv.txt"));
     }
 
     @Test

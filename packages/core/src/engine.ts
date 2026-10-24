@@ -54,7 +54,7 @@ import { LanTransport, RelayTransport, type Transport } from './transfer/transpo
 import { syncRound } from './sync/client.ts';
 import { ignored as syncIgnored } from './sync/ignore.ts';
 import { syncRoutes } from './sync/server.ts';
-import { SyncStore, type SyncConfig } from './sync/store.ts';
+import { MAX_SYNC_FOLDERS, SyncStore, defaultSyncName, validSyncName, type SyncConfig, type SyncFolderConfig } from './sync/store.ts';
 import { writeFileAtomic } from './trust.ts';
 import { DEFAULT_MESH_PORT, Discovery, MAX_ALIAS_CHARS, type Announce, type DiscoveryOptions, type PeerInfo } from './discovery.ts';
 import { deviceIdOf, loadOrCreateIdentity, type Identity } from './identity.ts';
@@ -91,8 +91,8 @@ export type EngineEvent =
   | { source: 'guest'; type: 'failed'; id: string; error: string }
   | { source: 'guest'; type: 'ended' | 'opened' }
   /** Folder sync: a round with `partner` finished (counts are what changed here), or failed. */
-  | { source: 'sync'; type: 'round'; partner: string; pulled: number; deleted: number; conflicts: number; errors: number }
-  | { source: 'sync'; type: 'error'; partner: string; error: string }
+  | { source: 'sync'; type: 'round'; folder: string; partner: string; pulled: number; deleted: number; conflicts: number; errors: number }
+  | { source: 'sync'; type: 'error'; folder: string; partner: string; error: string }
   | {
       source: 'mesh';
       type: 'online' | 'offline' | 'membership' | 'directory' | 'revoked' | 'held-delivered' | 'held-failed' | 'joined';
@@ -829,7 +829,7 @@ export class Engine extends EventEmitter {
       this.emitEvent({ source: 'discovery', type: 'peer', peer: p });
       void this.maybePull(p);
       void this.maybeAutoResume(p.deviceId);
-      if (this.syncStore.config().partners.includes(p.deviceId)) this.scheduleSync(p.deviceId, 1000);
+      if (this.syncStore.config().folders.some((f) => f.partners.includes(p.deviceId))) this.scheduleSync(undefined, p.deviceId, 1000);
     });
     discovery.on('lost', (p: PeerInfo) => this.emitEvent({ source: 'discovery', type: 'lost', peer: p }));
     return discovery;
@@ -854,10 +854,10 @@ export class Engine extends EventEmitter {
     this.running = null;
     r.abort.abort();
     for (const t of r.timers) clearInterval(t);
-    this.syncWatcher?.close();
-    this.syncWatcher = null;
-    if (this.syncDebounce) clearTimeout(this.syncDebounce);
-    this.syncDebounce = null;
+    for (const w of this.syncWatchers.values()) w.close();
+    this.syncWatchers.clear();
+    for (const t of this.syncDebounces.values()) clearTimeout(t);
+    this.syncDebounces.clear();
     await r.client?.stop();
     await this.reach?.stop(false);
     this.reach = null;
@@ -1218,7 +1218,7 @@ export class Engine extends EventEmitter {
     writeManual(this.manualFile, readManual(this.manualFile).filter((m) => m.deviceId !== id));
     for (const o of await this.outbox.list()) if (o.target.deviceId === id) await this.outbox.remove(o.sessionId);
     const sc = this.syncStore.config();
-    if (sc.partners.includes(id)) this.syncStore.setConfig({ ...sc, partners: sc.partners.filter((p) => p !== id) });
+    if (sc.folders.some((f) => f.partners.includes(id))) this.syncStore.setConfig({ folders: sc.folders.map((f) => ({ ...f, partners: f.partners.filter((p) => p !== id) })) });
   }
 
   /** Drops a device from the LAN peer table (it is still trusted; it reappears when seen). */
@@ -1334,7 +1334,7 @@ export class Engine extends EventEmitter {
       },
       membership: () => this.mesh?.current() ?? null,
       accepting: () => this.accepting,
-      sync: syncRoutes({ store: this.syncStore, onPoke: (peer) => this.scheduleSync(peer, 300) }),
+      sync: syncRoutes({ store: this.syncStore, onPoke: (peer, folder) => this.scheduleSync(folder, peer, 300) }),
     };
   }
 
@@ -1627,8 +1627,10 @@ export class Engine extends EventEmitter {
   // ---- folder sync (M8a, LAN only) ---------------------------------------------------------------
 
   private readonly syncStore: SyncStore;
-  private syncWatcher: FSWatcher | null = null;
-  private syncDebounce: NodeJS.Timeout | null = null;
+  /** One watcher per folder (by name), and one debounce per folder. */
+  private readonly syncWatchers = new Map<string, FSWatcher>();
+  private readonly syncDebounces = new Map<string, NodeJS.Timeout>();
+  /** Rounds by `${name}\0${partner}`: one at a time; a request during one runs one more after it. */
   private readonly syncRuns = new Map<string, Promise<void>>();
   private readonly syncAgain = new Set<string>();
   private readonly syncLast = new Map<string, SyncPartnerStatus['last']>();
@@ -1638,127 +1640,164 @@ export class Engine extends EventEmitter {
   }
 
   /**
-   * Sets the synced folder ('' turns sync off) and the partners (trusted device id prefixes). The
-   * folder is created if needed; it may not be /, the home folder or overlap the inbox.
+   * Adds or changes a synced folder. `name` matches it with the partners' folders (default: the
+   * folder's own name); `previousName` renames an existing entry. The folder is created if needed;
+   * it may not be /, the home folder, overlap the inbox, or overlap another synced folder.
    */
-  syncSet(c: { folder: string; partners: string[] }): SyncConfig {
-    let folder = c.folder.trim();
-    if (folder !== '') {
-      if (!isAbsolute(folder)) throw new Error('Choose a folder (a full path).');
-      folder = resolve(folder);
-      if (folder === sep || folder === resolve(homedir())) throw new Error('Choose a dedicated folder for syncing, not your home folder.');
-      const inbox = resolve(this.inboxDir);
-      if (folder === inbox || folder.startsWith(inbox + sep) || inbox.startsWith(folder + sep)) throw new Error('The sync folder must be separate from the folder received files go to.');
-      mkdirSync(folder, { recursive: true });
-    }
+  syncPut(c: { name?: string; folder: string; partners: string[] }, previousName?: string): SyncFolderConfig {
+    if (!isAbsolute(c.folder.trim())) throw new Error('Choose a folder (a full path).');
+    const folder = resolve(c.folder.trim());
+    if (folder === sep || folder === resolve(homedir())) throw new Error('Choose a dedicated folder for syncing, not your home folder.');
+    const overlaps = (x: string) => folder === x || folder.startsWith(x + sep) || x.startsWith(folder + sep);
+    if (overlaps(resolve(this.inboxDir))) throw new Error('The sync folder must be separate from the folder received files go to.');
+    const name = (c.name ?? defaultSyncName(folder)).trim();
+    if (!validSyncName(name)) throw new Error('A sync name is 1–64 characters, without "/".');
+    const cfg = this.syncStore.config();
+    const others = cfg.folders.filter((f) => f.name !== (previousName ?? name));
+    if (others.some((f) => f.name === name)) throw new Error(`Another synced folder is already called "${name}".`);
+    if (others.some((f) => overlaps(resolve(f.folder)))) throw new Error('That folder is inside (or holds) another synced folder.');
+    if (others.length >= MAX_SYNC_FOLDERS) throw new Error(`At most ${MAX_SYNC_FOLDERS} synced folders.`);
+    mkdirSync(folder, { recursive: true });
     const partners = [...new Set(c.partners.map((q) => this.resolveDeviceId(q)))];
-    const cfg: SyncConfig = { folder, partners };
-    this.syncStore.setConfig(cfg);
+    const entry: SyncFolderConfig = { name, folder, partners };
+    const at = cfg.folders.findIndex((f) => f.name === (previousName ?? name));
+    const folders = [...cfg.folders];
+    if (at >= 0) folders[at] = entry;
+    else folders.push(entry);
+    this.syncStore.setConfig({ folders });
+    if (previousName !== undefined && previousName !== name) this.syncStore.forget(previousName);
     this.restartSyncWatch();
-    for (const p of partners) this.scheduleSync(p, 500);
-    return cfg;
+    for (const p of partners) this.scheduleSync(name, p, 500);
+    return entry;
   }
 
-  /** The folder, and per partner whether it is on the LAN now and how its last round went. */
-  syncStatus(): { folder: string; partners: SyncPartnerStatus[] } {
+  /** Stops syncing a folder (its files stay where they are). */
+  syncRemove(name: string): void {
     const cfg = this.syncStore.config();
+    this.syncStore.setConfig({ folders: cfg.folders.filter((f) => f.name !== name) });
+    this.syncStore.forget(name);
+    this.restartSyncWatch();
+  }
+
+  /** Each folder, and per partner whether it is on the LAN now and how its last round went. */
+  syncStatus(): { folders: { name: string; folder: string; partners: SyncPartnerStatus[] }[] } {
     const present = new Set(this.running?.discovery.peers().map((p) => p.deviceId) ?? []);
     const devs = this.devices();
     return {
-      folder: cfg.folder,
-      partners: cfg.partners.map((id) => {
-        const last = this.syncLast.get(id);
-        const alias = devs.find((d) => d.deviceId === id)?.alias;
-        return { deviceId: id, ...(alias !== undefined ? { alias } : {}), present: present.has(id), syncing: this.syncRuns.has(id), ...(last ? { last } : {}) };
-      }),
+      folders: this.syncStore.config().folders.map((f) => ({
+        name: f.name,
+        folder: f.folder,
+        partners: f.partners.map((id) => {
+          const key = `${f.name}\0${id}`;
+          const last = this.syncLast.get(key);
+          const alias = devs.find((d) => d.deviceId === id)?.alias;
+          return { deviceId: id, ...(alias !== undefined ? { alias } : {}), present: present.has(id), syncing: this.syncRuns.has(key), ...(last ? { last } : {}) };
+        }),
+      })),
     };
   }
 
-  /** Runs a round now with every partner that is on the LAN. */
-  async syncNow(): Promise<void> {
+  /** Runs a round now with every partner on the LAN, for one folder or all of them. */
+  async syncNow(name?: string): Promise<void> {
     const r = this.requireRunning();
     const present = new Set(r.discovery.peers().map((p) => p.deviceId));
-    await Promise.all(this.syncStore.config().partners.filter((p) => present.has(p)).map((p) => this.runSync(p)));
+    const jobs: Promise<void>[] = [];
+    for (const f of this.syncStore.config().folders) {
+      if (name !== undefined && f.name !== name) continue;
+      for (const p of f.partners) if (present.has(p)) jobs.push(this.runSync(f.name, p));
+    }
+    await Promise.all(jobs);
   }
 
   private syncPresent(): void {
     const present = new Set(this.running?.discovery.peers().map((p) => p.deviceId) ?? []);
-    for (const p of this.syncStore.config().partners) if (present.has(p)) void this.runSync(p);
+    for (const f of this.syncStore.config().folders) for (const p of f.partners) if (present.has(p)) void this.runSync(f.name, p);
   }
 
-  private scheduleSync(partner: string, delayMs: number): void {
-    const t = setTimeout(() => void this.runSync(partner), delayMs);
+  /** Schedules rounds with `partner`: for folder `name`, or (undefined) every folder shared with it. */
+  private scheduleSync(name: string | undefined, partner: string, delayMs: number): void {
+    const t = setTimeout(() => {
+      for (const f of this.syncStore.config().folders) {
+        if ((name === undefined || f.name === name) && f.partners.includes(partner)) void this.runSync(f.name, partner);
+      }
+    }, delayMs);
     t.unref();
   }
 
-  /** One round with `partner` at a time; a request during a round runs one more after it. */
-  private runSync(partner: string): Promise<void> {
-    const cur = this.syncRuns.get(partner);
+  private runSync(name: string, partner: string): Promise<void> {
+    const key = `${name}\0${partner}`;
+    const cur = this.syncRuns.get(key);
     if (cur) {
-      this.syncAgain.add(partner);
+      this.syncAgain.add(key);
       return cur;
     }
     const p = (async () => {
       do {
-        this.syncAgain.delete(partner);
-        await this.syncOnce(partner);
-      } while (this.syncAgain.has(partner) && this.running);
-    })().finally(() => this.syncRuns.delete(partner));
-    this.syncRuns.set(partner, p);
+        this.syncAgain.delete(key);
+        await this.syncOnce(name, partner);
+      } while (this.syncAgain.has(key) && this.running);
+    })().finally(() => this.syncRuns.delete(key));
+    this.syncRuns.set(key, p);
     return this.track(p);
   }
 
-  private async syncOnce(partner: string): Promise<void> {
+  private async syncOnce(name: string, partner: string): Promise<void> {
     const r = this.running;
-    const cfg = this.syncStore.config();
-    if (!r || !r.server || cfg.folder === '' || !cfg.partners.includes(partner) || !this.trustSource.isTrusted(partner)) return;
+    const f = this.syncStore.config().folders.find((x) => x.name === name);
+    if (!r || !r.server || !f || !f.partners.includes(partner) || !this.trustSource.isTrusted(partner)) return;
     const peer = r.discovery.peers().find((p) => p.deviceId === partner);
     if (!peer) return; // LAN only
     const alias = this.devices().find((d) => d.deviceId === partner)?.alias ?? partner.slice(0, 8);
+    const key = `${name}\0${partner}`;
     try {
       const res = await syncRound({
-        folder: cfg.folder, store: this.syncStore, self: this.identity.deviceId, partner, partnerAlias: alias, signal: r.abort.signal,
+        folder: f.folder, name, store: this.syncStore, self: this.identity.deviceId, partner, partnerAlias: alias, signal: r.abort.signal,
         transport: new LanTransport(this.identity, { deviceId: partner, host: peer.host, port: peer.port }),
       });
-      this.syncLast.set(partner, { at: Date.now(), pulled: res.pulled, deleted: res.deleted, conflicts: res.conflicts, errors: res.errors.length });
-      this.emitEvent({ source: 'sync', type: 'round', partner, pulled: res.pulled, deleted: res.deleted, conflicts: res.conflicts, errors: res.errors.length });
+      this.syncLast.set(key, { at: Date.now(), pulled: res.pulled, deleted: res.deleted, conflicts: res.conflicts, errors: res.errors.length });
+      this.emitEvent({ source: 'sync', type: 'round', folder: name, partner, pulled: res.pulled, deleted: res.deleted, conflicts: res.conflicts, errors: res.errors.length });
     } catch (e) {
       if (r.abort.signal.aborted) return;
       const error = e instanceof Error ? e.message : String(e);
-      this.syncLast.set(partner, { at: Date.now(), pulled: 0, deleted: 0, conflicts: 0, errors: 0, error });
-      this.emitEvent({ source: 'sync', type: 'error', partner, error });
+      this.syncLast.set(key, { at: Date.now(), pulled: 0, deleted: 0, conflicts: 0, errors: 0, error });
+      this.emitEvent({ source: 'sync', type: 'error', folder: name, partner, error });
     }
   }
 
-  /** Watches the folder: a local change pokes the partners (they pull), 2 s after the last change. */
+  /** Watches each folder: a local change pokes its partners (they pull), 2 s after the last change. */
   private restartSyncWatch(): void {
-    this.syncWatcher?.close();
-    this.syncWatcher = null;
+    for (const w of this.syncWatchers.values()) w.close();
+    this.syncWatchers.clear();
+    for (const t of this.syncDebounces.values()) clearTimeout(t);
+    this.syncDebounces.clear();
     const r = this.running;
-    const cfg = this.syncStore.config();
-    if (!r || !r.server || cfg.folder === '') return;
-    try {
-      const w = watch(cfg.folder, { recursive: true }, (_ev, name) => {
-        if (name && syncIgnored(String(name).split(sep).join('/'))) return;
-        if (this.syncDebounce) clearTimeout(this.syncDebounce);
-        this.syncDebounce = setTimeout(() => void this.pokePartners(), SYNC_DEBOUNCE_MS);
-        this.syncDebounce.unref();
-      });
-      w.on('error', () => {});
-      this.syncWatcher = w;
-    } catch {
-      // not watchable here: the timer still syncs every minute
+    if (!r || !r.server) return;
+    for (const f of this.syncStore.config().folders) {
+      try {
+        const w = watch(f.folder, { recursive: true }, (_ev, file) => {
+          if (file && syncIgnored(String(file).split(sep).join('/'))) return;
+          const old = this.syncDebounces.get(f.name);
+          if (old) clearTimeout(old);
+          const t = setTimeout(() => void this.pokePartners(f.name), SYNC_DEBOUNCE_MS);
+          t.unref();
+          this.syncDebounces.set(f.name, t);
+        });
+        w.on('error', () => {});
+        this.syncWatchers.set(f.name, w);
+      } catch {
+        // not watchable here: the timer still syncs every minute
+      }
     }
   }
 
-  private async pokePartners(): Promise<void> {
+  private async pokePartners(name: string): Promise<void> {
     const r = this.running;
-    if (!r) return;
-    const cfg = this.syncStore.config();
+    const f = this.syncStore.config().folders.find((x) => x.name === name);
+    if (!r || !f) return;
     for (const p of r.discovery.peers()) {
-      if (!cfg.partners.includes(p.deviceId)) continue;
+      if (!f.partners.includes(p.deviceId)) continue;
       await new LanTransport(this.identity, { deviceId: p.deviceId, host: p.host, port: p.port })
-        .request('POST', '/mesh/v1/sync/poke', undefined, {}, { timeoutMs: 10_000 })
+        .request('POST', `/mesh/v1/sync/poke?${new URLSearchParams({ f: name })}`, undefined, {}, { timeoutMs: 10_000 })
         .catch(() => {});
     }
   }

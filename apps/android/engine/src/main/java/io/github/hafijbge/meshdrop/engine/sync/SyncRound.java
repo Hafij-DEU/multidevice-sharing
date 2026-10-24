@@ -102,7 +102,7 @@ public final class SyncRound {
         f.move(rel, free(f, dir, nameOf(rel)));
     }
 
-    private static void download(SyncFolder f, Transport t, SyncState.FileState r, BooleanSupplier aborted) throws IOException {
+    private static void download(SyncFolder f, String name, Transport t, SyncState.FileState r, BooleanSupplier aborted) throws IOException {
         String part = r.hash;
         long have = f.partialSize(part);
         if (have > r.size) {
@@ -113,7 +113,7 @@ public final class SyncRound {
             if (have < 0) have = 0;
             while (have < r.size) {
                 long len = Math.min(SLICE, r.size - have);
-                String q = "rel=" + URLEncoder.encode(r.rel, "UTF-8") + "&hash=" + r.hash + "&offset=" + have + "&len=" + len;
+                String q = "f=" + URLEncoder.encode(name, "UTF-8") + "&rel=" + URLEncoder.encode(r.rel, "UTF-8") + "&hash=" + r.hash + "&offset=" + have + "&len=" + len;
                 Http.Response res = get(t, "/mesh/v1/sync/file?" + q, aborted);
                 if (res.status == 409) throw new IOException("changed on the partner");
                 if (res.status != 200 || res.body.length == 0) throw new IOException("http-" + res.status);
@@ -131,14 +131,15 @@ public final class SyncRound {
         return a == null ? b == null : a.equals(b);
     }
 
-    public static Result run(SyncFolder f, SyncState st, Transport t, String self, String partner, String partnerAlias, BooleanSupplier aborted, long now)
-            throws IOException {
+    /** `name`: the folder's sync name (sent as ?f=, matching the partner's folder). */
+    public static Result run(SyncFolder f, String name, SyncState st, Transport t, String self, String partner, String partnerAlias, BooleanSupplier aborted,
+            long now) throws IOException {
         String round = stamp(now);
-        Map<String, SyncState.FileState> cache = st.cache();
+        Map<String, SyncState.FileState> cache = st.cache(name);
         Map<String, SyncState.FileState> local = SyncState.scan(f, cache);
         boolean changed = local.size() != cache.size();
         for (SyncState.FileState s : local.values()) if (changed || !cache.containsKey(s.rel) || !cache.get(s.rel).hash.equals(s.hash)) changed = true;
-        Http.Response res = get(t, "/mesh/v1/sync/index", aborted);
+        Http.Response res = get(t, "/mesh/v1/sync/index?f=" + URLEncoder.encode(name, "UTF-8"), aborted);
         if (res.status != 200) throw new IOException("sync: the partner answered " + res.status);
         Map<String, SyncState.FileState> remote;
         try {
@@ -146,7 +147,7 @@ public final class SyncRound {
         } catch (RuntimeException e) {
             throw new IOException("bad sync index");
         }
-        Map<String, String> base = st.base(partner);
+        Map<String, String> base = st.base(name, partner);
         Result out = new Result();
         out.localChanged = changed;
         TreeSet<String> rels = new TreeSet<>(local.keySet());
@@ -169,7 +170,7 @@ public final class SyncRound {
                         out.conflicts++;
                     }
                     if (r != null) {
-                        download(f, t, r, aborted);
+                        download(f, name, t, r, aborted);
                         if (d.kind == SyncMerge.Kind.TAKE && l != null) toTrash(f, rel, round);
                         f.commitPartial(r.hash, rel, r.mtime);
                         local.put(rel, r);
@@ -186,8 +187,8 @@ public final class SyncRound {
                 out.errors.add(rel + ": " + e.getMessage());
             }
         }
-        st.setCache(local);
-        st.setBase(partner, base);
+        st.setCache(name, local);
+        st.setBase(name, partner, base);
         try {
             f.pruneTrash(now - TRASH_MS);
         } catch (IOException ignored) {

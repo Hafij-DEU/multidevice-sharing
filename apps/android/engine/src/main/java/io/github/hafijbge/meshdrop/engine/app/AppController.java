@@ -405,8 +405,8 @@ public final class AppController {
             else if (ev.source.equals("guest")) onGuest(ev);
             else if (ev.source.equals("sync") && ev.type.equals("round") && ev.data.get("conflicts") instanceof Long && (Long) ev.data.get("conflicts") > 0
                     && settings.get().notifications) {
-                platform.notify("Sync conflict", "A file changed on both " + aliasOf((String) ev.data.get("partner"))
-                        + " and this phone. Both versions are kept: look for \"(conflict from …)\" in the sync folder.", null);
+                platform.notify("Sync conflict", "A file in \"" + ev.data.get("folder") + "\" changed on both " + aliasOf((String) ev.data.get("partner"))
+                        + " and this phone. Both versions are kept: look for \"(conflict from …)\".", null);
             }
         } catch (RuntimeException ignored) {
             // never let a bookkeeping error break the engine thread
@@ -967,18 +967,23 @@ public final class AppController {
                 return platform.thumbnail(str(a0));
             case "join":
                 return join(str(a0));
-            case "syncSet": {
+            case "syncPut": {
                 List<String> ps = new ArrayList<>();
-                for (Object p : (List<Object>) args.get(1)) ps.add(str(p));
-                e().syncSet(str(a0), ps);
+                for (Object p : (List<Object>) args.get(2)) ps.add(str(p));
+                Object prev = args.size() > 3 ? args.get(3) : null;
+                e().syncPut(str(a0), str(args.get(1)), ps, prev instanceof String ? (String) prev : null);
                 changed();
                 return null;
             }
+            case "syncRemove":
+                e().syncRemove(str(a0));
+                changed();
+                return null;
             case "backupSet":
                 backupSet(str(a0), Boolean.TRUE.equals(args.size() > 1 ? args.get(1) : null));
                 return null;
             case "syncNow":
-                e().syncNow();
+                e().syncNow(a0 instanceof String ? (String) a0 : null);
                 changed();
                 return null;
             case "guestStart": {

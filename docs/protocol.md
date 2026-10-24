@@ -624,9 +624,11 @@ LAN only: these routes exist on the TLS receiver, never on the relay. A device a
 
 | Route | Answer |
 |---|---|
-| `GET /mesh/v1/sync/index` | `{v:1, files:[{rel, size, mtime, hash}]}` (sha256 hex; mtime in whole ms) |
-| `GET /mesh/v1/sync/file?rel=&hash=&offset=&len=` | Raw bytes, `len` at most 4 MiB; `409 changed` if the file no longer has `hash` |
-| `POST /mesh/v1/sync/poke` | `204`; the partner pulls soon |
+| `GET /mesh/v1/sync/index?f=<name>` | `{v:1, files:[{rel, size, mtime, hash}]}` (sha256 hex; mtime in whole ms) |
+| `GET /mesh/v1/sync/file?f=<name>&rel=&hash=&offset=&len=` | Raw bytes, `len` at most 4 MiB; `409 changed` if the file no longer has `hash` |
+| `POST /mesh/v1/sync/poke?f=<name>` | `204`; the partner pulls soon (without `f`: every folder shared with the caller) |
+
+Folders are matched by name (`f`, 1–64 characters, no `/`); `404 no-such-folder` if this device has none by that name. A request without `f` (a 0.3.0 partner) uses the first folder shared with the caller.
 
 **Rounds are pull only.** Each side fetches the partner's index and decides each path against the base (the hash both last agreed on, kept per partner):
 

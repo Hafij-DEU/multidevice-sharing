@@ -416,7 +416,7 @@ export class AppController extends EventEmitter {
     if (ev.source === 'mesh') this.#onMesh(ev);
     if (ev.source === 'guest') this.#onGuest(ev);
     if (ev.source === 'sync' && ev.type === 'round' && ev.conflicts > 0 && this.#settings.get().notifications) {
-      this.#platform.notify('Sync conflict', `A file changed on both ${this.#aliasOf(ev.partner)} and here. Both versions are kept: look for "(conflict from …)" in the sync folder.`);
+      this.#platform.notify('Sync conflict', `A file in "${ev.folder}" changed on both ${this.#aliasOf(ev.partner)} and here. Both versions are kept: look for "(conflict from …)".`);
     }
     this.#changed();
   }
@@ -711,22 +711,31 @@ export class AppController extends EventEmitter {
 
   #syncView(e: Engine): SyncView {
     const st = e.syncStatus();
-    return { folder: st.folder, suggested: join(homedir(), 'MeshDrop Sync'), partners: st.partners.map((p) => ({ ...p, ...(p.last ? { last: { ...p.last } } : {}) })) };
+    const def = join(homedir(), 'MeshDrop Sync');
+    return {
+      folders: st.folders.map((f) => ({ ...f, partners: f.partners.map((p) => ({ ...p, ...(p.last ? { last: { ...p.last } } : {}) })) })),
+      suggested: st.folders.some((f) => f.folder === def) ? '' : def,
+    };
   }
 
-  async syncSet(folder: string, partners: string[]): Promise<void> {
-    this.#e.syncSet({ folder, partners });
+  async syncPut(name: string, folder: string, partners: string[], previousName?: string): Promise<void> {
+    this.#e.syncPut({ ...(name.trim() ? { name: name.trim() } : {}), folder, partners }, previousName);
     this.#changed();
   }
 
-  async openSyncFolder(): Promise<void> {
-    const f = this.#e.syncConfig().folder;
-    if (f === '') throw new Error('Sync is off.');
-    await this.#platform.openPath(f);
+  async syncRemove(name: string): Promise<void> {
+    this.#e.syncRemove(name);
+    this.#changed();
   }
 
-  async syncNow(): Promise<void> {
-    await this.#e.syncNow();
+  async openSyncFolder(name: string): Promise<void> {
+    const f = this.#e.syncConfig().folders.find((x) => x.name === name);
+    if (!f) throw new Error('No such synced folder.');
+    await this.#platform.openPath(f.folder);
+  }
+
+  async syncNow(name?: string): Promise<void> {
+    await this.#e.syncNow(name);
     this.#changed();
   }
 

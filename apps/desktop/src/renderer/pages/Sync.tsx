@@ -1,85 +1,117 @@
 import { useState } from 'react';
-import type { AppState } from '../../shared/api.ts';
+import type { AppState, SyncPartnerView, SyncView } from '../../shared/api.ts';
 import type { Run } from '../App.tsx';
 import { Peer } from '../components/Peer.tsx';
 import { fmtTime } from '../format.ts';
 
-/** Folder sync: one folder kept the same on this device and the partners ticked here (same Wi-Fi). */
-export function Sync({ state, run }: { state: AppState; run: Run }) {
-  const s = state.sync;
-  if (!s) return <p className="muted">Folder sync is not available here yet.</p>;
-  const ticked = new Set(s.partners.map((p) => p.deviceId));
+/** How a folder is shown: a path, or the readable part of a picked folder's URI (Android). */
+const shown = (f: string) => (f.startsWith('content://') ? decodeURIComponent(f.split('/tree/')[1] ?? f).replace(/^primary:/, '') : f);
+
+function partnerStatus(p: SyncPartnerView | undefined): { text: string; bad: boolean } {
+  if (!p) return { text: 'Not synced', bad: false };
+  const last = p.last;
+  if (p.syncing) return { text: 'Syncing…', bad: false };
+  if (!p.present) return { text: 'Waiting for it on this Wi-Fi', bad: false };
+  if (last?.error) {
+    return { text: /404/.test(last.error) ? 'It has no folder with this name yet' : `Last try failed: ${last.error}`, bad: true };
+  }
+  if (!last) return { text: 'On this Wi-Fi', bad: false };
+  const changed = last.pulled + last.deleted > 0 ? ` · ${last.pulled} new, ${last.deleted} removed` : '';
+  return { text: `Synced ${fmtTime(last.at)}${changed}${last.conflicts ? ` · ${last.conflicts} conflict(s)` : ''}`, bad: false };
+}
+
+/** One synced folder: its name (what matches it on the other devices), path, partners and actions. */
+function FolderCard({ f, state, run }: { f: SyncView['folders'][number]; state: AppState; run: Run }) {
+  const [name, setName] = useState(f.name);
+  const [removing, setRemoving] = useState(false);
+  const ticked = new Set(f.partners.map((p) => p.deviceId));
   const candidates = state.devices.filter((d) => d.trusted && d.role !== 'localsend');
-  const set = (folder: string, partners: string[]) => run(() => window.meshdrop.syncSet(folder, partners));
-  const toggle = (id: string) => void set(s.folder, ticked.has(id) ? [...ticked].filter((x) => x !== id) : [...ticked, id]);
-  const choose = () =>
-    void run(async () => {
-      const p = await window.meshdrop.pickFolder();
-      if (p) await window.meshdrop.syncSet(p, [...ticked]);
-    });
-
+  const put = (partners: string[], newName = f.name) => run(() => window.meshdrop.syncPut(newName, f.folder, partners, f.name));
   return (
-    <section>
-      <p className="muted">
-        One folder stays the same here and on the devices you tick, whenever both are on the same Wi-Fi. Keep it for files you want everywhere, not your working folders. Both devices must tick each other.
-      </p>
-      <h2>Folder</h2>
-      {s.folder === '' ? (
-        <div className="row">
-          {s.suggested !== '' && (
-            <button className="primary" onClick={() => void set(s.suggested, [...ticked])}>
-              Use {s.suggested}
-            </button>
-          )}
-          <button className={s.suggested === '' ? 'primary' : ''} onClick={choose}>
-            {s.suggested === '' ? 'Choose a folder…' : 'Choose another…'}
+    <section className="sync-folder" data-sync-folder={f.name}>
+      <div className="row">
+        <input aria-label="Sync name" className="grow" value={name} maxLength={64} onChange={(e) => setName(e.target.value)} />
+        {name.trim() !== f.name && (
+          <button className="primary" onClick={() => void put([...ticked], name.trim())}>
+            Rename
           </button>
-        </div>
-      ) : (
-        <div className="row">
-          <code className="grow">{s.folder.startsWith('content://') ? decodeURIComponent(s.folder.split('/tree/')[1] ?? s.folder).replace(/^primary:/, '') : s.folder}</code>
-          {window.meshdrop.openSyncFolder && <button onClick={() => void run(() => window.meshdrop.openSyncFolder!())}>Open</button>}
-          <button onClick={choose}>Change…</button>
-          <button onClick={() => void set('', [...ticked])}>Turn off</button>
-        </div>
-      )}
-
-      <div className="row space">
-        <h2>Sync with</h2>
-        {s.folder !== '' && ticked.size > 0 && (
-          <button onClick={() => void run(() => window.meshdrop.syncNow(), 'Synced')}>Sync now</button>
         )}
+      </div>
+      <div className="row">
+        <code className="grow">{shown(f.folder)}</code>
+        {window.meshdrop.openSyncFolder && <button onClick={() => void run(() => window.meshdrop.openSyncFolder!(f.name))}>Open</button>}
+        {ticked.size > 0 && <button onClick={() => void run(() => window.meshdrop.syncNow(f.name), 'Synced')}>Sync now</button>}
+        <button
+          className={removing ? 'danger' : ''}
+          onClick={() => {
+            if (!removing) {
+              setRemoving(true);
+              setTimeout(() => setRemoving(false), 4000);
+              return;
+            }
+            void run(() => window.meshdrop.syncRemove(f.name), 'No longer synced (its files stay)');
+          }}
+        >
+          {removing ? 'Tap again to stop syncing' : 'Stop syncing'}
+        </button>
       </div>
       {candidates.length === 0 ? (
         <p className="muted">Pair a device first (Send → Add a device).</p>
       ) : (
         <ul className="list">
           {candidates.map((d) => {
-            const p = s.partners.find((x) => x.deviceId === d.deviceId);
-            const last = p?.last;
-            const status = !p
-              ? 'Not synced'
-              : p.syncing
-                ? 'Syncing…'
-                : !p.present
-                  ? 'Waiting for it on this Wi-Fi'
-                  : last?.error
-                    ? `Last try failed: ${last.error}`
-                    : last
-                      ? `Synced ${fmtTime(last.at)}${last.pulled + last.deleted > 0 ? ` · ${last.pulled} new, ${last.deleted} removed` : ''}${last.conflicts ? ` · ${last.conflicts} conflict(s)` : ''}`
-                      : 'On this Wi-Fi';
+            const st = partnerStatus(f.partners.find((x) => x.deviceId === d.deviceId));
             return (
               <li key={d.deviceId} className="row space" data-sync={d.deviceId}>
                 <label className="toggle">
-                  <input type="checkbox" checked={!!p} disabled={s.folder === ''} onChange={() => toggle(d.deviceId)} /> <Peer text={d.alias} />
+                  <input
+                    type="checkbox"
+                    checked={ticked.has(d.deviceId)}
+                    onChange={() => void put(ticked.has(d.deviceId) ? [...ticked].filter((x) => x !== d.deviceId) : [...ticked, d.deviceId])}
+                  />{' '}
+                  <Peer text={d.alias} />
                 </label>
-                <span className={last?.error ? 'error-text' : 'muted'}>{status}</span>
+                <span className={st.bad ? 'error-text' : 'muted'}>{st.text}</span>
               </li>
             );
           })}
         </ul>
       )}
-      <p className="muted hint">Replaced and deleted files are kept 30 days in the folder&apos;s .meshdrop-trash. If a file changed on both sides, both versions are kept.</p>
+    </section>
+  );
+}
+
+/** Folder sync: folders kept the same here and on the devices ticked for each (same Wi-Fi). */
+export function Sync({ state, run }: { state: AppState; run: Run }) {
+  const s = state.sync;
+  if (!s) return <p className="muted">Folder sync is not available here yet.</p>;
+  const add = (folder: string) => run(() => window.meshdrop.syncPut('', folder, []));
+  const choose = () =>
+    void run(async () => {
+      const p = await window.meshdrop.pickFolder();
+      if (p) await window.meshdrop.syncPut('', p, []);
+    });
+  return (
+    <section>
+      <p className="muted">
+        Folders you add here stay the same on the devices you tick for them, whenever both are on the same Wi-Fi. Folders match by name: give a folder
+        the same name on each device (it starts as the folder&apos;s own name). Use folders made for this, not your working folders.
+      </p>
+      {s.folders.map((f) => (
+        <FolderCard key={f.name} f={f} state={state} run={run} />
+      ))}
+      <h2>{s.folders.length === 0 ? 'Add a folder' : 'Add another folder'}</h2>
+      <div className="row">
+        {s.suggested !== '' && (
+          <button className={s.folders.length === 0 ? 'primary' : ''} onClick={() => void add(s.suggested)}>
+            Use {s.suggested}
+          </button>
+        )}
+        <button className={s.suggested === '' && s.folders.length === 0 ? 'primary' : ''} onClick={choose}>
+          Choose a folder…
+        </button>
+      </div>
+      <p className="muted hint">Replaced and deleted files are kept 30 days in each folder&apos;s .meshdrop-trash. If a file changed on both sides, both versions are kept.</p>
       <PhotoBackup state={state} run={run} />
     </section>
   );

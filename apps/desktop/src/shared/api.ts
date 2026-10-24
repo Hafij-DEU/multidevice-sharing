@@ -86,18 +86,19 @@ export interface GuestView {
 }
 
 /** Folder sync (LAN only): the folder, and the devices it is synced with. */
+export interface SyncPartnerView {
+  deviceId: string;
+  alias?: string;
+  present: boolean;
+  syncing: boolean;
+  last?: { at: number; pulled: number; deleted: number; conflicts: number; errors: number; error?: string };
+}
+
+/** Folder sync (LAN only): each synced folder, matched with the partners' folders by name. */
 export interface SyncView {
-  /** '' while sync is off. */
-  folder: string;
-  /** Where "Use the default folder" would put it. */
+  folders: { name: string; folder: string; partners: SyncPartnerView[] }[];
+  /** A path for "Use the suggested folder" ('' on Android, where the folder is always picked). */
   suggested: string;
-  partners: {
-    deviceId: string;
-    alias?: string;
-    present: boolean;
-    syncing: boolean;
-    last?: { at: number; pulled: number; deleted: number; conflicts: number; errors: number; error?: string };
-  }[];
 }
 
 /** An internet guest link (hub PC only). */
@@ -220,13 +221,16 @@ export interface DesktopApi {
   linkRevoke(id: string): Promise<void>;
   reachDetect(): Promise<void>;
   reachSet(input: ReachInput): Promise<void>;
-  syncSet(folder: string, partners: string[]): Promise<void>;
-  syncNow(): Promise<void>;
+  /** Adds or changes a synced folder; `previousName` renames that one. */
+  syncPut(name: string, folder: string, partners: string[], previousName?: string): Promise<void>;
+  syncRemove(name: string): Promise<void>;
+  /** A round now for one folder, or (no name) all of them. */
+  syncNow(name?: string): Promise<void>;
   /** Android: photo backup to `target` ('' = off); `includeExisting`: also the photos already on the phone. */
   backupSet?(target: string, includeExisting: boolean): Promise<void>;
   backupPermission?(): Promise<void>;
   /** Desktop: shows the sync folder in the file manager. */
-  openSyncFolder?(): Promise<void>;
+  openSyncFolder?(name: string): Promise<void>;
   openInbox(): Promise<void>;
   reveal(path: string): Promise<void>;
   /** Unpairs a manually paired device (it shows as nearby again: Pair re-pairs it). */
