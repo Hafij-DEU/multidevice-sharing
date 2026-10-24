@@ -56,6 +56,25 @@ export interface Settings {
   closeToTray: boolean;
   clipboardReceive: boolean;
   notifications: boolean;
+  /** How long a guest link works, in minutes (5..1440). */
+  guestMinutes: number;
+}
+
+export interface GuestFileView { name: string; size: number; type?: string; thumb?: string }
+
+/** The LAN guest session (desktop only for now). */
+export interface GuestView {
+  active: boolean;
+  /** False when the guest server could not start (its port is taken, or this window is client-only). */
+  available: boolean;
+  url?: string;
+  qrSvg?: string;
+  expiresAt?: number;
+  /** A browser has opened the link. */
+  claimed?: boolean;
+  shared: { id: string; name: string; size: number }[];
+  /** Sends waiting for the owner's answer. */
+  offers: { id: string; files: GuestFileView[]; text?: string }[];
 }
 
 export interface AppState {
@@ -81,6 +100,8 @@ export interface AppState {
   joinLink?: string;
   /** Mesh members (for the Mesh page). */
   members: { deviceId: string; alias: string; role: 'hub' | 'member'; self: boolean }[];
+  /** LAN guests (absent where the platform has no guest server, e.g. Android). */
+  guest?: GuestView;
 }
 
 export interface DesktopApi {
@@ -105,6 +126,12 @@ export interface DesktopApi {
   exportRecovery(path: string, passphrase: string): Promise<void>;
   importRecovery(path: string, passphrase: string): Promise<void>;
   setSettings(patch: Partial<Settings>): Promise<Settings>;
+  guestStart(): Promise<{ url: string; qrSvg: string; expiresAt: number }>;
+  guestEnd(): Promise<void>;
+  guestShare(paths: string[]): Promise<void>;
+  guestUnshare(id: string): Promise<void>;
+  guestAccept(id: string): Promise<void>;
+  guestReject(id: string): Promise<void>;
   openInbox(): Promise<void>;
   reveal(path: string): Promise<void>;
   registerClipboardShortcut(binding: string): Promise<void>;

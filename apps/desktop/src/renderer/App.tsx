@@ -2,13 +2,15 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { AppState } from '../shared/api.ts';
 import { Toasts, type ToastItem } from './components/Toast.tsx';
 import { errorText } from './format.ts';
+import { GuestOffer } from './components/GuestOffer.tsx';
 import { Devices } from './pages/Devices.tsx';
+import { Guests } from './pages/Guests.tsx';
 import { Inbox } from './pages/Inbox.tsx';
 import { Mesh } from './pages/Mesh.tsx';
 import { Settings } from './pages/Settings.tsx';
 import { Transfers } from './pages/Transfers.tsx';
 
-const PAGES = ['Devices', 'Transfers', 'Inbox', 'Mesh', 'Settings'] as const;
+const PAGES = ['Devices', 'Transfers', 'Inbox', 'Guests', 'Mesh', 'Settings'] as const;
 type Page = (typeof PAGES)[number];
 
 /** Runs an action; shows its error (or `ok`, or a string it returns) as a toast. Resolves undefined on error. */
@@ -72,7 +74,7 @@ export function App() {
     <div className="app">
       <nav className="sidebar" aria-label="Pages">
         <div className="brand">MeshDrop</div>
-        {PAGES.map((p) => (
+        {PAGES.filter((p) => !(p === 'Guests' && !state?.guest)).map((p) => (
           <button key={p} className={p === page ? 'nav active' : 'nav'} onClick={() => setPage(p)} aria-current={p === page ? 'page' : undefined}>
             {p}
           </button>
@@ -106,12 +108,15 @@ export function App() {
           <Transfers state={state} run={run} />
         ) : page === 'Inbox' ? (
           <Inbox state={state} run={run} />
+        ) : page === 'Guests' ? (
+          <Guests state={state} run={run} />
         ) : page === 'Mesh' ? (
           <Mesh state={state} run={run} />
         ) : (
           <Settings key={JSON.stringify(state.settings)} state={state} run={run} />
         )}
       </main>
+      {state?.guest?.offers[0] && <GuestOffer key={state.guest.offers[0].id} offer={state.guest.offers[0]} run={run} />}
       <Toasts items={toasts} onClose={(id) => setToasts((t) => t.filter((x) => x.id !== id))} />
     </div>
   );

@@ -12,7 +12,7 @@ import { CHUNK_SIZE } from '@meshdrop/core/src/chunk.ts';
 import { Engine, liveListener, type EngineEvent, type EngineOptions, type SendItem } from '@meshdrop/core/src/engine.ts';
 import { loadOrCreateIdentity } from '@meshdrop/core/src/identity.ts';
 import { writeFileAtomic } from '@meshdrop/core/src/trust.ts';
-import type { AppState, DeviceView, SendItemInput, Settings, TransferView } from '../shared/api.ts';
+import type { AppState, DeviceView, GuestView, SendItemInput, Settings, TransferView } from '../shared/api.ts';
 import type { HistoryStore } from './history.ts';
 import { SettingsError, type SettingsStore } from './settings.ts';
 
@@ -106,6 +106,8 @@ export class AppController extends EventEmitter {
   #lastEmit = 0;
   #stopped = false;
   #paused = false;
+  /** The guest link's QR code (the engine keeps the rest of the session). */
+  #guestQr: string | undefined;
 
   constructor(opts: ControllerOptions) {
     super();
@@ -259,7 +261,14 @@ export class AppController extends EventEmitter {
       receiving: this.#mode === 'serving' && !this.#paused && this.#error === undefined,
       ...(this.#error !== undefined ? { error: this.#error } : {}),
       members: e.members().map((m) => ({ deviceId: m.deviceId, alias: m.alias, role: m.role, self: m.deviceId === me })),
+      guest: this.#guestView(e),
     };
+  }
+
+  #guestView(e: Engine): GuestView {
+    const g = e.guestState();
+    if (!g.active) return { active: false, available: g.available && this.#mode === 'serving', shared: [], offers: [] };
+    return { ...g, ...(this.#guestQr !== undefined ? { qrSvg: this.#guestQr } : {}) };
   }
 
   get receiving(): boolean {
@@ -335,7 +344,23 @@ export class AppController extends EventEmitter {
     if (ev.source === 'sender') this.#onSender(ev);
     else if (ev.source === 'receiver') this.#onReceiver(ev);
     if (ev.source === 'mesh') this.#onMesh(ev);
+    if (ev.source === 'guest') this.#onGuest(ev);
     this.#changed();
+  }
+
+  #onGuest(ev: Extract<EngineEvent, { source: 'guest' }>): void {
+    const s = this.#settings.get();
+    if (ev.type === 'ended') this.#guestQr = undefined;
+    if (ev.type === 'offer' && s.notifications) {
+      const n = ev.files.length;
+      const what = n > 0 ? `${n} file${n === 1 ? '' : 's'}${ev.text !== undefined ? ' and a message' : ''}` : 'a message';
+      this.#platform.notify('A guest wants to send', `${what}: open MeshDrop to accept or decline.`);
+    }
+    if (ev.type === 'received') {
+      this.#history.addReceived({ at: Date.now(), from: 'guest', alias: 'Guest', files: [...ev.files], ...(ev.text !== undefined ? { text: ev.text } : {}) });
+      const first = ev.files[0];
+      if (s.notifications) this.#platform.notify('From a guest', `${ev.files.length} file${ev.files.length === 1 ? '' : 's'} received`, first !== undefined ? () => this.#platform.revealPath(first) : undefined);
+    }
   }
 
   #onMesh(ev: Extract<EngineEvent, { source: 'mesh' }>): void {
@@ -535,6 +560,42 @@ export class AppController extends EventEmitter {
   async setHubUrls(urls: string[]): Promise<void> {
     this.#notClientOnly();
     await this.#e.setHubUrls(urls);
+    this.#changed();
+  }
+
+  // ---- LAN guests -------------------------------------------------------------------------------
+
+  async guestStart(): Promise<{ url: string; qrSvg: string; expiresAt: number }> {
+    this.#notClientOnly();
+    const g = await this.#e.guestStart({ minutes: this.#settings.get().guestMinutes });
+    this.#guestQr = g.qrSvg;
+    this.#changed();
+    return g;
+  }
+
+  async guestEnd(): Promise<void> {
+    await this.#e.guestEnd();
+    this.#guestQr = undefined;
+    this.#changed();
+  }
+
+  async guestShare(paths: string[]): Promise<void> {
+    await this.#e.guestShare(paths);
+    this.#changed();
+  }
+
+  async guestUnshare(id: string): Promise<void> {
+    this.#e.guestUnshare(id);
+    this.#changed();
+  }
+
+  async guestAccept(id: string): Promise<void> {
+    await this.#e.guestAccept(id);
+    this.#changed();
+  }
+
+  async guestReject(id: string): Promise<void> {
+    await this.#e.guestReject(id);
     this.#changed();
   }
 

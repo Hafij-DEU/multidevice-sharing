@@ -172,6 +172,7 @@ const items = (x: unknown): SendItemInput[] => {
 const SETTING_TYPES: Record<keyof Settings, 'string' | 'number' | 'boolean'> = {
   alias: 'string', inbox: 'string', port: 'number', discovery: 'boolean', autostart: 'boolean',
   startHidden: 'boolean', closeToTray: 'boolean', clipboardReceive: 'boolean', notifications: 'boolean',
+  guestMinutes: 'number',
 };
 const settingsPatch = (x: unknown): Partial<Settings> => {
   if (typeof x !== 'object' || x === null || Array.isArray(x)) throw new ArgError('invalid argument');
@@ -247,6 +248,12 @@ function wireIpc(): void {
     rebuildTray();
     return s;
   });
+  handle('guestStart', (_e) => ctl().guestStart());
+  handle('guestEnd', (_e) => ctl().guestEnd());
+  handle('guestShare', (_e, p) => ctl().guestShare(strs(p, 1000)));
+  handle('guestUnshare', (_e, id) => ctl().guestUnshare(str(id, 64)));
+  handle('guestAccept', (_e, id) => ctl().guestAccept(str(id, 64)));
+  handle('guestReject', (_e, id) => ctl().guestReject(str(id, 64)));
   handle('openInbox', (_e) => ctl().openInbox());
   handle('reveal', (_e, p) => ctl().reveal(str(p)));
   handle('registerClipboardShortcut', async (_e, b) => {

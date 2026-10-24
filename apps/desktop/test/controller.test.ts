@@ -58,7 +58,7 @@ async function make(alias: string, over: Partial<Settings> = {}, home = tmpDir()
     settings,
     history: new HistoryStore(join(home, 'desktop-history.json')),
     platform: p,
-    engineOptions: { hub: { ingressPort: 0 }, hubBackoffMs: [50, 100], allowLoopbackHubUrls: true },
+    engineOptions: { hub: { ingressPort: 0 }, hubBackoffMs: [50, 100], allowLoopbackHubUrls: true, guest: { port: 0 } },
   });
   ctls.push(c);
   await c.start();
@@ -253,3 +253,40 @@ async function freePort(): Promise<number> {
   await new Promise<void>((r) => s.close(() => r()));
   return port;
 }
+
+describe('AppController guests', () => {
+  it('opens a guest link for the set length, prompts for an offer, and records what was received', async () => {
+    const A = await make('alpha', { guestMinutes: 15 });
+    expect(A.c.state().guest).toMatchObject({ active: false, available: true });
+    const g = await A.c.guestStart();
+    expect(Math.abs(g.expiresAt - (Date.now() + 15 * 60_000))).toBeLessThan(5_000);
+    expect(A.c.state().guest).toMatchObject({ active: true, url: g.url, qrSvg: g.qrSvg, claimed: false });
+    const token = g.url.split('/').pop()!;
+    const base = g.url.slice(0, g.url.indexOf('/g/'));
+    const cookie = ((await fetch(g.url)).headers.get('set-cookie') ?? '').split(';')[0]!;
+    const h = { 'x-guest-token': token, cookie };
+    const { id } = (await (await fetch(`${base}/g/api/offers`, { method: 'POST', headers: h, body: JSON.stringify({ files: [{ name: 'g.txt', size: 2 }], text: 'hi' }) })).json()) as { id: string };
+    await until(() => (A.c.state().guest?.offers.length ?? 0) === 1);
+    expect(A.c.state().guest?.offers[0]).toMatchObject({ id, text: 'hi', files: [{ name: 'g.txt', size: 2 }] });
+    expect(A.p.notes.some((n) => n.title === 'A guest wants to send')).toBe(true);
+    await A.c.guestAccept(id);
+    await fetch(`${base}/g/api/offers/${id}/0?offset=0`, { method: 'PUT', headers: h, body: 'ok' });
+    await until(() => A.c.state().received.some((r) => r.from === 'guest'));
+    expect(A.c.state().received.find((r) => r.from === 'guest')).toMatchObject({ alias: 'Guest', files: [join(A.inbox, 'g.txt')], text: 'hi' });
+    const shared = join(tmpDir(), 's.txt');
+    writeFileSync(shared, 'x');
+    await A.c.guestShare([shared]);
+    expect(A.c.state().guest?.shared).toEqual([{ id: expect.any(String), name: 's.txt', size: 1 }]);
+    await A.c.guestEnd();
+    expect(A.c.state().guest?.active).toBe(false);
+    expect((await fetch(`${base}/g/api/session`, { headers: h })).status).toBe(410);
+  });
+
+  it('keeps the guest length within 5 minutes to 24 hours', async () => {
+    const A = await make('alpha');
+    expect(A.c.state().settings.guestMinutes).toBe(60);
+    await expect(A.c.setSettings({ guestMinutes: 2 })).rejects.toThrow(/5/);
+    await expect(A.c.setSettings({ guestMinutes: 2000 })).rejects.toThrow(/1440|24/);
+    expect((await A.c.setSettings({ guestMinutes: 240 })).guestMinutes).toBe(240);
+  });
+});
