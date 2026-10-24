@@ -20,7 +20,7 @@ import { EventEmitter } from 'node:events';
 import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, statSync, unlinkSync, writeSync } from 'node:fs';
 import { lstat, readdir } from 'node:fs/promises';
 import type { Server as HttpServer } from 'node:http';
-import type { Server } from 'node:https';
+import { createServer as createHttpsServer, type Server } from 'node:https';
 import { homedir, hostname, networkInterfaces } from 'node:os';
 import { basename, join } from 'node:path';
 import { connect } from 'node:tls';
@@ -33,6 +33,9 @@ import { GUEST_PAGE } from './guest/page.ts';
 import { createGuestServer, type SharedFile } from './guest/server.ts';
 import { GuestUploads, type GuestEvent, type GuestFile } from './guest/uploads.ts';
 import { LINK_PAGE } from './links/page.ts';
+import { lsRegister, lsSend } from './localsend/client.ts';
+import { LS_PORT, LocalSendDiscovery, type LsPeerInfo } from './localsend/discovery.ts';
+import { LocalSendReceiver, type LsEvent, type LsInfo } from './localsend/server.ts';
 import { ReachManager, type ReachConfig, type ReachEnv, type ReachStatus } from './reach/manager.ts';
 import { createLinkHandler } from './links/server.ts';
 import { LinkStore, type LinkInfo } from './links/store.ts';
@@ -73,10 +76,12 @@ export type EngineEvent =
   | { source: 'sender'; type: 'progress'; deviceId: string; sessionId: string; fileId: number; sent: number; total: number; tag?: string }
   | ({ source: 'sender'; type: 'result'; tag?: string } & SendResult)
   | { source: 'discovery'; type: 'peer' | 'lost'; peer: PeerInfo }
+  /** A LocalSend app showed up on the LAN. */
+  | { source: 'localsend'; type: 'peer'; fingerprint: string; alias: string }
   /** LAN guests: an offer waiting for the owner, a finished upload, one file of it, a rejected offer, the session ended. */
   /** `via: 'link'`: the visitor came through an internet guest link (`link` is its id). */
-  | { source: 'guest'; type: 'offer'; id: string; files: GuestFile[]; text?: string; via?: 'link'; link?: string }
-  | { source: 'guest'; type: 'received'; id: string; files: string[]; text?: string }
+  | { source: 'guest'; type: 'offer'; id: string; files: GuestFile[]; text?: string; via?: 'link' | 'localsend'; link?: string; alias?: string }
+  | { source: 'guest'; type: 'received'; id: string; files: string[]; text?: string; via?: 'localsend'; alias?: string }
   | { source: 'guest'; type: 'file'; id: string; path: string }
   | { source: 'guest'; type: 'rejected'; id: string }
   | { source: 'guest'; type: 'failed'; id: string; error: string }
@@ -111,7 +116,7 @@ export interface GuestState {
   claimed?: boolean;
   shared: { id: string; name: string; size: number }[];
   /** Offers waiting for the owner's answer. */
-  offers: { id: string; files: GuestFile[]; text?: string; via?: 'link' }[];
+  offers: { id: string; files: GuestFile[]; text?: string; via?: 'link' | 'localsend'; alias?: string }[];
 }
 
 /** An internet guest link as the owner's app lists it. */
@@ -188,6 +193,8 @@ export interface EngineOptions {
   hub?: { ingressPort?: number; heldQuotaBytes?: number; heldTtlMs?: number };
   /** Hub link reconnect backoff (default 1 s .. 60 s). */
   hubBackoffMs?: number[];
+  /** LocalSend v2 interop (HTTPS port default 53317, multicast 224.0.0.167:53317); false: off. Only with serve. */
+  localsend?: { port?: number; multicastPort?: number; iface?: string; answerTimeoutMs?: number } | false;
   /** Internet reach (M5c) seams for tests: fake CLIs, CA, DuckDNS and router. */
   reach?: Omit<ReachEnv, 'home' | 'ingressPort' | 'attachPublic' | 'publish'>;
   /** Total bytes internet guest links may keep on the hub (default 10 GiB). */
@@ -214,7 +221,8 @@ export interface EngineOptions {
 export interface EngineDevice {
   deviceId: string;
   alias: string;
-  role: 'hub' | 'member' | 'paired' | 'nearby';
+  /** localsend: a LocalSend app on the LAN (untrusted; sends to it go through its own protocol). */
+  role: 'hub' | 'member' | 'paired' | 'nearby' | 'localsend';
   trusted: boolean;
   reach: 'lan' | 'hub' | 'offline';
   deviceType?: string;
@@ -435,6 +443,8 @@ interface Running {
   /** The LAN guest server and its port (null / 0: none). */
   guest: HttpServer | null;
   guestPort: number;
+  /** The LocalSend server and its discovery (null: off). */
+  ls: { server: Server; port: number; discovery: LocalSendDiscovery } | null;
   discovery: Discovery;
   abort: AbortController;
   port: number;
@@ -703,7 +713,50 @@ export class Engine extends EventEmitter {
       }
     }
 
-    this.running = { server, guest, guestPort, discovery, abort: new AbortController(), port, hub, ingressPort, client: null, timers: [] };
+    // LocalSend interop: optional too (its port may belong to the LocalSend app on this PC).
+    let ls: Running['ls'] = null;
+    if (server && this.opts.localsend !== false) {
+      const lo = this.opts.localsend || {};
+      this.lsReceiver = new LocalSendReceiver({
+        self: () => this.lsSelf(), partialDir: join(this.home, 'localsend-partial'), inboxRoot: this.inboxDir,
+        onEvent: (e) => this.onLocalSend(e), accepting: () => this.accepting,
+        ...(lo.answerTimeoutMs !== undefined ? { answerTimeoutMs: lo.answerTimeoutMs } : {}),
+      });
+      const rcv = this.lsReceiver;
+      const s = createHttpsServer({ key: this.identity.keyPem, cert: this.identity.certPem, minVersion: 'TLSv1.2' }, (req, res) => {
+        if (!rcv.handle(req, res)) {
+          res.writeHead(404);
+          res.end();
+        }
+      });
+      try {
+        await new Promise<void>((resolve, reject) => {
+          s.once('error', reject);
+          s.listen(lo.port ?? LS_PORT, () => {
+            s.removeListener('error', reject);
+            resolve();
+          });
+        });
+        s.on('error', () => {});
+        s.on('tlsClientError', () => {});
+        rmSync(join(this.home, 'localsend-partial'), { recursive: true, force: true });
+        const lsPort = (s.address() as { port: number }).port;
+        this.lsPort = lsPort;
+        // The peer list always exists (peers also register over HTTPS); multicast only with discovery.
+        const disc = new LocalSendDiscovery({
+          self: () => this.lsSelf(), register: (p) => lsRegister(p, this.lsSelf()),
+          ...(lo.multicastPort !== undefined ? { port: lo.multicastPort } : {}), ...(lo.iface ? { iface: lo.iface } : {}),
+        });
+        disc.on('error', () => {});
+        disc.on('peer', (p: LsPeerInfo) => this.emitEvent({ source: 'localsend', type: 'peer', fingerprint: p.fingerprint, alias: p.alias }));
+        if (dopts !== false || lo.iface) disc.start();
+        ls = { server: s, port: lsPort, discovery: disc };
+      } catch {
+        this.lsReceiver = null; // port in use (the LocalSend app itself?): no interop this run
+      }
+    }
+
+    this.running = { server, guest, guestPort, ls, discovery, abort: new AbortController(), port, hub, ingressPort, client: null, timers: [] };
     if (server) {
       if (this.mesh) this.startClient();
       const r = this.running;
@@ -770,6 +823,13 @@ export class Engine extends EventEmitter {
     this.reach = null;
     await r.hub?.close();
     await this.endGuest(false);
+    if (r.ls) {
+      r.ls.discovery?.stop();
+      const closed = new Promise<void>((resolve) => r.ls!.server.close(() => resolve()));
+      r.ls.server.closeAllConnections();
+      await closed;
+      this.lsReceiver = null;
+    }
     if (r.guest) {
       const closed = new Promise<void>((resolve) => r.guest!.close(() => resolve()));
       r.guest.closeAllConnections();
@@ -1081,6 +1141,10 @@ export class Engine extends EventEmitter {
       }
     }
     for (const [id, d] of out) if (d.lastSeen === undefined && dir.get(id)?.lastSeen) d.lastSeen = dir.get(id)!.lastSeen;
+    for (const p of this.localsendPeers()) {
+      if (out.has(p.fingerprint) || p.fingerprint === this.identity.deviceId) continue;
+      out.set(p.fingerprint, { deviceId: p.fingerprint, alias: p.alias, role: 'localsend', trusted: false, reach: 'lan', deviceType: p.deviceType ?? 'mobile', lastSeen: p.lastSeen });
+    }
     return [...out.values()];
   }
 
@@ -1536,23 +1600,62 @@ export class Engine extends EventEmitter {
   }
 
   /** The upload store an offer id belongs to: the LAN guest session or one of the links. */
-  private uploadsOf(id: string): GuestUploads {
+  // ---- LocalSend v2 interop (M6) ------------------------------------------------------------------
+
+  private lsReceiver: LocalSendReceiver | null = null;
+  private lsPort = 0;
+
+  private lsSelf(): LsInfo {
+    return { alias: this.alias, version: '2.0', deviceModel: 'MeshDrop', deviceType: this.deviceType === 'mobile' ? 'mobile' : this.deviceType === 'headless' ? 'headless' : 'desktop', fingerprint: this.identity.deviceId, port: this.lsPort || LS_PORT, protocol: 'https', download: false };
+  }
+
+  private onLocalSend(e: LsEvent): void {
+    if (e.type === 'register') {
+      const host = e.address.replace(/^::ffff:/, '');
+      const port = Number.isInteger(e.info.port) ? e.info.port! : LS_PORT;
+      this.running?.ls?.discovery?.seen({ alias: e.info.alias, fingerprint: e.info.fingerprint, host, port, protocol: e.info.protocol === 'http' ? 'http' : 'https', lastSeen: Date.now(), ...(e.info.deviceModel ? { deviceModel: e.info.deviceModel } : {}), ...(e.info.deviceType ? { deviceType: e.info.deviceType } : {}) });
+    } else if (e.type === 'offer') {
+      this.emitEvent({ source: 'guest', type: 'offer', id: e.id, files: e.files, via: 'localsend', alias: e.from.alias, ...(e.text !== undefined ? { text: e.text } : {}) });
+    } else if (e.type === 'received') {
+      this.emitEvent({ source: 'guest', type: 'received', id: e.id, files: e.files, via: 'localsend', alias: e.from.alias, ...(e.text !== undefined ? { text: e.text } : {}) });
+    } else {
+      this.emitEvent({ source: 'guest', type: 'rejected', id: e.id });
+    }
+  }
+
+  /** LocalSend apps seen on the LAN. */
+  localsendPeers(): LsPeerInfo[] {
+    return this.running?.ls?.discovery?.peers() ?? [];
+  }
+
+  /** Sends files and/or a message to a LocalSend app on the LAN (it asks its user first). */
+  async localsendSend(fingerprint: string, items: { paths: string[]; text?: string }, onProgress?: (sent: number, total: number) => void): Promise<void> {
+    const p = this.running?.ls?.discovery?.peer(fingerprint);
+    if (!p) throw new Error('that LocalSend device is not on this network right now');
+    await lsSend(p, this.lsSelf(), items, onProgress ? { onProgress } : {});
+  }
+
+  private uploadsOf(id: string): GuestUploads | LocalSendReceiver {
+    if (this.lsReceiver?.has(id)) return this.lsReceiver;
     if (this.guestUploads?.has(id)) return this.guestUploads;
     for (const u of this.linkUploadMap.values()) if (u.has(id)) return u;
     throw new Error('no such guest offer');
   }
 
-  guestAccept(id: string): Promise<void> {
-    return this.uploadsOf(id).accept(id);
+  async guestAccept(id: string): Promise<void> {
+    await this.uploadsOf(id).accept(id);
   }
 
-  guestReject(id: string): Promise<void> {
-    return this.uploadsOf(id).reject(id);
+  async guestReject(id: string): Promise<void> {
+    await this.uploadsOf(id).reject(id);
   }
 
   guestState(): GuestState {
     const cur = this.guestBook.current();
-    const viaLinks = [...this.linkUploadMap.values()].flatMap((u) => u.pending().map((o) => ({ ...o, via: 'link' as const })));
+    const viaLinks = [
+      ...[...this.linkUploadMap.values()].flatMap((u) => u.pending().map((o) => ({ ...o, via: 'link' as const }))),
+      ...(this.lsReceiver?.pending() ?? []).map((o) => ({ ...o, via: 'localsend' as const })),
+    ];
     if (!cur || !this.guestUploads) return { active: false, available: !!this.running?.guest, shared: [], offers: viaLinks };
     return {
       active: true,

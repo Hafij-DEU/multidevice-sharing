@@ -2,7 +2,7 @@ import type { DeviceView } from '../../shared/api.ts';
 import { Peer } from './Peer.tsx';
 
 const REACH: Record<DeviceView['reach'], string> = { lan: 'On this network', hub: 'Via hub', offline: 'Offline' };
-const ROLE: Record<DeviceView['role'], string> = { hub: 'Hub', member: 'Mesh member', paired: 'Paired', nearby: 'Nearby' };
+const ROLE: Record<DeviceView['role'], string> = { hub: 'Hub', member: 'Mesh member', paired: 'Paired', nearby: 'Nearby', localsend: 'LocalSend' };
 
 export function DeviceCard({ d, checked, disabled, onToggle }: { d: DeviceView; checked: boolean; disabled?: boolean; onToggle?: () => void }) {
   return (

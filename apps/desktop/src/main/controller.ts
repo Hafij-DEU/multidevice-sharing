@@ -366,11 +366,12 @@ export class AppController extends EventEmitter {
     if (ev.type === 'offer' && s.notifications) {
       const n = ev.files.length;
       const what = n > 0 ? `${n} file${n === 1 ? '' : 's'}${ev.text !== undefined ? ' and a message' : ''}` : 'a message';
-      this.#platform.notify('A guest wants to send', `${what}: open MeshDrop to accept or decline.`);
+      this.#platform.notify(ev.via === 'localsend' ? 'A LocalSend device wants to send' : 'A guest wants to send', `${what}: open MeshDrop to accept or decline.`);
     }
     if (ev.type === 'failed' && s.notifications) this.#platform.notify('A guest send could not be saved', `The files were uploaded but could not be saved (${ev.error}).`);
     if (ev.type === 'received') {
-      this.#history.addReceived({ at: Date.now(), from: 'guest', alias: 'Guest', files: [...ev.files], ...(ev.text !== undefined ? { text: ev.text } : {}) });
+      const ls = ev.via === 'localsend';
+      this.#history.addReceived({ at: Date.now(), from: ls ? 'localsend' : 'guest', alias: ls ? `${ev.alias ?? 'LocalSend'} (LocalSend)` : 'Guest', files: [...ev.files], ...(ev.text !== undefined ? { text: ev.text } : {}) });
       const first = ev.files[0];
       if (s.notifications) this.#platform.notify('From a guest', `${ev.files.length} file${ev.files.length === 1 ? '' : 's'} received`, first !== undefined ? () => this.#platform.revealPath(first) : undefined);
     }
@@ -518,6 +519,19 @@ export class AppController extends EventEmitter {
   }
 
   async send(targets: string[] | 'all', items: SendItemInput[]): Promise<void> {
+    // LocalSend apps take their own protocol (no outbox, no resume): one send each, reported by a toast.
+    if (targets !== 'all') {
+      const ls = new Set(this.#e.devices().filter((d) => d.role === 'localsend').map((d) => d.deviceId));
+      const lsTargets = targets.filter((t) => ls.has(t));
+      if (lsTargets.length > 0) {
+        const paths = items.filter((it) => it.kind !== 'text').map((it) => it.path!);
+        if (items.some((it) => it.kind === 'dir')) throw new Error('LocalSend devices take files and text, not folders.');
+        const text = items.filter((it) => it.kind === 'text').map((it) => it.text!).join('\n\n');
+        await Promise.all(lsTargets.map((fp) => this.#e.localsendSend(fp, { paths, ...(text ? { text } : {}) })));
+        targets = targets.filter((t) => !ls.has(t));
+        if (targets.length === 0) return;
+      }
+    }
     const ids = this.#targets(targets);
     for (const it of items) {
       if (it.kind === 'text' ? typeof it.text !== 'string' : typeof it.path !== 'string' || !isAbsolute(it.path)) throw new Error('Invalid item to send.');

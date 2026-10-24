@@ -6,7 +6,7 @@ export type Reach = 'lan' | 'hub' | 'offline';
 export interface DeviceView {
   deviceId: string;
   alias: string;
-  role: 'hub' | 'member' | 'paired' | 'nearby';
+  role: 'hub' | 'member' | 'paired' | 'nearby' | 'localsend';
   trusted: boolean;
   reach: Reach;
   deviceType?: string;
@@ -74,7 +74,7 @@ export interface GuestView {
   claimed?: boolean;
   shared: { id: string; name: string; size: number }[];
   /** Sends waiting for the owner's answer (`via: 'link'`: from an internet link). */
-  offers: { id: string; files: GuestFileView[]; text?: string; via?: 'link' }[];
+  offers: { id: string; files: GuestFileView[]; text?: string; via?: 'link' | 'localsend'; alias?: string }[];
 }
 
 /** An internet guest link (hub PC only). */

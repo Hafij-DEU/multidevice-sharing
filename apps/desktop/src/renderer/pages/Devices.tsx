@@ -29,8 +29,9 @@ export function Devices({ state, run }: { state: AppState; run: Run }) {
   const [name, setName] = useState('');
   const [busy, setBusy] = useState(false);
 
-  const trusted = state.devices.filter((d) => d.trusted);
-  const nearby = state.devices.filter((d) => !d.trusted);
+  // LocalSend apps can be sent to (they ask their user), so they sit with the trusted devices.
+  const trusted = state.devices.filter((d) => d.trusted || d.role === 'localsend');
+  const nearby = state.devices.filter((d) => !d.trusted && d.role !== 'localsend');
   const targets = all ? trusted.filter((d) => d.reach !== 'offline').map((d) => d.deviceId) : [...selected].filter((id) => trusted.some((d) => d.deviceId === id));
   const payload: SendItemInput[] = [...items, ...(text !== null && text !== '' ? [{ kind: 'text' as const, text }] : [])];
   const canSend = targets.length > 0 && payload.length > 0 && !busy;

@@ -12,7 +12,7 @@ export function GuestOffer({ offer, run }: { offer: GuestView['offers'][number];
   return (
     <div className="modal-backdrop">
       <div role="dialog" aria-modal="true" aria-labelledby="guest-offer-title" className="modal guest-offer">
-        <h2 id="guest-offer-title">{offer.via === 'link' ? 'Someone with your link wants to send' : 'A guest wants to send'}</h2>
+        <h2 id="guest-offer-title">{offer.via === 'link' ? 'Someone with your link wants to send' : offer.via === 'localsend' ? <><Peer text={offer.alias ?? 'A LocalSend device'} /> (LocalSend) wants to send</> : 'A guest wants to send'}</h2>
         {offer.files.length > 0 && (
           <p className="muted">
             {offer.files.length} file{offer.files.length === 1 ? '' : 's'} · {fmtBytes(total)}
