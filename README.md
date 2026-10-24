@@ -66,6 +66,14 @@ keep it, every update must be signed with it). Install it from the phone's file 
    devices through it when they are not on the same Wi-Fi; files for a device that is off wait on the
    hub until it comes back. Creating the mesh, inviting, revoking and recovery stay on the PC.
 
+## LocalSend
+
+People using the LocalSend app on the same Wi-Fi show up on Devices as "LocalSend". You can send them
+files and text; their app asks them first. When they send to this PC, MeshDrop asks you (Accept or
+Decline) before saving anything. MeshDrop speaks LocalSend protocol v2 on port 53317 (HTTPS, multicast
+224.0.0.167). If the LocalSend app itself runs on this PC, it keeps that port and MeshDrop leaves
+LocalSend to it. Android support for LocalSend comes later.
+
 ## Reach your PC from anywhere
 
 On the hub PC: Mesh → Internet access. "Check my connection" tells you whether your provider gives you a

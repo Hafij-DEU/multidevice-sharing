@@ -599,6 +599,25 @@ reaches the hub on a download; the hub stores `SHA-256(key)` only, to check uplo
 Same response headers as the LAN guest tier, plus `Strict-Transport-Security` behind a tunnel
 (`X-Forwarded-Proto: https`).
 
+## LocalSend v2 interop (M6)
+
+MeshDrop speaks LocalSend protocol v2 to LocalSend apps; between MeshDrop devices the MeshDrop
+protocol is always used.
+
+- **Discovery:** UDP multicast JSON on `224.0.0.167:53317`. We answer a peer's announce with
+  `POST /api/localsend/v2/register` to it, or a multicast reply with `announce:false`. Peers expire
+  after 60 s of silence.
+- **Fingerprint:** over HTTPS, SHA-256 of the certificate (hex). For MeshDrop that is the device id.
+  When sending, the peer's certificate must match the fingerprint it announced.
+- **Receiving** (HTTPS port 53317, our device certificate, TLS 1.2+):
+  - one session at a time, `409` otherwise;
+  - `prepare-upload` is answered only after the owner accepts: `403` if declined or after 120 s;
+  - `text/*` files with a `preview` are messages: no upload, and `204` when nothing else is offered;
+  - file names follow the relative-path rules and land in the inbox under free names;
+  - `cancel` drops the partial data.
+- **Sending:** `prepare-upload` with our info, then one `upload` per file token; `403` is reported as
+  declined, `409` as busy.
+
 ## Notes for other engines (M4 Android)
 
 Not part of the protocol; platform constraints found while specifying it.
