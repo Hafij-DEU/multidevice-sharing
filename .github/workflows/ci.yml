@@ -31,6 +31,9 @@ jobs:
       - name: Desktop unit tests
         run: pnpm --filter @meshdrop/desktop test
       - name: Desktop e2e (Electron under Xvfb)
+        env:
+          # Ubuntu 24.04 runners forbid the unprivileged user namespaces Chromium's sandbox needs.
+          ELECTRON_DISABLE_SANDBOX: '1'
         run: |
           pnpm --filter @meshdrop/desktop build
           xvfb-run -a pnpm --filter @meshdrop/desktop e2e
