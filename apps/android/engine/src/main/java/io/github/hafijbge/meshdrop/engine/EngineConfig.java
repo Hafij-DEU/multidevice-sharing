@@ -35,6 +35,11 @@ public final class EngineConfig {
     /** Called with true when a send or receive becomes active, false after `activityIdleMs` without any (Android: wake/Wi-Fi locks). */
     public ActivityListener activity;
     public long activityIdleMs = 60_000;
+    /** This device's LAN addresses as reported to the hub's directory (null: every IPv4 interface address with the mesh port). */
+    public java.util.function.Supplier<java.util.List<io.github.hafijbge.meshdrop.engine.hub.HubClient.LanAddr>> lanAddrs;
+    /** Look for a device at the LAN addresses the hub's directory lists for it before relaying (tests turn it off to force the relay). */
+    public boolean probeDirectoryAddrs = true;
+    public long[] hubBackoffMs = io.github.hafijbge.meshdrop.engine.hub.HubClient.DEFAULT_BACKOFF_MS;
 
     public interface ActivityListener {
         void onBusy(boolean busy);

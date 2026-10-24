@@ -56,14 +56,28 @@ public final class NodeMesh {
      * Signs `id` into the hub's list (the hub must not be running) and gives it the same mesh state.
      * `hubUrls`, if any, replace the list's hub URLs (the CLI refuses ws:// loopback ones).
      */
-    @SuppressWarnings("unchecked")
     public static MembershipStore addMember(File hubHome, Identity id, File memberHome, String alias, String... hubUrls) throws Exception {
+        return addMember(hubHome, id.deviceId(), id.keyPair().getPublic(), memberHome, alias, hubUrls);
+    }
+
+    /** A Node device (its identity under `home`) signed into the hub's list, with the same mesh state. */
+    public static String addNodeMember(File hubHome, File home, String alias, String... hubUrls) throws Exception {
+        Node.Result r = Node.run("id", "--home", home.getPath());
+        assertEquals(r.out, 0, r.code);
+        byte[] der = Files.readAllBytes(new File(home, "identity/cert.der").toPath());
+        String id = Identity.deviceIdOf(der);
+        addMember(hubHome, id, io.github.hafijbge.meshdrop.engine.identity.X509.publicKey(der), home, alias, hubUrls);
+        return id;
+    }
+
+    @SuppressWarnings("unchecked")
+    public static MembershipStore addMember(File hubHome, String deviceId, java.security.PublicKey key, File memberHome, String alias, String... hubUrls) throws Exception {
         File dir = Files.createTempDirectory("nodemesh").toFile();
         File js = new File(dir, "add.mts");
         File pem = new File(dir, "key.pem");
         Files.write(js.toPath(), ADD_MEMBER.getBytes(StandardCharsets.UTF_8));
-        Files.write(pem.toPath(), TrustStore.pem(id.keyPair().getPublic()).getBytes(StandardCharsets.UTF_8));
-        ProcessBuilder pb = new ProcessBuilder("node", js.getPath(), hubHome.getPath(), id.deviceId(), alias, pem.getPath()).redirectErrorStream(true);
+        Files.write(pem.toPath(), TrustStore.pem(key).getBytes(StandardCharsets.UTF_8));
+        ProcessBuilder pb = new ProcessBuilder("node", js.getPath(), hubHome.getPath(), deviceId, alias, pem.getPath()).redirectErrorStream(true);
         pb.environment().put("CORE", CORE);
         if (hubUrls.length > 0) pb.environment().put("URLS", Json.stringify(java.util.Arrays.asList((Object[]) hubUrls)));
         Process p = pb.start();

@@ -2,6 +2,9 @@ package io.github.hafijbge.meshdrop.engine.hub;
 
 import io.github.hafijbge.meshdrop.engine.identity.Identity;
 import io.github.hafijbge.meshdrop.engine.mesh.Canonical;
+import io.github.hafijbge.meshdrop.engine.mesh.Envelope;
+import io.github.hafijbge.meshdrop.engine.mesh.ReplayGuard;
+import io.github.hafijbge.meshdrop.engine.recv.MeshServer;
 import io.github.hafijbge.meshdrop.engine.mesh.Membership;
 import io.github.hafijbge.meshdrop.engine.mesh.MembershipStore;
 import io.github.hafijbge.meshdrop.engine.net.Tls;
@@ -10,6 +13,7 @@ import io.github.hafijbge.meshdrop.engine.net.WebSocket;
 import io.github.hafijbge.meshdrop.engine.util.B64;
 import io.github.hafijbge.meshdrop.engine.util.Json;
 import java.io.IOException;
+import java.io.InterruptedIOException;
 import java.net.InetSocketAddress;
 import java.net.Socket;
 import java.net.URI;
@@ -22,10 +26,17 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.ScheduledThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
+import java.util.function.BooleanSupplier;
 import java.util.function.Supplier;
 import java.util.regex.Pattern;
 
@@ -103,6 +114,23 @@ public final class HubClient {
         }
     }
 
+    public static final class HubOffline extends IOException {
+        public HubOffline() {
+            super("hub link is not online");
+        }
+    }
+
+    public static final class RelayTimeout extends IOException {
+        public RelayTimeout() {
+            super("relay request timed out");
+        }
+    }
+
+    /** Serves a relayed request through the local receiver API (MeshServer.handle); null: no reply. */
+    public interface RequestHandler {
+        MeshServer.Reply handle(String peer, String method, String path, String contentType, byte[] body);
+    }
+
     /** Called on the link thread; keep it short. */
     public interface Listener {
         default void onState(State s) {}
@@ -135,6 +163,8 @@ public final class HubClient {
         public long[] backoffMs = DEFAULT_BACKOFF_MS;
         public long pingMs = DEFAULT_PING_MS;
         public Listener listener = new Listener() {};
+        /** Relayed requests addressed to this device (null: they are dropped). */
+        public RequestHandler handler;
 
         public Options(Identity id, Supplier<MembershipStore> members) {
             this.id = id;
@@ -313,6 +343,15 @@ public final class HubClient {
     private ScheduledFuture<?> stable;
     volatile long lastRx;
     private volatile List<DirectoryEntry> directory = Collections.emptyList();
+    private final Map<String, CompletableFuture<Envelope>> pending = new ConcurrentHashMap<>();
+    private final ReplayGuard replay = new ReplayGuard();
+    /** Requests being handled right now, by from:id. */
+    private final Set<String> inflight = ConcurrentHashMap.newKeySet();
+    private final ExecutorService workers = Executors.newCachedThreadPool(r -> {
+        Thread t = new Thread(r, "hub-relay");
+        t.setDaemon(true);
+        return t;
+    });
 
     public HubClient(Options o) {
         this.o = o;
@@ -330,6 +369,71 @@ public final class HubClient {
 
     public List<DirectoryEntry> directory() {
         return directory;
+    }
+
+    /** The hub's device id per the current membership list (null without a mesh). */
+    public String hubDeviceId() {
+        MembershipStore ms = members();
+        return ms == null ? null : ms.list().hubId;
+    }
+
+    /**
+     * Sends a sealed req envelope through the hub and returns the matching res envelope. Throws
+     * HubOffline, RelayTimeout, or InterruptedIOException once `aborted` says so.
+     */
+    public Envelope request(Envelope e, long timeoutMs, BooleanSupplier aborted) throws IOException {
+        Link l;
+        synchronized (this) {
+            l = state == State.ONLINE ? link : null;
+        }
+        if (l == null) throw new HubOffline();
+        String id = e.header.id;
+        CompletableFuture<Envelope> f = new CompletableFuture<>();
+        pending.put(id, f);
+        try {
+            try {
+                l.ws.sendBinary(e.encode());
+            } catch (IOException x) {
+                l.abort();
+                throw new HubOffline();
+            }
+            long end = System.currentTimeMillis() + timeoutMs;
+            for (;;) {
+                if (aborted != null && aborted.getAsBoolean()) throw new InterruptedIOException("aborted");
+                long w = Math.min(250, end - System.currentTimeMillis());
+                if (w <= 0) throw new RelayTimeout();
+                try {
+                    return f.get(w, TimeUnit.MILLISECONDS);
+                } catch (TimeoutException x) {
+                    // poll `aborted` again
+                } catch (ExecutionException x) {
+                    if (x.getCause() instanceof IOException) throw (IOException) x.getCause();
+                    throw new HubOffline();
+                } catch (InterruptedException x) {
+                    Thread.currentThread().interrupt();
+                    throw new InterruptedIOException("interrupted");
+                }
+            }
+        } finally {
+            pending.remove(id);
+        }
+    }
+
+    private void failPending() {
+        for (CompletableFuture<Envelope> f : pending.values()) f.completeExceptionally(new HubOffline());
+    }
+
+    private void sendFrame(byte[] frame) {
+        Link l;
+        synchronized (this) {
+            l = state == State.ONLINE ? link : null;
+        }
+        if (l == null) return;
+        try {
+            l.ws.sendBinary(frame);
+        } catch (IOException e) {
+            l.abort();
+        }
     }
 
     private Identity me() {
@@ -374,6 +478,7 @@ public final class HubClient {
         if (l != null) l.abort();
         if (t != null) t.abort();
         closeQuietly(ts);
+        failPending();
         if (state != State.REVOKED) setState(State.IDLE);
     }
 
@@ -381,6 +486,7 @@ public final class HubClient {
     public void shutdown() {
         stop();
         exec.shutdownNow();
+        workers.shutdownNow();
     }
 
     /** Sends a JSON control message to the hub; false if not online. */
@@ -628,6 +734,9 @@ public final class HubClient {
             if (link != l) return;
             link = null;
             clearTimers();
+        }
+        failPending();
+        synchronized (this) {
             if (state == State.REVOKED) return;
         }
         setState(stopped ? State.IDLE : State.CONNECTING);
@@ -653,6 +762,7 @@ public final class HubClient {
             link = null;
         }
         setState(s);
+        failPending();
         if (l != null) l.abort();
         if (t != null && t != l) t.abort();
         if (t != null) closeQuietly(ts);
@@ -732,8 +842,74 @@ public final class HubClient {
         }
     }
 
-    /** Relayed envelopes; see RelayTransport (M4b Task 7). */
-    void onFrame(Link l, byte[] frame) {}
+    /** A relayed envelope: a res settles our request; a req runs through the receiver API, once. */
+    void onFrame(Link l, byte[] buf) {
+        Envelope e;
+        try {
+            e = Envelope.decode(buf);
+        } catch (Envelope.EnvelopeError x) {
+            return;
+        }
+        Envelope.Header h = e.header;
+        if (h.kind.equals("res")) {
+            CompletableFuture<Envelope> f = pending.get(h.id);
+            if (f != null) f.complete(e);
+            return;
+        }
+        String me = me().deviceId();
+        try {
+            Envelope.open(e, this::pubOf);
+        } catch (Envelope.EnvelopeError x) {
+            // Forged or tampered: never reaches the handler, no answer. A sender that is simply not (or
+            // no longer) in our list gets a signed refusal, so a hub replaying for it does not wait forever.
+            if (h.to.equals(me) && pubOf(h.from) == null) {
+                Envelope.Header r = Envelope.Header.res(h.id, me, h.from, 403);
+                r.contentType = "application/json";
+                sendFrame(Envelope.seal(r, "{\"error\":\"untrusted\"}".getBytes(StandardCharsets.UTF_8), me().keyPair().getPrivate()).encode());
+            }
+            return;
+        }
+        if (!h.to.equals(me)) return;
+        String key = h.from + ":" + h.id;
+        if (replay.seen(key)) {
+            // A repeat (the hub replaying after a link drop): one still in flight gets its answer when it
+            // ends; a finished one is answered from the cache. If its answer was evicted, run it again:
+            // every receiver route is idempotent, and silence would stall the hub's replay.
+            if (inflight.contains(key)) return;
+            byte[] cached = replay.cached(key);
+            if (cached != null) {
+                sendFrame(cached);
+                return;
+            }
+        }
+        RequestHandler handler = o.handler;
+        if (handler == null || !inflight.add(key)) return;
+        try {
+            workers.execute(() -> serve(handler, key, e));
+        } catch (java.util.concurrent.RejectedExecutionException x) {
+            inflight.remove(key);
+        }
+    }
+
+    private void serve(RequestHandler handler, String key, Envelope e) {
+        Envelope.Header h = e.header;
+        try {
+            MeshServer.Reply r;
+            try {
+                r = handler.handle(h.from, h.method, h.path, h.contentType, e.body);
+            } catch (RuntimeException x) {
+                r = null;
+            }
+            if (r == null) return;
+            Envelope.Header res = Envelope.Header.res(h.id, me().deviceId(), h.from, r.status);
+            if (r.body != null) res.contentType = "application/json";
+            byte[] frame = Envelope.seal(res, r.body == null ? new byte[0] : r.body, me().keyPair().getPrivate()).encode();
+            replay.answer(key, frame);
+            sendFrame(frame);
+        } finally {
+            inflight.remove(key);
+        }
+    }
 
     @SuppressWarnings("unchecked")
     private void applyMembership(Object s) {

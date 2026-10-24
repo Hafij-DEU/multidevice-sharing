@@ -72,6 +72,17 @@ public final class Http {
 
     private Http() {}
 
+    /** A request whose body is already in memory (a relayed envelope). */
+    public static Request requestOf(String method, String path, Map<String, String> headers, byte[] body) {
+        Request r = new Request();
+        r.method = method;
+        r.path = path;
+        for (Map.Entry<String, String> e : headers.entrySet()) r.headers.put(e.getKey().toLowerCase(), e.getValue());
+        r.headers.put("content-length", String.valueOf(body.length));
+        r.in = new java.io.ByteArrayInputStream(body);
+        return r;
+    }
+
     /** Reads lines up to the blank line; null at a clean EOF before any byte. */
     private static String[] readHead(InputStream in) throws IOException {
         ByteArrayOutputStream b = new ByteArrayOutputStream();

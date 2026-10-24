@@ -3,7 +3,6 @@ package io.github.hafijbge.meshdrop.engine.send;
 import io.github.hafijbge.meshdrop.engine.crypto.Hpke;
 import io.github.hafijbge.meshdrop.engine.identity.Identity;
 import io.github.hafijbge.meshdrop.engine.net.Http;
-import io.github.hafijbge.meshdrop.engine.net.Tls;
 import io.github.hafijbge.meshdrop.engine.net.TrustStore;
 import io.github.hafijbge.meshdrop.engine.proto.Chunks;
 import io.github.hafijbge.meshdrop.engine.proto.Manifest;
@@ -16,7 +15,6 @@ import java.nio.ByteBuffer;
 import java.nio.channels.SeekableByteChannel;
 import java.nio.charset.StandardCharsets;
 import java.security.PublicKey;
-import java.security.cert.CertificateException;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
@@ -28,8 +26,6 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.regex.Pattern;
-import javax.net.ssl.SSLHandshakeException;
-import javax.net.ssl.SSLSocket;
 
 /**
  * The sender (docs/protocol.md "Sender algorithm / resume"), ported from packages/core/src/transfer/send.ts:
@@ -40,7 +36,7 @@ import javax.net.ssl.SSLSocket;
 public final class Sender {
     private static final String PREFIX = "/mesh/v1/";
     /** Largest reply accepted (as the Node sender): a finish for a big folder lists every landed path. */
-    private static final int MAX_REPLY = 16 << 20;
+    static final int MAX_REPLY = 16 << 20;
     public static final int CANCEL_TIMEOUT_MS = 3000;
     private static final Pattern CODE = Pattern.compile("^[a-z0-9-]{1,64}$");
     private static final Set<String> ACTIVE = ConcurrentHashMap.newKeySet();
@@ -95,6 +91,13 @@ public final class Sender {
         public int timeoutMs = 30_000;
         public int finalizeTimeoutMs = 10 * 60_000;
         public int connectTimeoutMs = 10_000;
+        /** How to reach a target (null: its LAN address). */
+        public java.util.function.Function<Target, Transport> transport;
+
+        Transport transportFor(Identity me, Target t) {
+            Transport tr = transport == null ? null : transport.apply(t);
+            return tr != null ? tr : new LanTransport(me, t, connectTimeoutMs);
+        }
 
         Options withOutbox(Outbox o) {
             try {
@@ -143,7 +146,7 @@ public final class Sender {
         }
     }
 
-    static final class Protocol extends IOException {
+    static class Protocol extends IOException {
         Protocol(String m) {
             super(m);
         }
@@ -179,6 +182,7 @@ public final class Sender {
         if (e instanceof SourceChanged) return "source-changed";
         if (e instanceof PinMismatch) return "pin-mismatch";
         if (e instanceof Protocol) return "bad-response";
+        if (e instanceof Transport.NoRoute) return "no-route";
         if (e instanceof LocalPathError) return "local-path";
         if (e instanceof HttpStatus) return e.getMessage();
         String m = e.getMessage();
@@ -190,7 +194,7 @@ public final class Sender {
             HttpStatus h = (HttpStatus) e;
             return h.status >= 500 && !(h.status == 507 && (h.code.equals("hub-quota") || h.code.equals("hub-no-space")));
         }
-        return !(e instanceof SourceChanged || e instanceof PinMismatch || e instanceof Protocol || e instanceof Aborted);
+        return !(e instanceof SourceChanged || e instanceof PinMismatch || e instanceof Protocol || e instanceof Aborted || e instanceof Transport.NoRoute);
     }
 
     private static boolean isTerminal(Throwable e) {
@@ -207,38 +211,21 @@ public final class Sender {
 
     // ---- one request ----------------------------------------------------------------------------
 
-    private static Http.Response request(Identity me, Target t, String method, String path, byte[] body, int timeoutMs, int connectTimeoutMs, Set<Socket> track)
-            throws IOException {
-        SSLSocket s;
-        try {
-            s = Tls.connect(Tls.pinnedClient(me, t.deviceId), t.host, t.port, connectTimeoutMs);
-        } catch (SSLHandshakeException e) {
-            for (Throwable c = e; c != null; c = c.getCause()) {
-                if (c instanceof CertificateException && String.valueOf(c.getMessage()).contains("pin-mismatch")) throw new PinMismatch();
-            }
-            throw e;
-        }
-        if (track != null) track.add(s);
-        try {
-            s.setSoTimeout(timeoutMs);
-            Map<String, String> h = new LinkedHashMap<>();
-            if (body != null) h.put("Content-Type", path.startsWith(PREFIX + "chunk/") ? "application/octet-stream" : "application/json");
-            try {
-                return Http.request(s, method, path, h, body, MAX_REPLY);
-            } catch (Http.BodyTooLarge e) {
-                throw new Protocol("reply too large"); // a malformed reply is permanent (protocol: Sender algorithm step 6)
-            }
-        } finally {
-            if (track != null) track.remove(s);
-            closeQuietly(s);
-        }
+    static String contentType(String path, byte[] body) {
+        if (body == null) return null;
+        return path.startsWith(PREFIX + "chunk/") ? "application/octet-stream" : "application/json";
     }
 
     /** Best effort: one attempt, 3 s, every error ignored. */
     public static boolean postCancel(Identity me, Target t, String sessionId) {
-        if (sessionId == null || !Offer.SESSION_ID.matcher(sessionId).matches() || t.host == null) return false;
+        if (t.host == null) return false;
+        return postCancel(new LanTransport(me, t, CANCEL_TIMEOUT_MS), sessionId);
+    }
+
+    public static boolean postCancel(Transport tr, String sessionId) {
+        if (sessionId == null || !Offer.SESSION_ID.matcher(sessionId).matches()) return false;
         try {
-            Http.Response r = request(me, t, "POST", PREFIX + "cancel/" + sessionId, null, CANCEL_TIMEOUT_MS, CANCEL_TIMEOUT_MS, null);
+            Http.Response r = tr.request("POST", PREFIX + "cancel/" + sessionId, null, null, CANCEL_TIMEOUT_MS, null, null);
             return r.status >= 200 && r.status < 300;
         } catch (IOException | RuntimeException e) {
             return false;
@@ -276,7 +263,7 @@ public final class Sender {
                         entry = match;
                     } else {
                         o.outbox.remove(match.sessionId);
-                        postCancel(me, t, match.sessionId);
+                        postCancel(o.transportFor(me, t), match.sessionId);
                     }
                 }
             }
@@ -335,9 +322,9 @@ public final class Sender {
                     throw new SourceChanged(r.ref);
                 }
             }
-            transfer(me, t, entry, ctx, sources, o, internal, sockets);
+            boolean held = transfer(me, t, entry, ctx, sources, o, internal, sockets);
             if (o.outbox != null) o.outbox.remove(sid);
-            return new SendResult(t.deviceId, "done", sid, null);
+            return new SendResult(t.deviceId, held ? "held" : "done", sid, null);
         } catch (Throwable e) {
             boolean paused = o.control.paused();
             String error = paused ? "cancelled" : errorString(e);
@@ -350,7 +337,7 @@ public final class Sender {
                 }
             }
             if (paused) return new SendResult(t.deviceId, "cancelled", sid, null);
-            if (isTerminal(e)) postCancel(me, t, sid);
+            if (isTerminal(e)) postCancel(o.transportFor(me, t), sid);
             return new SendResult(t.deviceId, "failed", sid, error);
         } finally {
             ACTIVE.remove(sid);
@@ -369,15 +356,13 @@ public final class Sender {
 
     /** One request with the retry policy; aborts on pause (external) or on another worker's failure (internal). */
     private static final class Caller {
-        final Identity me;
-        final Target t;
+        final Transport tr;
         final Options o;
         final AtomicBoolean internal;
         final Set<Socket> sockets;
 
-        Caller(Identity me, Target t, Options o, AtomicBoolean internal, Set<Socket> sockets) {
-            this.me = me;
-            this.t = t;
+        Caller(Transport tr, Options o, AtomicBoolean internal, Set<Socket> sockets) {
+            this.tr = tr;
             this.o = o;
             this.internal = internal;
             this.sockets = sockets;
@@ -387,7 +372,8 @@ public final class Sender {
             for (int attempt = 0; ; attempt++) {
                 if (o.control.paused() || internal.get()) throw new Aborted();
                 try {
-                    Http.Response r = request(me, t, method, PREFIX + path, body, timeout, o.connectTimeoutMs, new TrackingSet(sockets, o.control.sockets));
+                    Http.Response r = tr.request(method, PREFIX + path, body, contentType(PREFIX + path, body), timeout, new TrackingSet(sockets, o.control.sockets),
+                            () -> o.control.paused() || internal.get());
                     if (r.status >= 200 && r.status < 300) return r;
                     throw new HttpStatus(r.status, remoteCode(r));
                 } catch (IOException | RuntimeException e) {
@@ -404,12 +390,14 @@ public final class Sender {
         }
     }
 
+    /** Runs the session; true when the hub took it for an offline target (held). */
     @SuppressWarnings("unchecked")
-    private static void transfer(Identity me, Target t, Outbox.Entry entry, Hpke.Context ctx, Map<Long, Source> sources, Options o,
+    private static boolean transfer(Identity me, Target t, Outbox.Entry entry, Hpke.Context ctx, Map<Long, Source> sources, Options o,
             AtomicBoolean internal, Set<Socket> sockets) throws Throwable {
         String sid = entry.sessionId;
         Control control = o.control;
-        Caller caller = new Caller(me, t, o, internal, sockets);
+        Transport tr = o.transportFor(me, t);
+        Caller caller = new Caller(tr, o, internal, sockets);
 
         Http.Response offer = caller.call("POST", "offer", entry.offerJson.getBytes(StandardCharsets.UTF_8), o.timeoutMs);
         Object oj;
@@ -419,7 +407,7 @@ public final class Sender {
             throw new Protocol("bad offer reply");
         }
         if (!(oj instanceof Map)) throw new Protocol("bad offer reply");
-        if (Boolean.TRUE.equals(((Map<String, Object>) oj).get("done"))) return; // already delivered (tombstone)
+        if (Boolean.TRUE.equals(((Map<String, Object>) oj).get("done"))) return false; // already delivered (tombstone)
         Map<Long, Set<Long>> have = parseHave(((Map<String, Object>) oj).get("have"));
 
         List<Task> tasks = new ArrayList<>();
@@ -489,7 +477,14 @@ public final class Sender {
         for (Thread th : threads) th.join();
         if (firstErr.get() != null) throw firstErr.get();
         if (control.paused()) throw new Aborted();
-        caller.call("POST", "finish/" + sid, null, o.finalizeTimeoutMs);
+        Http.Response fin = caller.call("POST", "finish/" + sid, null, o.finalizeTimeoutMs);
+        if (!tr.kind().equals("held")) return false;
+        try {
+            Object fj = Json.parse(fin.text());
+            return fj instanceof Map && Boolean.TRUE.equals(((Map<String, Object>) fj).get("held"));
+        } catch (RuntimeException e) {
+            return false;
+        }
     }
 
     /** Tracks open sockets in both the session's set and the control's set (so pause can close them). */

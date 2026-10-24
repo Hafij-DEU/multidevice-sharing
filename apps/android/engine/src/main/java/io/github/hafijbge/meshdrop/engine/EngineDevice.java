@@ -4,10 +4,10 @@ package io.github.hafijbge.meshdrop.engine;
 public final class EngineDevice {
     public final String deviceId;
     public final String alias;
-    /** paired | nearby (mesh roles arrive with M4b). */
+    /** hub | member (mesh devices), paired (manually) | nearby (untrusted). */
     public final String role;
     public final boolean trusted;
-    /** lan | offline */
+    /** lan | hub (reachable through the hub) | offline */
     public final String reach;
     public final String deviceType;
     public final long lastSeen;

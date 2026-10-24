@@ -1,7 +1,11 @@
 package io.github.hafijbge.meshdrop.engine;
 
 import io.github.hafijbge.meshdrop.engine.disc.Discovery;
+import io.github.hafijbge.meshdrop.engine.hub.HubClient;
 import io.github.hafijbge.meshdrop.engine.identity.Identity;
+import io.github.hafijbge.meshdrop.engine.mesh.CompositeTrust;
+import io.github.hafijbge.meshdrop.engine.mesh.Join;
+import io.github.hafijbge.meshdrop.engine.mesh.MembershipStore;
 import io.github.hafijbge.meshdrop.engine.net.Tls;
 import io.github.hafijbge.meshdrop.engine.net.TrustStore;
 import io.github.hafijbge.meshdrop.engine.recv.Inbox;
@@ -9,9 +13,11 @@ import io.github.hafijbge.meshdrop.engine.recv.MeshServer;
 import io.github.hafijbge.meshdrop.engine.send.MultiSend;
 import io.github.hafijbge.meshdrop.engine.send.Outbox;
 import io.github.hafijbge.meshdrop.engine.send.Prepared;
+import io.github.hafijbge.meshdrop.engine.send.RelayTransport;
 import io.github.hafijbge.meshdrop.engine.send.SendItem;
 import io.github.hafijbge.meshdrop.engine.send.SendResult;
 import io.github.hafijbge.meshdrop.engine.send.Sender;
+import io.github.hafijbge.meshdrop.engine.send.Transport;
 import io.github.hafijbge.meshdrop.engine.util.Atomic;
 import io.github.hafijbge.meshdrop.engine.util.Json;
 import io.github.hafijbge.meshdrop.engine.util.Io;
@@ -86,6 +92,10 @@ public final class Engine {
     private final Inbox inbox;
     private final Outbox outbox;
     private final File manualFile;
+    /** Mesh members first, then manually paired devices; never a revoked one. */
+    private final CompositeTrust trustSource;
+    private volatile MembershipStore mesh;
+    private volatile HubClient hub;
     private final List<EngineListener> listeners = new CopyOnWriteArrayList<>();
     private final Set<Sender.Control> controls = ConcurrentHashMap.newKeySet();
     private final Map<String, Long> lastAutoResume = new ConcurrentHashMap<>();
@@ -110,6 +120,12 @@ public final class Engine {
         this.outbox = new Outbox(new File(cfg.home, "outbox"));
         this.manualFile = new File(cfg.home, "manual-peers.json");
         this.port = cfg.port;
+        this.trustSource = new CompositeTrust(() -> mesh, trust);
+        try {
+            this.mesh = MembershipStore.load(cfg.home);
+        } catch (IOException | RuntimeException e) {
+            this.mesh = null; // an unreadable mesh state must not stop LAN transfers; joining again replaces it
+        }
     }
 
     /** Loads (or creates) the identity under cfg.home. Opens no sockets: call start(). */
@@ -125,6 +141,23 @@ public final class Engine {
 
     public TrustStore trust() {
         return trust;
+    }
+
+    /** This device's mesh state, or null if it is in none. */
+    public MembershipStore mesh() {
+        return mesh;
+    }
+
+    /** The hub link's state ("idle" without a mesh). */
+    public HubClient.State hubState() {
+        HubClient h = hub;
+        return h == null ? HubClient.State.IDLE : h.state();
+    }
+
+    /** The hub's device directory (who is online, last-known LAN addresses); empty without a link. */
+    public List<HubClient.DirectoryEntry> directory() {
+        HubClient h = hub;
+        return h == null ? java.util.Collections.<HubClient.DirectoryEntry>emptyList() : h.directory();
     }
 
     public String alias() {
@@ -173,7 +206,15 @@ public final class Engine {
         so.alias = cfg.alias;
         so.deviceType = cfg.deviceType;
         so.accepting = () -> accepting;
-        MeshServer s = new MeshServer(identity, trust, inbox, ev -> {
+        so.meshVersion = () -> {
+            MembershipStore m = mesh;
+            return m == null ? 0 : m.list().version;
+        };
+        so.membership = () -> {
+            MembershipStore m = mesh;
+            return m == null ? null : m.current();
+        };
+        MeshServer s = new MeshServer(identity, trustSource, inbox, ev -> {
             touch();
             Map<String, Object> d = new LinkedHashMap<>(ev);
             String type = (String) d.remove("type");
@@ -194,6 +235,7 @@ public final class Engine {
             }
         });
         exec.execute(this::reprobeManual);
+        startHub();
         ticker = java.util.concurrent.Executors.newSingleThreadScheduledExecutor(r -> {
             Thread t = new Thread(r, "meshdrop-ticker");
             t.setDaemon(true);
@@ -203,6 +245,77 @@ public final class Engine {
         ticker.scheduleWithFixedDelay(() -> execute(this::reprobeManual), cfg.manualReprobeMs, cfg.manualReprobeMs, java.util.concurrent.TimeUnit.MILLISECONDS);
         long tick = Math.max(50, cfg.activityIdleMs / 4);
         ticker.scheduleWithFixedDelay(this::activityTick, tick, tick, java.util.concurrent.TimeUnit.MILLISECONDS);
+    }
+
+    // ---- the hub link -------------------------------------------------------------------------
+
+    private List<HubClient.LanAddr> defaultLanAddrs() {
+        List<HubClient.LanAddr> out = new ArrayList<>();
+        for (Map.Entry<NetworkInterface, java.net.Inet4Address> a : Discovery.interfaceAddrs()) out.add(new HubClient.LanAddr(a.getValue().getHostAddress(), port));
+        return out;
+    }
+
+    private synchronized void startHub() {
+        if (mesh == null || hub != null || server == null) return;
+        HubClient.Options ho = new HubClient.Options(identity, () -> mesh);
+        ho.lanAddrs = cfg.lanAddrs != null ? cfg.lanAddrs : this::defaultLanAddrs;
+        ho.hubLan = () -> {
+            MembershipStore m = mesh;
+            return m == null ? null : Join.readHubAddr(cfg.home, m.list().hubId);
+        };
+        ho.backoffMs = cfg.hubBackoffMs;
+        ho.handler = (peer, method, path, contentType, body) -> {
+            MeshServer s = server;
+            if (s == null) return null;
+            touch();
+            return s.handle(peer, method, path, contentType, body);
+        };
+        ho.listener = new HubClient.Listener() {
+            @Override
+            public void onState(HubClient.State st) {
+                Map<String, Object> m = new LinkedHashMap<>();
+                m.put("state", st.toString());
+                emit("hub", "state", m);
+            }
+
+            @Override
+            public void onMembership(Map<String, Object> signed) {
+                MembershipStore m = mesh;
+                Map<String, Object> d = new LinkedHashMap<>();
+                d.put("version", m == null ? 0L : m.list().version);
+                emit("mesh", "membership", d);
+            }
+
+            @Override
+            public void onDirectory(List<HubClient.DirectoryEntry> devices) {
+                emit("hub", "directory", new LinkedHashMap<>());
+            }
+
+            @Override
+            public void onHeld(String type, Map<String, Object> m) {
+                Map<String, Object> d = new LinkedHashMap<>(m);
+                d.remove("t");
+                emit("sender", type, d);
+            }
+        };
+        HubClient h = new HubClient(ho);
+        hub = h;
+        h.start();
+    }
+
+    private synchronized void stopHub() {
+        HubClient h = hub;
+        hub = null;
+        if (h != null) h.shutdown();
+    }
+
+    private boolean hubOnline() {
+        return hubState() == HubClient.State.ONLINE;
+    }
+
+    private HubClient.DirectoryEntry directoryEntry(String deviceId) {
+        for (HubClient.DirectoryEntry d : directory()) if (d.deviceId.equals(deviceId)) return d;
+        return null;
     }
 
     /** Runs on the engine's executor unless it is stopping (never throws). */
@@ -276,7 +389,7 @@ public final class Engine {
         Discovery.Options o = new Discovery.Options(identity.deviceId(), truncate(cfg.alias), cfg.deviceType, port);
         if (cfg.discoveryPort != null) o.port = cfg.discoveryPort;
         o.intervalMs = cfg.discoveryIntervalMs;
-        o.isTrusted = trust::isTrusted;
+        o.isTrusted = trustSource::isTrusted;
         Discovery d = new Discovery(o);
         d.addListener(new Discovery.Listener() {
             @Override
@@ -314,6 +427,7 @@ public final class Engine {
         MeshServer s = server;
         server = null;
         for (Sender.Control c : controls) c.pause();
+        stopHub();
         if (s != null) s.stop();
         Discovery d = discovery;
         discovery = null;
@@ -466,21 +580,34 @@ public final class Engine {
         if (d != null) d.forget(deviceId);
     }
 
-    /** Paired devices (on the LAN or offline) and untrusted LAN peers; never this device. */
+    /** Mesh members, paired devices (on the LAN, through the hub, or offline) and untrusted LAN peers; never this device. */
     public List<EngineDevice> devices() {
         Discovery d = discovery;
         Map<String, Discovery.PeerInfo> peers = new LinkedHashMap<>();
         if (d != null) for (Discovery.PeerInfo p : d.peers()) peers.put(p.deviceId, p);
+        Map<String, HubClient.DirectoryEntry> dir = new LinkedHashMap<>();
+        for (HubClient.DirectoryEntry e : directory()) dir.put(e.deviceId, e);
+        boolean viaHub = hubOnline();
         List<EngineDevice> out = new ArrayList<>();
         Set<String> seen = new LinkedHashSet<>();
+        seen.add(identity.deviceId());
+        MembershipStore m = mesh;
+        if (m != null) {
+            for (io.github.hafijbge.meshdrop.engine.mesh.Membership.Member x : m.list().members) {
+                if (!seen.add(x.deviceId)) continue;
+                Discovery.PeerInfo p = peers.get(x.deviceId);
+                HubClient.DirectoryEntry e = dir.get(x.deviceId);
+                String reach = p != null ? "lan" : viaHub && e != null && e.online ? "hub" : "offline";
+                out.add(new EngineDevice(x.deviceId, x.alias, x.role, true, reach, p != null ? p.deviceType : null, p != null ? p.lastSeen : e != null ? e.lastSeen : 0));
+            }
+        }
         for (TrustStore.Device t : trust.list()) {
-            if (t.deviceId.equals(identity.deviceId())) continue;
+            if (!seen.add(t.deviceId) || !trustSource.isTrusted(t.deviceId)) continue;
             Discovery.PeerInfo p = peers.get(t.deviceId);
             out.add(new EngineDevice(t.deviceId, t.alias, "paired", true, p != null ? "lan" : "offline", p != null ? p.deviceType : null, p != null ? p.lastSeen : 0));
-            seen.add(t.deviceId);
         }
         for (Discovery.PeerInfo p : peers.values()) {
-            if (seen.contains(p.deviceId) || p.deviceId.equals(identity.deviceId())) continue;
+            if (!seen.add(p.deviceId)) continue;
             out.add(new EngineDevice(p.deviceId, p.alias, "nearby", false, "lan", p.deviceType, p.lastSeen));
         }
         return out;
@@ -557,22 +684,113 @@ public final class Engine {
         String q = query.toLowerCase(java.util.Locale.ROOT);
         if (!PREFIX.matcher(q).matches()) throw new UnknownDevice(query, "invalid");
         List<String> hits = new ArrayList<>();
-        for (TrustStore.Device d : trust.list()) if (d.deviceId.startsWith(q)) hits.add(d.deviceId);
+        for (String id : trustedIds()) if (id.startsWith(q)) hits.add(id);
         if (hits.isEmpty()) throw new UnknownDevice(query, "unknown");
         if (hits.size() > 1) throw new UnknownDevice(query, "ambiguous");
         return hits.get(0);
     }
 
+    /** Every device this one may send to: mesh members and manually paired devices, never itself. */
+    private List<String> trustedIds() {
+        Set<String> ids = new LinkedHashSet<>();
+        MembershipStore m = mesh;
+        if (m != null) for (io.github.hafijbge.meshdrop.engine.mesh.Membership.Member x : m.list().members) ids.add(x.deviceId);
+        for (TrustStore.Device d : trust.list()) ids.add(d.deviceId);
+        ids.remove(identity.deviceId());
+        List<String> out = new ArrayList<>();
+        for (String id : ids) if (trustSource.isTrusted(id)) out.add(id);
+        return out;
+    }
+
+    /** How a target is reached now (engine.ts Route). */
+    static final class Route {
+        static final Route RELAY = new Route("relay", null);
+        static final Route HELD = new Route("held", null);
+        static final Route UNREACHABLE = new Route("unreachable", null);
+        final String kind;
+        final Discovery.PeerInfo peer;
+
+        Route(String kind, Discovery.PeerInfo peer) {
+            this.kind = kind;
+            this.peer = peer;
+        }
+    }
+
+    /**
+     * LAN if discovery knows the device (or one of its directory addresses answers), else the hub
+     * relay if it is online there, else held on the hub, else unreachable.
+     */
+    private Route route(String deviceId) {
+        Discovery d = discovery;
+        Discovery.PeerInfo p = d == null ? null : d.peer(deviceId);
+        HubClient.DirectoryEntry dir = directoryEntry(deviceId);
+        if (p == null && dir != null && d != null && cfg.probeDirectoryAddrs) {
+            for (HubClient.LanAddr a : dir.lanAddrs) {
+                try {
+                    d.probe(a.host, a.port, REPROBE_TIMEOUT_MS);
+                } catch (IOException | RuntimeException ignored) {
+                    // not there
+                }
+                p = d.peer(deviceId);
+                if (p != null) break;
+            }
+        }
+        if (p != null) return new Route("lan", p);
+        MembershipStore m = mesh;
+        // Only mesh members are reachable through the hub.
+        if (m != null && m.isTrusted(deviceId) && hubOnline()) return dir != null && dir.online ? Route.RELAY : Route.HELD;
+        return Route.UNREACHABLE;
+    }
+
+    private Sender.Target target(String deviceId, Route r) {
+        TrustStore.Device t = trustSource.get(deviceId);
+        if (t == null || r.kind.equals("unreachable")) return null;
+        return r.peer != null ? new Sender.Target(deviceId, r.peer.host, r.peer.port, t.key) : new Sender.Target(deviceId, null, 0, t.key);
+    }
+
+    /** A LAN target, or (mesh members while the hub link is up) one without an address that goes through the hub. */
     private Sender.Target target(String deviceId) {
         Discovery d = discovery;
         Discovery.PeerInfo p = d == null ? null : d.peer(deviceId);
-        TrustStore.Device t = trust.get(deviceId);
-        if (p == null || t == null) return null;
-        return new Sender.Target(deviceId, p.host, p.port, t.key);
+        if (p != null) return target(deviceId, new Route("lan", p));
+        MembershipStore m = mesh;
+        if (m != null && m.isTrusted(deviceId) && hubOnline()) return target(deviceId, Route.RELAY);
+        return null;
+    }
+
+    private java.security.PublicKey pubOf(String id) {
+        TrustStore.Device t = trustSource.get(id);
+        MembershipStore m = mesh;
+        if (t == null && m != null && id.equals(m.list().hubId)) t = m.get(id);
+        return t == null ? null : t.key;
+    }
+
+    /** LAN targets go direct; address-less ones go through the hub, held when `held` says so. */
+    private Transport transportFor(Sender.Target t, boolean held, long holdBytes) {
+        if (t.host != null) return null;
+        HubClient h = hub;
+        if (h == null) return null; // no address, no hub: fails 'no-route'
+        return new RelayTransport(identity, h, t.deviceId, this::pubOf, held ? "held" : "relay", held ? holdBytes : 0);
+    }
+
+    static final long HELD_FRAME_OVERHEAD = 32 * 1024;
+
+    /** What a held upload of `p` will store on the hub (engine.ts estimateHoldBytes). */
+    static long holdBytes(Prepared p) {
+        long bytes = 0;
+        long frames = 4;
+        for (io.github.hafijbge.meshdrop.engine.proto.Manifest.FileEntry f : p.files) {
+            long n = io.github.hafijbge.meshdrop.engine.proto.Chunks.count(f.size);
+            bytes += f.size + 16 * n;
+            frames += n + 1;
+        }
+        if (p.text != null) bytes += p.text.getBytes(StandardCharsets.UTF_8).length;
+        return bytes + frames * HELD_FRAME_OVERHEAD + io.github.hafijbge.meshdrop.engine.proto.Chunks.CHUNK_SIZE;
     }
 
     private Sender.Options sendOptions(String tag, Sender.Control control) {
         Sender.Options o = new Sender.Options();
+        o.transport = t -> transportFor(t, false, 0);
         o.outbox = outbox;
         o.resolver = cfg.resolver;
         o.control = control;
@@ -608,7 +826,10 @@ public final class Engine {
         Discovery d = requireRunning();
         List<String> targets = new ArrayList<>();
         if (ids == null) {
-            for (TrustStore.Device t : trust.list()) if (d.peer(t.deviceId) != null) targets.add(t.deviceId);
+            Set<String> present = new java.util.HashSet<>();
+            for (Discovery.PeerInfo p : d.peers()) present.add(p.deviceId);
+            if (hubOnline()) for (HubClient.DirectoryEntry x : directory()) if (x.online) present.add(x.deviceId);
+            for (String id : trustedIds()) if (present.contains(id)) targets.add(id);
         } else {
             for (String q : ids) {
                 String id = resolveDeviceId(q);
@@ -633,12 +854,36 @@ public final class Engine {
                         f.complete(out);
                         return;
                     }
+                    Map<String, Route> routes = new LinkedHashMap<>();
+                    for (String id : targets) routes.put(id, route(id));
+                    long hb = routes.containsValue(Route.HELD) ? holdBytes(p) : 0;
                     List<Sender.Target> present = new ArrayList<>();
                     for (String id : targets) {
-                        Sender.Target t = target(id);
+                        Sender.Target t = target(id, routes.get(id));
                         if (t != null) present.add(t);
                     }
-                    List<SendResult> sent = MultiSend.send(identity, present, p, sendOptions(tag, control));
+                    Sender.Options so = sendOptions(tag, control);
+                    so.transport = t -> transportFor(t, routes.get(t.deviceId) == Route.HELD, hb);
+                    List<SendResult> sent = new ArrayList<>(MultiSend.send(identity, present, p, so));
+                    // A LAN attempt that failed for a transient reason resumes the same session over the hub once.
+                    // A relay that found the target gone (our directory was stale) leaves it on the hub instead.
+                    for (int i = 0; i < sent.size(); i++) {
+                        SendResult r = sent.get(i);
+                        MembershipStore m = mesh;
+                        if (!r.status.equals("failed") || !hubOnline() || m == null || !m.isTrusted(r.deviceId) || control.paused()) continue;
+                        String was = routes.get(r.deviceId).kind;
+                        boolean lanHiccup = was.equals("lan") && Sender.isTransientError(r.error);
+                        boolean relayGone = was.equals("relay") && "http-503 offline".equals(r.error);
+                        if (!lanHiccup && !relayGone) continue;
+                        HubClient.DirectoryEntry x = directoryEntry(r.deviceId);
+                        boolean held = !(x != null && x.online && !relayGone);
+                        long hb2 = held ? holdBytes(p) : 0;
+                        Sender.Target t = target(r.deviceId, held ? Route.HELD : Route.RELAY);
+                        if (t == null) continue;
+                        Sender.Options so2 = sendOptions(tag, control);
+                        so2.transport = tt -> transportFor(tt, held, hb2);
+                        sent.set(i, Sender.sendTo(identity, t, p, so2));
+                    }
                     Map<String, SendResult> byId = new LinkedHashMap<>();
                     for (SendResult r : sent) byId.put(r.deviceId, r);
                     for (String id : targets) out.add(byId.containsKey(id) ? byId.get(id) : new SendResult(id, "failed", "", "offline"));

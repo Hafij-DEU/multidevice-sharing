@@ -213,56 +213,85 @@ public final class MeshServer {
             }
             if (req == null) return;
             deadline.cancel(false);
-            int[] status = new int[1];
-            byte[] body;
-            try {
-                body = route(req, peer, status);
-            } catch (HttpError e) {
-                status[0] = e.status;
-                body = err(e.code);
-            } catch (Http.BodyTooLarge e) {
-                status[0] = 413;
-                body = err("too-large");
-            } catch (Http.BadRequest e) {
-                status[0] = 400;
-                body = err("bad-request");
-            } catch (SocketTimeoutException e) {
-                return;
-            } catch (Offer.BadOffer e) {
-                status[0] = e.status;
-                body = err(e.code);
-            } catch (Inbox.ChunkRange e) {
-                status[0] = 409;
-                body = err("range");
-            } catch (Inbox.UnknownSession e) {
-                status[0] = 404;
-                body = err("unknown-session");
-            } catch (Inbox.IntegrityError e) {
-                status[0] = 422;
-                body = err("integrity");
-            } catch (Inbox.Incomplete e) {
-                status[0] = 409;
-                body = err("incomplete");
-            } catch (Sanitize.UnsafePath e) {
-                status[0] = 422;
-                body = err("bad-offer");
-            } catch (IOException e) {
-                boolean full = e.getMessage() != null && e.getMessage().contains("No space left");
-                Map<String, Object> ev = event("error", null, peer);
-                ev.put("code", full ? "ENOSPC" : "EIO");
-                emit(ev);
-                status[0] = full ? 507 : 500;
-                body = err(full ? "no-space" : "internal");
-            } catch (Exception e) {
-                status[0] = 500;
-                body = err("internal");
-            }
-            reply(out, status[0], body);
+            Reply r = dispatch(req, peer);
+            if (r == null) return;
+            reply(out, r.status, r.body);
         } catch (IOException e) {
             // client gone or handshake failed
         } finally {
             deadline.cancel(false);
         }
+    }
+
+    /** A response from the receiver API: `body` is JSON (null for 204). */
+    public static final class Reply {
+        public final int status;
+        public final byte[] body;
+
+        public Reply(int status, byte[] body) {
+            this.status = status;
+            this.body = body;
+        }
+    }
+
+    /**
+     * The socket-free entry point: a request that arrived some other way (relayed through the hub) is
+     * served exactly like one on the LAN. `peer` is the verified sender id.
+     */
+    public Reply handle(String peer, String method, String path, String contentType, byte[] body) {
+        Map<String, String> h = new LinkedHashMap<>();
+        if (contentType != null) h.put("content-type", contentType);
+        Reply r = dispatch(Http.requestOf(method, path, h, body), peer);
+        return r != null ? r : new Reply(500, err("internal"));
+    }
+
+    /** Routes one request and maps every failure to its status; null: the client went away mid-read. */
+    private Reply dispatch(Http.Request req, String peer) {
+        int[] status = new int[1];
+        byte[] body;
+        try {
+            body = route(req, peer, status);
+        } catch (HttpError e) {
+            status[0] = e.status;
+            body = err(e.code);
+        } catch (Http.BodyTooLarge e) {
+            status[0] = 413;
+            body = err("too-large");
+        } catch (Http.BadRequest e) {
+            status[0] = 400;
+            body = err("bad-request");
+        } catch (SocketTimeoutException e) {
+            return null;
+        } catch (Offer.BadOffer e) {
+            status[0] = e.status;
+            body = err(e.code);
+        } catch (Inbox.ChunkRange e) {
+            status[0] = 409;
+            body = err("range");
+        } catch (Inbox.UnknownSession e) {
+            status[0] = 404;
+            body = err("unknown-session");
+        } catch (Inbox.IntegrityError e) {
+            status[0] = 422;
+            body = err("integrity");
+        } catch (Inbox.Incomplete e) {
+            status[0] = 409;
+            body = err("incomplete");
+        } catch (Sanitize.UnsafePath e) {
+            status[0] = 422;
+            body = err("bad-offer");
+        } catch (IOException e) {
+            boolean full = e.getMessage() != null && e.getMessage().contains("No space left");
+            Map<String, Object> ev = event("error", null, peer);
+            ev.put("code", full ? "ENOSPC" : "EIO");
+            emit(ev);
+            status[0] = full ? 507 : 500;
+            body = err(full ? "no-space" : "internal");
+        } catch (Exception e) {
+            status[0] = 500;
+            body = err("internal");
+        }
+        return new Reply(status[0], body);
     }
 
     private static void reply(OutputStream out, int status, byte[] json) throws IOException {
