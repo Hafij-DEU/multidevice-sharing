@@ -49,12 +49,28 @@ export interface HubClientOptions {
   pingMs?: number;
   /** Signed answers kept for repeated requests (default 1024). */
   answerCacheSize?: number;
+  /**
+   * Relay hubs from the verified, root-signed relay list (M9a). While the main hub is unreachable the
+   * link goes to the first relay that answers; it moves back to the main hub once that answers again.
+   */
+  relays?: () => { deviceId: string; urls: string[] }[];
+  /** How often a link on a relay tries the main hub again (default 5 min). */
+  failbackMs?: number;
+  /** How often, linked to the main hub, held files are fetched from each relay (default 10 min). */
+  drainMs?: number;
 }
+
+export const DEFAULT_FAILBACK_MS = 300_000;
+export const DEFAULT_DRAIN_MS = 600_000;
+/** A drain link closes after this long without traffic (or after DRAIN_MAX_MS). */
+const DRAIN_IDLE_MS = 15_000;
+const DRAIN_MAX_MS = 120_000;
 
 /** 'refused': the hub turned this device away without proof of revocation; the link stops, the mesh state stays. */
 export type HubClientState = 'idle' | 'connecting' | 'online' | 'revoked' | 'refused';
 
-interface Target { url: string; pinned: boolean }
+/** `relay`: a relay hub's id (its hello must name it; its key is in the membership). */
+interface Target { url: string; pinned: boolean; relay?: string }
 interface Pending { resolve: (e: Envelope) => void; reject: (e: Error) => void; timer: NodeJS.Timeout; cleanup: () => void }
 
 const LOOPBACK = new Set(['127.0.0.1', 'localhost', '[::1]']);
@@ -78,6 +94,12 @@ export class HubClient extends EventEmitter {
   #retry: NodeJS.Timeout | null = null;
   #ping: NodeJS.Timeout | null = null;
   #stable: NodeJS.Timeout | null = null;
+  #failback: NodeJS.Timeout | null = null;
+  #drain: NodeJS.Timeout | null = null;
+  /** Short links to relays that only fetch held files. */
+  readonly #drains = new Set<WebSocket>();
+  /** The hub this link is on: the main hub's id, or a relay's. */
+  #linkedTo: string | null = null;
   #directory: DirectoryEntry[] = [];
 
   constructor(opts: HubClientOptions) {
@@ -96,6 +118,11 @@ export class HubClient extends EventEmitter {
     return this.#o.members.list().hub.deviceId;
   }
 
+  /** The hub this device is linked to now (the main hub, or a relay hub while the main one is away). */
+  get linkedHub(): string | null {
+    return this.#state === 'online' ? this.#linkedTo : null;
+  }
+
   directory(): DirectoryEntry[] {
     return this.#directory.map((d) => ({ ...d, lanAddrs: d.lanAddrs.map((a) => ({ ...a })) }));
   }
@@ -109,6 +136,10 @@ export class HubClient extends EventEmitter {
   async stop(): Promise<void> {
     this.#stopped = true;
     this.#clearTimers();
+    for (const t of [this.#failback, this.#drain]) if (t) clearInterval(t);
+    this.#failback = this.#drain = null;
+    for (const d of this.#drains) d.terminate();
+    this.#drains.clear();
     const ws = this.#ws;
     this.#ws = null;
     if (ws) ws.terminate();
@@ -190,6 +221,23 @@ export class HubClient extends EventEmitter {
 
   // ---- connection ---------------------------------------------------------------------------
 
+  #relayTargets(): Target[] {
+    const me = this.#o.id.deviceId;
+    const out: Target[] = [];
+    for (const r of this.#o.relays?.() ?? []) {
+      if (r.deviceId === me || !this.#o.members.isTrusted(r.deviceId)) continue;
+      for (const u of r.urls) {
+        try {
+          const p = new URL(u);
+          if (p.protocol === 'wss:' || (p.protocol === 'ws:' && LOOPBACK.has(p.hostname))) out.push({ url: u, pinned: false, relay: r.deviceId });
+        } catch {
+          /* skip malformed */
+        }
+      }
+    }
+    return out;
+  }
+
   #targets(): Target[] {
     const out: Target[] = [];
     const lan = this.#o.hubLan?.();
@@ -209,12 +257,32 @@ export class HubClient extends EventEmitter {
   async #connect(): Promise<void> {
     if (this.#stopped || this.#state === 'revoked') return;
     this.#state = 'connecting';
-    for (const t of this.#targets()) {
+    // The main hub first; only when none of its addresses answers, a relay hub.
+    for (const t of [...this.#targets(), ...this.#relayTargets()]) {
       if (this.#stopped) return;
       const ok = await this.#tryTarget(t);
       if (ok || this.#stopped || (this.#state as HubClientState) === 'revoked') return;
     }
     this.#scheduleRetry();
+  }
+
+  /** On a relay: try the main hub; once it answers the link moves there (the relay link is dropped). */
+  async #tryFailback(): Promise<void> {
+    if (this.#stopped || this.#state !== 'online' || this.#linkedTo === this.hubDeviceId) return;
+    for (const t of this.#targets()) {
+      if (this.#stopped || this.#linkedTo === this.hubDeviceId) return;
+      if (await this.#tryTarget(t)) return;
+    }
+  }
+
+  /** Linked to the main hub: open a short link to each relay so it hands over what it held for us. */
+  async #drainRelays(): Promise<void> {
+    if (this.#stopped || this.#state !== 'online' || this.#linkedTo !== this.hubDeviceId) return;
+    const done = new Set<string>();
+    for (const t of this.#relayTargets()) {
+      if (this.#stopped || done.has(t.relay!)) continue;
+      if (await this.#tryTarget(t, true)) done.add(t.relay!);
+    }
   }
 
   #scheduleRetry(): void {
@@ -229,8 +297,11 @@ export class HubClient extends EventEmitter {
     this.#retry.unref();
   }
 
-  /** Resolves true once the link is online, false if this target failed before that. */
-  #tryTarget(t: Target): Promise<boolean> {
+  /**
+   * Resolves true once the link is online, false if this target failed before that. A `drain` link
+   * only takes held deliveries: it never becomes the device's link and closes when it goes quiet.
+   */
+  #tryTarget(t: Target, drain = false): Promise<boolean> {
     const { id, members } = this.#o;
     const hubId = members.list().hub.deviceId;
     return new Promise<boolean>((resolve) => {
@@ -276,6 +347,7 @@ export class HubClient extends EventEmitter {
             // A different hub id is only possible after a recovery (a new hub took over the mesh);
             // it must then hand us a newer list, signed by the mesh root, naming it as the hub.
             if (t.pinned && m.hub !== pinnedId) return ws.terminate();
+            if (t.relay !== undefined && m.hub !== t.relay) return ws.terminate();
             helloHub = m.hub;
             const sig = signDomain(HUB_AUTH_DOMAIN, `${helloHub}\0${id.deviceId}\0${m.nonce}`, id.privateKey);
             const auth: Record<string, unknown> = {
@@ -290,7 +362,7 @@ export class HubClient extends EventEmitter {
           }
           if (m.t === 'revoked') return this.#onRevokedNotice(m.s);
           if (m.t !== 'welcome') return ws.terminate();
-          if (helloHub !== hubId) {
+          if (helloHub !== hubId && t.relay === undefined) {
             if (!m.membership) return ws.terminate();
             try {
               members.accept(m.membership as SignedMembership);
@@ -307,14 +379,25 @@ export class HubClient extends EventEmitter {
           }
           authed = true;
           if (m.membership) this.#applyMembership(m.membership as SignedMembership);
+          if (m.relays) this.emit('relays', m.relays);
+          if (drain) {
+            this.#startDrain(ws);
+            done(true);
+            return;
+          }
           if (Array.isArray(m.directory)) this.#directory = m.directory as DirectoryEntry[];
-          this.#online(ws);
+          this.#online(ws, helloHub);
           done(true);
           return;
         }
         this.#onMessage(ws, data, isBinary);
       });
       ws.on('close', (code: number) => {
+        if (drain) {
+          this.#drains.delete(ws);
+          if (!authed) done(false);
+          return;
+        }
         if (code === CLOSE_REVOKED && this.#state !== 'revoked') this.#refused();
         if (!authed) return done(false);
         this.#offline(ws);
@@ -322,9 +405,49 @@ export class HubClient extends EventEmitter {
     });
   }
 
-  #online(ws: WebSocket): void {
+  /** A drain link: answer what the relay replays, then close once quiet (or after DRAIN_MAX_MS). */
+  #startDrain(ws: WebSocket): void {
+    this.#drains.add(ws);
+    let idle = setTimeout(() => ws.close(), DRAIN_IDLE_MS);
+    const max = setTimeout(() => ws.close(), DRAIN_MAX_MS);
+    max.unref();
+    ws.on('message', () => {
+      clearTimeout(idle);
+      idle = setTimeout(() => ws.close(), DRAIN_IDLE_MS);
+      idle.unref();
+    });
+    ws.on('close', () => {
+      clearTimeout(idle);
+      clearTimeout(max);
+    });
+    idle.unref();
+  }
+
+  #online(ws: WebSocket, hub: string): void {
+    // Moving from a relay back to the main hub: the old link goes quietly (its close is ignored);
+    // what was in flight on it fails now and is retried by its senders.
+    const old = this.#ws;
+    this.#clearTimers();
+    if (old && old !== ws) {
+      this.#ws = null;
+      this.#failPending(new HubOfflineError());
+      old.terminate();
+    }
     this.#ws = ws;
+    this.#linkedTo = hub;
     this.#state = 'online';
+    const isMain = hub === this.hubDeviceId;
+    for (const t of [this.#failback, this.#drain]) if (t) clearInterval(t);
+    this.#failback = this.#drain = null;
+    if (!isMain) {
+      this.#failback = setInterval(() => void this.#tryFailback(), this.#o.failbackMs ?? DEFAULT_FAILBACK_MS);
+      this.#failback.unref();
+    } else if ((this.#o.relays?.() ?? []).length > 0) {
+      const first = setTimeout(() => void this.#drainRelays(), 2000);
+      first.unref();
+      this.#drain = setInterval(() => void this.#drainRelays(), this.#o.drainMs ?? DEFAULT_DRAIN_MS);
+      this.#drain.unref();
+    }
     this.#lastRx = Date.now();
     this.#ping = setInterval(() => {
       // Nothing from the hub (not even a pong) for two ping periods: the link is dead (half-open
@@ -440,6 +563,9 @@ export class HubClient extends EventEmitter {
       case 'held-failed':
         this.emit(m.t, m);
         return;
+      case 'relays':
+        this.emit('relays', m.s);
+        return;
       default:
         this.emit('control', m);
     }
@@ -522,7 +648,7 @@ export class HubClient extends EventEmitter {
     const frame = encodeFrame(sealEnvelope(res, r.body, this.#o.id.privateKey));
     this.#answers.set(key, frame);
     while (this.#answers.size > (this.#o.answerCacheSize ?? ANSWER_CACHE_MAX)) this.#answers.delete(this.#answers.keys().next().value as string);
-    const live = this.#ws;
+    const live = this.#drains.has(ws) ? ws : this.#ws;
     if (live && live.readyState === WebSocket.OPEN) live.send(frame);
   }
 
