@@ -253,6 +253,12 @@ export class LinkStore {
     return { session, allowUploads: m.allowUploads, keyHash: m.keyHash };
   }
 
+  /** What the page needs before opening: a password prompt, a "send back" section. */
+  async info(id: string): Promise<{ needsPassword: boolean; allowUploads: boolean }> {
+    const m = await this.#meta(id);
+    return { needsPassword: !!m.password, allowUploads: m.allowUploads };
+  }
+
   /** Whether the link needs a password (asked before open). */
   async needsPassword(id: string): Promise<boolean> {
     return !!(await this.#meta(id)).password;

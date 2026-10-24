@@ -39,7 +39,7 @@ describe('link routes', () => {
     writeFileSync(join(d, 'f.txt'), 'top secret');
     const { id, key } = await store.create({ files: [join(d, 'f.txt')] });
     expect(await (await fetch(`${base}/l/${id}`)).text()).toBe('<p>page</p>');
-    expect(await (await fetch(`${base}/l/${id}/api/info`)).json()).toEqual({ needsPassword: false });
+    expect(await (await fetch(`${base}/l/${id}/api/info`)).json()).toEqual({ needsPassword: false, allowUploads: false });
     const { session } = (await (await fetch(`${base}/l/${id}/api/open`, { method: 'POST' })).json()) as { session: string };
     const h = { 'x-link-session': session };
     expect(openManifest(key, id, await buf(await fetch(`${base}/l/${id}/api/manifest`, { headers: h }))).files[0]!.name).toBe('f.txt');

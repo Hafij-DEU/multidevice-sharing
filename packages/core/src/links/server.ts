@@ -3,6 +3,7 @@
 //   GET  /l/app.js, /l/app.css
 //   GET  /l/<id>/api/info                {needsPassword}
 //   POST /l/<id>/api/open                {password?} (+ X-Link-Key to send files back) -> {session, allowUploads}
+//   POST /l/<id>/api/key                 X-Link-Key: only to send files back (uploads)
 //   GET  /l/<id>/api/manifest            sealed manifest          (X-Link-Session)
 //   GET  /l/<id>/api/chunk/<f>/<n>       sealed chunk             (X-Link-Session)
 //   POST /l/<id>/api/offers              sealed offer JSON        (X-Link-Session; uploads only)
@@ -69,7 +70,7 @@ export function createLinkHandler(o: LinkHandlerOptions): (req: IncomingMessage,
     if (method === 'GET' && seg.length === 1) return send(200, o.page.html, 'text/html; charset=utf-8');
     if (seg[1] !== 'api') return json(404, { error: 'not-found' });
     const api = seg.slice(2);
-    if (method === 'GET' && api.length === 1 && api[0] === 'info') return json(200, { needsPassword: await o.store.needsPassword(id) });
+    if (method === 'GET' && api.length === 1 && api[0] === 'info') return json(200, await o.store.info(id));
     if (method === 'POST' && api.length === 1 && api[0] === 'open') {
       let body: { password?: unknown } = {};
       const raw = await readBody(req, MAX_OPEN_JSON);
@@ -90,6 +91,15 @@ export function createLinkHandler(o: LinkHandlerOptions): (req: IncomingMessage,
     }
     const session = req.headers['x-link-session'];
     if (typeof session !== 'string') return json(401, { error: 'session' });
+    if (method === 'POST' && api.length === 1 && api[0] === 'key') {
+      // Only to send files back: downloads never hand the key to the hub.
+      const kh = await o.store.uploadKeyHash(id, session);
+      const k = req.headers['x-link-key'];
+      const key = typeof k === 'string' ? Buffer.from(k, 'base64url') : Buffer.alloc(0);
+      if (key.length !== 32 || keyHash(key) !== kh) return json(403, { error: 'bad-key' });
+      keys.set(session, key);
+      return json(200, { ok: true });
+    }
     if (method === 'GET' && api.length === 1 && api[0] === 'manifest') return send(200, await o.store.manifest(id, session), 'application/octet-stream');
     if (method === 'GET' && api.length === 3 && api[0] === 'chunk' && /^\d+$/.test(api[1]!) && /^\d+$/.test(api[2]!)) {
       return send(200, await o.store.chunk(id, session, Number(api[1]), Number(api[2])), 'application/octet-stream');
