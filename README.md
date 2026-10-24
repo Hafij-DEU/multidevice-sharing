@@ -66,6 +66,25 @@ keep it, every update must be signed with it). Install it from the phone's file 
    devices through it when they are not on the same Wi-Fi; files for a device that is off wait on the
    hub until it comes back. Creating the mesh, inviting, revoking and recovery stay on the PC.
 
+## Reach your PC from anywhere
+
+On the hub PC: Mesh → Internet access. "Check my connection" tells you whether your provider gives you a
+public address or shares it (CGNAT), and suggests a way in:
+
+- **Tailscale Funnel**: free account, no domain. Install Tailscale, run `sudo tailscale up`, allow Funnel
+  for this PC in the Tailscale admin console, then pick it here.
+- **Cloudflare tunnel**: needs a domain in your Cloudflare account. Install `cloudflared`, run
+  `cloudflared tunnel login` once, then enter a hostname such as `drop.example.com`.
+- **Port forwarding**: only with a public IP (not behind CGNAT). Make a free name at duckdns.org and
+  enter it with its token. MeshDrop gets a Let's Encrypt certificate (DNS check through DuckDNS, so
+  no port 80 needed), and asks your router to forward port 443 (UPnP or NAT-PMP). Or tick "I forwarded
+  the port myself" and forward TCP 443 to the port it shows.
+
+The address it gets becomes the hub's internet address: your devices use it when they are away, and
+internet links point at it. From a terminal: `meshdrop hub reach detect`, `meshdrop hub reach tailscale`,
+`meshdrop hub reach cloudflare HOST`, `meshdrop hub reach port-forward NAME --token-file F [--manual]`,
+`meshdrop hub reach off` (applied by the running `meshdrop listen`).
+
 ## Guests
 
 Let a friend send you files from their phone's browser, no app needed. On the PC, open Guests →
@@ -83,7 +102,7 @@ send you files and a message, and download files you offer ("Offer files…"). T
 (1 hour to 30 days), an optional password and download limit, and whether they may send files back.
 The files are encrypted on your PC; the key is the part of the link after `#`, which browsers never
 send to a server, so the hub's disk and any tunnel only see ciphertext. "Remove" ends a link at once.
-The link uses the hub's internet address (Mesh → Hub address); setting up a tunnel comes with M5c.
+The link uses the hub's internet address (see "Reach your PC from anywhere").
 From a terminal: `meshdrop link create FILE... [--days N] [--passphrase-file F] [--max-downloads N]
 [--allow-uploads]`, `meshdrop link list`, `meshdrop link revoke ID`.
 
