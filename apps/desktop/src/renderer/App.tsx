@@ -13,6 +13,11 @@ import { Transfers } from './pages/Transfers.tsx';
 /** Three tabs; the rarer pages live under More. */
 const TABS = ['Send', 'Received', 'More'] as const;
 type Tab = (typeof TABS)[number];
+const TAB_ICON: Record<Tab, string> = {
+  Send: 'M4 12l16-8-6 16-2-7-8-1z',
+  Received: 'M12 4v11M7 10l5 5 5-5M5 20h14',
+  More: 'M5 12h.01M12 12h.01M19 12h.01',
+};
 const MORE = ['Guests', 'Mesh', 'Transfers', 'Settings'] as const;
 type Sub = (typeof MORE)[number];
 const ICON: Record<Sub, string> = {
@@ -113,7 +118,10 @@ export function App() {
         <nav className="tabs" aria-label="Pages">
           {TABS.map((t) => (
             <button key={t} className={t === tab ? 'tab active' : 'tab'} onClick={() => open(t)} aria-current={t === tab ? 'page' : undefined}>
-              {t}
+              <svg className="tab-icon" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={t === 'More' ? 3.5 : 2} strokeLinecap="round" strokeLinejoin="round">
+                <path d={TAB_ICON[t]} />
+              </svg>
+              <span>{t}</span>
             </button>
           ))}
         </nav>
