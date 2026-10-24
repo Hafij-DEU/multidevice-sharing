@@ -847,6 +847,11 @@ public final class AppController {
             case "openFile":
                 reveal(str(a0));
                 return null;
+            case "unpair":
+                e().unpair(str(a0));
+                refreshOutbox();
+                changed();
+                return null;
             case "thumb":
                 return platform.thumbnail(str(a0));
             case "join":

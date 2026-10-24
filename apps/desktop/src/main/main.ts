@@ -314,6 +314,7 @@ function wireIpc(): void {
   handle('reachSet', (_e, x) => ctl().reachSet(reachInput(x)));
   handle('openInbox', (_e) => ctl().openInbox());
   handle('reveal', (_e, p) => ctl().reveal(str(p)));
+  handle('unpair', (_e, id) => ctl().unpair(str(id, 64)));
   handle('takeSharedItems', (_e) => ctl().takeSharedItems());
   handle('openFile', (_e, p) => ctl().openFile(str(p)));
   handle('thumb', (_e, p) => ctl().thumb(str(p)));

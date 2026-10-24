@@ -202,6 +202,8 @@ export interface DesktopApi {
   reachSet(input: ReachInput): Promise<void>;
   openInbox(): Promise<void>;
   reveal(path: string): Promise<void>;
+  /** Unpairs a manually paired device (it shows as nearby again: Pair re-pairs it). */
+  unpair(deviceId: string): Promise<void>;
   /** Opens a received file in its default app (Android: the same as reveal). */
   openFile(path: string): Promise<void>;
   /** A preview (data: URL) of a received image or video, or null. */

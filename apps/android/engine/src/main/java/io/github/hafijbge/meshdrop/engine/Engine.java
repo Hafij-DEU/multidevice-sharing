@@ -884,6 +884,21 @@ public final class Engine {
         maybeAutoResume(p.deviceId);
     }
 
+    /**
+     * Unpairs a manually paired device: no longer trusted, its saved address and unfinished sends are
+     * dropped; on the LAN it shows as nearby again (Pair re-pairs it). Mesh members are revoked on the hub.
+     */
+    public void unpair(String query) throws IOException {
+        String id = resolveDeviceId(query);
+        MembershipStore m = mesh;
+        if (m != null && m.isTrusted(id)) throw new IllegalStateException("This device is in your mesh: remove it on the hub PC (More → Mesh → Revoke).");
+        trust.remove(id);
+        List<Map<String, Object>> manual = readManual();
+        manual.removeIf(x -> id.equals(x.get("deviceId")));
+        writeManual(manual);
+        for (Outbox.Entry e : outbox.list()) if (id.equals(e.targetId)) outbox.remove(e.sessionId);
+    }
+
     public void forgetPeer(String deviceId) {
         Discovery d = discovery;
         if (d != null) d.forget(deviceId);

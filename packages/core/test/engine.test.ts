@@ -150,6 +150,20 @@ describe('Engine', () => {
     expect(await a.e.send('all', [{ kind: 'text', text: 'x' }])).toEqual([]);
   });
 
+  it('unpair: the device is no longer trusted, shows as nearby again, and Pair re-pairs it', async () => {
+    const { a, b } = await pairedPair();
+    const bId = b.e.identity.deviceId;
+    await a.e.unpair(bId.slice(0, 8));
+    expect(a.e.trust.get(bId)).toBeUndefined();
+    expect(a.e.devices().find((d) => d.deviceId === bId)).toMatchObject({ role: 'nearby', trusted: false, host: '127.0.0.1', port: b.e.port });
+    expect(readFileSync(join(a.home, 'manual-peers.json'), 'utf8')).not.toContain(bId);
+    const res = await b.e.send([a.e.identity.deviceId], [{ kind: 'text', text: 'hi' }]);
+    expect(res[0]).toMatchObject({ status: 'failed', error: 'http-403 untrusted' });
+    await a.e.pairManual('127.0.0.1', b.e.port, 'bee again');
+    expect(a.e.devices().find((d) => d.deviceId === bId)).toMatchObject({ role: 'paired', alias: 'bee again' });
+    expect((await b.e.send([a.e.identity.deviceId], [{ kind: 'text', text: 'hi' }]))[0]!.status).toBe('done');
+  });
+
   it('refuses to pair with itself', async () => {
     const a = await mk();
     await expect(a.e.pairManual('127.0.0.1', a.e.port, 'me')).rejects.toThrow(/yourself/);

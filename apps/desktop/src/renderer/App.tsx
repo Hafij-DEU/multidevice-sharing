@@ -7,6 +7,7 @@ import { Devices } from './pages/Devices.tsx';
 import { Guests } from './pages/Guests.tsx';
 import { Inbox } from './pages/Inbox.tsx';
 import { Mesh } from './pages/Mesh.tsx';
+import { PairedDevices } from './pages/PairedDevices.tsx';
 import { Settings } from './pages/Settings.tsx';
 import { Transfers } from './pages/Transfers.tsx';
 
@@ -18,15 +19,17 @@ const TAB_ICON: Record<Tab, string> = {
   Received: 'M12 4v11M7 10l5 5 5-5M5 20h14',
   More: 'M5 12h.01M12 12h.01M19 12h.01',
 };
-const MORE = ['Guests', 'Mesh', 'Transfers', 'Settings'] as const;
+const MORE = ['Devices', 'Guests', 'Mesh', 'Transfers', 'Settings'] as const;
 type Sub = (typeof MORE)[number];
 const ICON: Record<Sub, string> = {
+  Devices: 'M4 5h10v14H4zM16 9h4v10h-4M8 16h2',
   Guests: 'M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM4 21a8 8 0 0 1 16 0',
   Mesh: 'M5 12a2 2 0 1 0 0 .01M19 5a2 2 0 1 0 0 .01M19 19a2 2 0 1 0 0 .01M7 11l10-5M7 13l10 5',
   Transfers: 'M7 4v14M3 14l4 4 4-4M17 20V6M13 10l4-4 4 4',
   Settings: 'M4 7h10M18 7h2M4 17h4M12 17h8M16 5v4M10 15v4',
 };
 const MORE_HINT: Record<Sub, string> = {
+  Devices: 'Paired devices: unpair, or pair again',
   Guests: 'Let someone without the app send or get files from a browser',
   Mesh: 'Link your devices so they reach each other from anywhere',
   Transfers: 'Unfinished sends and transfer history',
@@ -165,7 +168,9 @@ export function App() {
               </button>
               <h1>{sub}</h1>
             </div>
-            {sub === 'Guests' ? (
+            {sub === 'Devices' ? (
+              <PairedDevices state={state} run={run} />
+            ) : sub === 'Guests' ? (
               <Guests state={state} run={run} />
             ) : sub === 'Mesh' ? (
               <Mesh state={state} run={run} />
