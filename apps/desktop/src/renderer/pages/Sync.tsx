@@ -111,7 +111,10 @@ export function Sync({ state, run }: { state: AppState; run: Run }) {
           Choose a folder…
         </button>
       </div>
-      <p className="muted hint">Replaced and deleted files are kept 30 days in each folder&apos;s .meshdrop-trash. If a file changed on both sides, both versions are kept.</p>
+      <p className="muted hint">
+        A file deleted or replaced on another device is kept here in that folder&apos;s <strong>Deleted</strong> folder (same path), so nothing is lost by accident.
+        Deleted is not synced; empty it yourself when you no longer need it. If a file changed on both sides, both versions are kept.
+      </p>
       <PhotoBackup state={state} run={run} />
     </section>
   );

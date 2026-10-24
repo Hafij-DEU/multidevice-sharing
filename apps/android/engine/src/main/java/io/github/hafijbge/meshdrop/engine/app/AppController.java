@@ -131,6 +131,10 @@ public final class AppController {
     /** Shared clipboard: the poll, and the last text seen (copied here or received), so nothing echoes back. */
     private ScheduledFuture<?> clipTick;
     private volatile String lastClip;
+    /** Android: the screen is off (idle) / MeshDrop's window is in front (foreground). */
+    private volatile boolean idle;
+    private volatile long lastIdleBackup;
+    private static final long IDLE_BACKUP_MS = 15 * 60_000;
     private long lastEmit;
     private volatile boolean stopped;
 
@@ -154,8 +158,12 @@ public final class AppController {
     public synchronized void start() throws IOException {
         stopped = false;
         boot();
-        if (clipTick == null) clipTick = timer.scheduleWithFixedDelay(this::clipTick, 1, 1, TimeUnit.SECONDS);
-        if (backupTimer == null) backupTimer = timer.scheduleWithFixedDelay(this::backupSoon, 5, 60, TimeUnit.SECONDS);
+        if (backupTimer == null) backupTimer = timer.scheduleWithFixedDelay(() -> {
+            // Screen off: photo backup looks every 15 min instead of every minute.
+            if (idle && System.currentTimeMillis() - lastIdleBackup < IDLE_BACKUP_MS) return;
+            lastIdleBackup = System.currentTimeMillis();
+            backupSoon();
+        }, 5, 60, TimeUnit.SECONDS);
     }
 
     public synchronized void stop() {
@@ -183,6 +191,7 @@ public final class AppController {
             e.start();
         }
         e.setReceiving(!paused && error == null);
+        e.setIdle(idle);
         e.addListener(engineListener);
         engine = e;
         refreshOutbox();
@@ -692,6 +701,28 @@ public final class AppController {
         } finally {
             platform.joinHandled();
         }
+    }
+
+    /**
+     * The UI is in front (true) or not. Android lets an app read the clipboard only while it is in
+     * front, so the once-a-second clipboard check runs only then (no wake-ups in the background).
+     */
+    public synchronized void setForeground(boolean on) {
+        if (on && clipTick == null) {
+            lastClip = null; // what is on the clipboard now is not "newly copied"
+            clipTick = timer.scheduleWithFixedDelay(this::clipTick, 1, 1, TimeUnit.SECONDS);
+        } else if (!on && clipTick != null) {
+            clipTick.cancel(false);
+            clipTick = null;
+        }
+    }
+
+    /** The screen went off (true) or on: background work slows down while it is off (see Engine.setIdle). */
+    public void setIdle(boolean on) {
+        idle = on;
+        if (!on) lastIdleBackup = 0;
+        Engine x = engine;
+        if (x != null) x.setIdle(on);
     }
 
     /**

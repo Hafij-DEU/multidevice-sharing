@@ -2,6 +2,7 @@ package io.github.hafijbge.meshdrop;
 
 import android.app.Activity;
 import android.content.Intent;
+import io.github.hafijbge.meshdrop.engine.app.AppController;
 import android.os.Bundle;
 import android.webkit.WebView;
 import java.io.IOException;
@@ -72,7 +73,15 @@ public final class MainActivity extends Activity {
     @Override
     protected void onResume() {
         super.onResume();
-        ((MeshApp) getApplication()).core().controller.refresh(); // a keep-alive step may have changed
+        AppController c = ((MeshApp) getApplication()).core().controller;
+        c.refresh(); // a keep-alive step may have changed
+        c.setForeground(true);
+    }
+
+    @Override
+    protected void onPause() {
+        ((MeshApp) getApplication()).core().controller.setForeground(false);
+        super.onPause();
     }
 
     @Override

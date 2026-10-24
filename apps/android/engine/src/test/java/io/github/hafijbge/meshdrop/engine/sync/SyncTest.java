@@ -104,12 +104,15 @@ public class SyncTest {
         write(fb, "docs/x.txt", "two");
         a.syncNow(null);
         assertEquals("two", read(fa, "docs/x.txt"));
-        assertTrue(new File(fa, ".meshdrop-trash").isDirectory());
+        assertEquals("one", read(new File(fa, "Deleted/docs"), "x.txt")); // the replaced version, path kept
         b.syncNow(null); // B learns A has it (A's poke does this by itself)
 
         new File(fa, "docs/x.txt").delete();
         b.syncNow(null);
         assertFalse(new File(fb, "docs/x.txt").exists());
+        assertEquals("two", read(new File(fb, "Deleted/docs"), "x.txt"));
+        a.syncNow(null);
+        assertFalse(new File(fa, "Deleted/docs/x.txt").exists() && read(new File(fa, "Deleted/docs"), "x.txt").equals("two")); // B's Deleted does not travel
 
         write(fa, "n.txt", "base");
         b.syncNow(null);

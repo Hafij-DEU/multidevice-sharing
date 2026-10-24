@@ -26,6 +26,8 @@ public final class MeshService extends Service {
     static final String ACTION_RESUME = "io.github.hafijbge.meshdrop.RESUME";
     private static final int NOTE_ID = 1;
     private ConnectivityManager.NetworkCallback netCallback;
+    /** Screen off: background work slows down (sync, backup, re-probing); receiving stays as it is. */
+    private android.content.BroadcastReceiver screen;
 
     static void start(Context ctx) {
         ctx.startForegroundService(new Intent(ctx, MeshService.class));
@@ -67,6 +69,16 @@ public final class MeshService extends Service {
             }
         };
         cm.registerNetworkCallback(new NetworkRequest.Builder().addTransportType(NetworkCapabilities.TRANSPORT_WIFI).build(), netCallback);
+        screen = new android.content.BroadcastReceiver() {
+            @Override
+            public void onReceive(Context c, Intent i) {
+                core.controller.setIdle(Intent.ACTION_SCREEN_OFF.equals(i.getAction()));
+            }
+        };
+        android.content.IntentFilter f = new android.content.IntentFilter(Intent.ACTION_SCREEN_OFF);
+        f.addAction(Intent.ACTION_SCREEN_ON);
+        if (android.os.Build.VERSION.SDK_INT >= 33) registerReceiver(screen, f, Context.RECEIVER_NOT_EXPORTED);
+        else registerReceiver(screen, f);
     }
 
     private Notification notification(boolean receiving) {
@@ -101,6 +113,7 @@ public final class MeshService extends Service {
     @Override
     public void onDestroy() {
         if (netCallback != null) getSystemService(ConnectivityManager.class).unregisterNetworkCallback(netCallback);
+        if (screen != null) unregisterReceiver(screen);
         super.onDestroy();
     }
 

@@ -639,7 +639,9 @@ Folders are matched by name (`f`, 1–64 characters, no `/`); `404 no-such-folde
   - a change beats a delete;
   - between two changes, the newer mtime wins (tie: the larger device id), and only the losing side renames its copy to a conflict copy.
 
-Never synced: names starting `.meshdrop-`, `*.part`, `~$*`, `.~lock.*`, `.DS_Store`, `Thumbs.db`, `desktop.ini`; symlinks and special files.
+A file removed by a round (deleted on the partner, or replaced by its newer version) moves to `Deleted/<same path>` at the top of the synced folder, under a free name; that folder is never synced and never emptied automatically.
+
+Never synced: the top-level `Deleted` folder, names starting `.meshdrop-`, `*.part`, `~$*`, `.~lock.*`, `.DS_Store`, `Thumbs.db`, `desktop.ini`; symlinks and special files.
 
 ## Photo backup (M8b)
 

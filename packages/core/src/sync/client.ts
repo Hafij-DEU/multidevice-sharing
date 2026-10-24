@@ -1,18 +1,19 @@
 // Folder sync: one round against one partner. Pull only: we fetch the partner's index, decide each
 // path with merge.ts, and download or delete here; the partner does the same against us.
-// Nothing is ever destroyed: a replaced or deleted file goes to .meshdrop-trash/<time>/ for 30 days,
-// and the losing side of a conflict is kept as a conflict copy.
+// Nothing is ever destroyed: a replaced or deleted file goes to the folder's Deleted folder (not
+// synced, emptied by hand), and the losing side of a conflict is kept as a conflict copy.
 import * as fsp from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { ensureDir } from '../guest/uploads.ts';
 import { safeRelPath, uniqueName } from '../sanitize.ts';
 import type { Transport } from '../transfer/transport.ts';
-import { ignored } from './ignore.ts';
+import { DELETED_DIR, ignored } from './ignore.ts';
 import { conflictName, decide } from './merge.ts';
 import { hashFile, scan, type FileState } from './scan.ts';
 import { fileState, SYNC_SLICE } from './server.ts';
 import type { SyncStore } from './store.ts';
 
+/** Where 0.3.0–0.3.2 put removed files (hidden, per round, emptied after 30 days); still emptied, no longer filled. */
 export const TRASH_DIR = '.meshdrop-trash';
 export const PARTIAL_DIR = '.meshdrop-partial';
 export const TRASH_DAYS = 30;
@@ -41,12 +42,6 @@ export interface RoundResult {
   errors: { rel: string; error: string }[];
 }
 
-function stamp(ms: number): string {
-  const d = new Date(ms);
-  const p = (n: number) => String(n).padStart(2, '0');
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}_${p(d.getHours())}-${p(d.getMinutes())}-${p(d.getSeconds())}`;
-}
-
 function parseIndex(j: unknown): Map<string, FileState> {
   const out = new Map<string, FileState>();
   const files = (j as { files?: unknown })?.files;
@@ -66,15 +61,18 @@ function parseIndex(j: unknown): Map<string, FileState> {
   return out;
 }
 
-/** Moves `rel` into the trash (a folder per round), keeping its path. */
-async function toTrash(folder: string, rel: string, round: string): Promise<void> {
-  const parts = [TRASH_DIR, round, ...rel.split('/')];
+/**
+ * Moves `rel` into the Deleted folder, keeping its path (a free name if that is taken). Deleted is
+ * not synced, and nothing in it is removed automatically.
+ */
+async function toDeleted(folder: string, rel: string): Promise<void> {
+  const parts = [DELETED_DIR, ...rel.split('/')];
   const base = parts.pop()!;
   const dir = await ensureDir(folder, parts);
   await fsp.rename(join(folder, rel), join(dir, await uniqueName(dir, base)));
 }
 
-/** Deletes trash rounds older than TRASH_DAYS. */
+/** Empties rounds of the old hidden trash (0.3.0–0.3.2) older than TRASH_DAYS. */
 export async function pruneTrash(folder: string, now: number): Promise<void> {
   const dir = join(folder, TRASH_DIR);
   let names: string[];
@@ -122,7 +120,6 @@ async function download(o: RoundOptions, r: FileState): Promise<string> {
 
 export async function syncRound(o: RoundOptions): Promise<RoundResult> {
   const now = (o.now ?? Date.now)();
-  const round = stamp(now);
   const cache = o.store.cache(o.name);
   const local = await scan(o.folder, cache);
   const res = await o.transport.request('GET', `/mesh/v1/sync/index?${new URLSearchParams({ f: o.name })}`, undefined, {}, { timeoutMs: REQ_TIMEOUT_MS, ...(o.signal ? { signal: o.signal } : {}) });
@@ -154,14 +151,14 @@ export async function syncRound(o: RoundOptions): Promise<RoundResult> {
           const parts = rel.split('/');
           const name = parts.pop()!;
           const dir = await ensureDir(o.folder, parts);
-          if (d.kind === 'take' && L) await toTrash(o.folder, rel, round); // the replaced version
+          if (d.kind === 'take' && L) await toDeleted(o.folder, rel); // the replaced version
           const dest = join(dir, name);
           await fsp.rename(part, dest);
           await fsp.utimes(dest, new Date(now), new Date(R.mtime));
           local.set(rel, { ...R });
           out.pulled++;
         } else if (L) {
-          await toTrash(o.folder, rel, round);
+          await toDeleted(o.folder, rel);
           local.delete(rel);
           out.deleted++;
         }

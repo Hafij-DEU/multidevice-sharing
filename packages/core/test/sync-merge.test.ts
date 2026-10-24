@@ -39,6 +39,7 @@ describe('sync merge', () => {
 describe('sync ignore', () => {
   it('skips our work areas, lock and temp files', () => {
     for (const p of ['.meshdrop-trash/x', 'a/.meshdrop-partial/y', 'f.part', '~$doc.docx', 'd/.~lock.a.odt#', '.DS_Store', 'x/Thumbs.db']) expect(ignored(p)).toBe(true);
-    for (const p of ['photo.jpg', 'docs/report.pdf', 'part.txt']) expect(ignored(p)).toBe(false);
+    for (const p of ['photo.jpg', 'docs/report.pdf', 'part.txt', 'docs/Deleted/x.txt', 'Deleted stuff/a']) expect(ignored(p)).toBe(false);
+    for (const p of ['Deleted', 'Deleted/a.txt', 'Deleted/docs/b']) expect(ignored(p)).toBe(true); // the top-level Deleted folder
   });
 });

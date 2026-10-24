@@ -262,11 +262,17 @@ public final class Engine {
             return t;
         });
         // Manual peers come back by themselves after a blip (no multicast to announce them).
-        ticker.scheduleWithFixedDelay(() -> execute(this::reprobeManual), cfg.manualReprobeMs, cfg.manualReprobeMs, java.util.concurrent.TimeUnit.MILLISECONDS);
+        ticker.scheduleWithFixedDelay(() -> {
+            if (idleSkip("reprobe", IDLE_REPROBE_MS)) return;
+            execute(this::reprobeManual);
+        }, cfg.manualReprobeMs, cfg.manualReprobeMs, java.util.concurrent.TimeUnit.MILLISECONDS);
         long tick = Math.max(50, cfg.activityIdleMs / 4);
         ticker.scheduleWithFixedDelay(this::activityTick, tick, tick, java.util.concurrent.TimeUnit.MILLISECONDS);
         ticker.scheduleWithFixedDelay(() -> execute(this::finishPendingJoin), 0, PENDING_RETRY_MS, java.util.concurrent.TimeUnit.MILLISECONDS);
-        ticker.scheduleWithFixedDelay(this::syncPresent, SYNC_INTERVAL_MS, SYNC_INTERVAL_MS, java.util.concurrent.TimeUnit.MILLISECONDS);
+        ticker.scheduleWithFixedDelay(() -> {
+            if (idleSkip("sync", IDLE_SYNC_MS)) return;
+            syncPresent();
+        }, SYNC_INTERVAL_MS, SYNC_INTERVAL_MS, java.util.concurrent.TimeUnit.MILLISECONDS);
     }
 
     // ---- the hub link -------------------------------------------------------------------------
@@ -603,6 +609,42 @@ public final class Engine {
         Discovery d = discovery;
         if (d == null || server == null) throw new IllegalStateException("engine not started");
         return d;
+    }
+
+    // ---- idle (screen off) ----------------------------------------------------------------------
+
+    /** While idle, background work runs this rarely (receiving, the hub link and discovery are unchanged). */
+    static final long IDLE_SYNC_MS = 15 * 60_000;
+    static final long IDLE_REPROBE_MS = 5 * 60_000;
+    private volatile boolean idle;
+    private final Map<String, Long> idleLast = new ConcurrentHashMap<>();
+
+    /**
+     * Idle (Android: the screen is off): periodic sync rounds and re-probing of paired devices slow
+     * down to save battery. Incoming sends, the hub link and LAN discovery keep working as before; a
+     * device that shows up, a partner's poke or "Sync now" still sync at once.
+     */
+    public void setIdle(boolean on) {
+        idle = on;
+        if (!on) {
+            idleLast.clear();
+            execute(this::reprobeManual);
+            execute(this::syncPresent);
+        }
+    }
+
+    public boolean idle() {
+        return idle;
+    }
+
+    /** True if a periodic `job` should be skipped now: idle, and it ran less than `everyMs` ago. */
+    private boolean idleSkip(String job, long everyMs) {
+        if (!idle) return false;
+        long now = System.currentTimeMillis();
+        Long last = idleLast.get(job);
+        if (last != null && now - last < everyMs) return true;
+        idleLast.put(job, now);
+        return false;
     }
 
     // ---- folder sync (M8a, LAN only) ------------------------------------------------------------

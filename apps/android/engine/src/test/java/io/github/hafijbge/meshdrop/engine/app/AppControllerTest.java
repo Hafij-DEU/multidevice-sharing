@@ -234,6 +234,24 @@ public class AppControllerTest {
     }
 
     @Test
+    public void sharedClipboardIsCheckedOnlyWhileTheAppIsInFront() throws Exception {
+        Map<String, Object> on = new LinkedHashMap<>();
+        on.put("clipboardSync", true);
+        Node a = make("alpha", on), b = make("beta");
+        pair(a.c, b.c);
+        a.p.clipboardText = "before";
+        a.c.setForeground(true);
+        Thread.sleep(1500); // the first look only takes note
+        a.p.clipboardText = "copied in front";
+        until(() -> b.p.clip.contains("copied in front"), 15_000);
+        a.c.setForeground(false);
+        a.p.clipboardText = "copied in the background";
+        Thread.sleep(2500);
+        assertFalse(b.p.clip.contains("copied in the background"));
+        assertFalse(b.p.clip.contains("before"));
+    }
+
+    @Test
     public void clipboardGoesOnTheClipboardOnlyWhenClipboardReceiveIsOn() throws Exception {
         Node a = make("a"), b = make("b"), c = make("c", Map.of("clipboardReceive", false));
         pair(a.c, b.c);

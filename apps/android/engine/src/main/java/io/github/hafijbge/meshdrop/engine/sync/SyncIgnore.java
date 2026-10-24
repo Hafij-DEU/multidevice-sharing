@@ -11,7 +11,11 @@ public final class SyncIgnore {
 
     private SyncIgnore() {}
 
+    /** Removed files land here at the top of each synced folder (paths kept); never synced, emptied by hand. */
+    public static final String DELETED_DIR = "Deleted";
+
     public static boolean ignored(String rel) {
+        if (rel.equals(DELETED_DIR) || rel.startsWith(DELETED_DIR + "/")) return true;
         for (String seg : rel.split("/", -1)) for (Pattern p : IGNORED) if (p.matcher(seg).matches()) return true;
         return false;
     }

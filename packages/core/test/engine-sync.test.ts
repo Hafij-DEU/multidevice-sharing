@@ -65,7 +65,7 @@ async function pairSync() {
 }
 
 describe('folder sync', () => {
-  it('adds, edits and deletes travel both ways; replaced and deleted files go to the trash', async () => {
+  it('adds, edits and deletes travel both ways; removed files keep their path in an unsynced Deleted folder', async () => {
     const { A, B } = await pairSync();
     mkdirSync(join(A.folder, 'docs', 'deep'), { recursive: true });
     writeFileSync(join(A.folder, 'docs', 'deep', 'a.txt'), 'one');
@@ -78,14 +78,28 @@ describe('folder sync', () => {
     writeFileSync(join(B.folder, 'docs', 'deep', 'a.txt'), 'two');
     await A.e.syncNow();
     expect(readFileSync(join(A.folder, 'docs', 'deep', 'a.txt'), 'utf8')).toBe('two');
-    expect(JSON.stringify(readdirSync(join(A.folder, '.meshdrop-trash'), { recursive: true }))).toContain('a.txt');
+    expect(readFileSync(join(A.folder, 'Deleted', 'docs', 'deep', 'a.txt'), 'utf8')).toBe('one'); // the replaced version
 
     rmSync(join(A.folder, 'top.txt'));
     await B.e.syncNow();
     expect(existsSync(join(B.folder, 'top.txt'))).toBe(false);
-    expect(JSON.stringify(readdirSync(join(B.folder, '.meshdrop-trash'), { recursive: true }))).toContain('top.txt');
-    await A.e.syncNow(); // nothing comes back
+    expect(readFileSync(join(B.folder, 'Deleted', 'top.txt'), 'utf8')).toBe('top');
+    await A.e.syncNow(); // nothing comes back, and B's Deleted folder does not travel
     expect(tree(A.folder)).toEqual(tree(B.folder));
+    expect(existsSync(join(A.folder, 'Deleted', 'top.txt'))).toBe(false);
+    // Emptying Deleted by hand is not a change to sync; a second deletion of the same name gets a free name.
+    rmSync(join(B.folder, 'Deleted'), { recursive: true });
+    writeFileSync(join(A.folder, 'x.txt'), '1');
+    await B.e.syncNow();
+    await A.e.syncNow();
+    rmSync(join(A.folder, 'x.txt'));
+    await B.e.syncNow();
+    writeFileSync(join(A.folder, 'x.txt'), '2');
+    await B.e.syncNow();
+    await A.e.syncNow();
+    rmSync(join(A.folder, 'x.txt'));
+    await B.e.syncNow();
+    expect(readdirSync(join(B.folder, 'Deleted')).sort()).toEqual(['x (1).txt', 'x.txt']);
   }, 30_000);
 
   it('a conflict keeps both versions: the newer wins, the other becomes a conflict copy on both sides', async () => {

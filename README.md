@@ -98,7 +98,7 @@ internet links point at it. From a terminal: `meshdrop hub reach detect`, `meshd
 **More → Sync** keeps folders the same on your devices whenever they are on the same Wi-Fi. Add as many folders as you like (the PC suggests `~/MeshDrop Sync`; on the phone you pick them), not your working folders. Folders match by name: give a folder the same name on each device (it starts as the folder's own name). Tick the devices to sync each folder with, on both devices.
 
 - Adds, edits and deletes travel both ways. A file that changed on both sides keeps both versions: the newer one keeps the name, the other becomes "name (conflict from <device> <time>)".
-- Replaced and deleted files stay 30 days in the folder's `.meshdrop-trash`.
+- A file deleted or replaced on another device is kept in that synced folder's `Deleted` folder (same path), so an accidental deletion loses nothing. `Deleted` is not synced; empty it yourself.
 - Sync never goes through the hub: only on the LAN.
 
 **Photo backup** (Android, on the same page): new camera photos and videos go to your PC by themselves while both are on the same Wi-Fi. They land in `~/Pictures/MeshDrop Backup/<phone name>/` on the PC.

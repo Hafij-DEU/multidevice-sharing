@@ -8,10 +8,8 @@ import java.io.IOException;
 import java.io.OutputStream;
 import java.net.URLEncoder;
 import java.util.ArrayList;
-import java.util.Calendar;
 import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Locale;
 import java.util.Map;
 import java.util.TreeSet;
 import java.util.function.BooleanSupplier;
@@ -19,9 +17,11 @@ import java.util.regex.Pattern;
 
 /**
  * Folder sync: one pull round against one partner (sync/client.ts). Nothing is destroyed: replaced
- * and deleted files go to .meshdrop-trash/<round>/ for 30 days; a lost conflict is kept as a copy.
+ * and deleted files go to the folder's Deleted folder (not synced, emptied by hand); a lost conflict
+ * is kept as a copy.
  */
 public final class SyncRound {
+    /** Where 0.3.0–0.3.2 put removed files (hidden, per round): still emptied after 30 days, no longer filled. */
     public static final String TRASH_DIR = ".meshdrop-trash";
     public static final String PARTIAL_DIR = ".meshdrop-partial";
     public static final int SLICE = 4 * 1024 * 1024;
@@ -39,13 +39,6 @@ public final class SyncRound {
     }
 
     private SyncRound() {}
-
-    private static String stamp(long ms) {
-        Calendar c = Calendar.getInstance();
-        c.setTimeInMillis(ms);
-        return String.format(Locale.ROOT, "%04d-%02d-%02d_%02d-%02d-%02d", c.get(Calendar.YEAR), c.get(Calendar.MONTH) + 1, c.get(Calendar.DAY_OF_MONTH),
-                c.get(Calendar.HOUR_OF_DAY), c.get(Calendar.MINUTE), c.get(Calendar.SECOND));
-    }
 
     private static Http.Response get(Transport t, String path, BooleanSupplier aborted) throws IOException {
         return t.request("GET", path, null, null, TIMEOUT_MS, null, aborted);
@@ -97,8 +90,9 @@ public final class SyncRound {
         return rel.substring(rel.lastIndexOf('/') + 1);
     }
 
-    private static void toTrash(SyncFolder f, String rel, String round) throws IOException {
-        String dir = TRASH_DIR + "/" + round + (dirOf(rel).isEmpty() ? "" : "/" + dirOf(rel));
+    /** Moves `rel` into the Deleted folder, keeping its path (a free name if taken); nothing there is removed automatically. */
+    private static void toDeleted(SyncFolder f, String rel) throws IOException {
+        String dir = SyncIgnore.DELETED_DIR + (dirOf(rel).isEmpty() ? "" : "/" + dirOf(rel));
         f.move(rel, free(f, dir, nameOf(rel)));
     }
 
@@ -134,7 +128,6 @@ public final class SyncRound {
     /** `name`: the folder's sync name (sent as ?f=, matching the partner's folder). */
     public static Result run(SyncFolder f, String name, SyncState st, Transport t, String self, String partner, String partnerAlias, BooleanSupplier aborted,
             long now) throws IOException {
-        String round = stamp(now);
         Map<String, SyncState.FileState> cache = st.cache(name);
         Map<String, SyncState.FileState> local = SyncState.scan(f, cache);
         boolean changed = local.size() != cache.size();
@@ -171,12 +164,12 @@ public final class SyncRound {
                     }
                     if (r != null) {
                         download(f, name, t, r, aborted);
-                        if (d.kind == SyncMerge.Kind.TAKE && l != null) toTrash(f, rel, round);
+                        if (d.kind == SyncMerge.Kind.TAKE && l != null) toDeleted(f, rel); // the replaced version
                         f.commitPartial(r.hash, rel, r.mtime);
                         local.put(rel, r);
                         out.pulled++;
                     } else if (l != null) {
-                        toTrash(f, rel, round);
+                        toDeleted(f, rel);
                         local.remove(rel);
                         out.deleted++;
                     }
