@@ -122,7 +122,7 @@ async function readSlice(body: Readable): Promise<Buffer> {
 const errCode = (e: unknown): string | undefined => (e as NodeJS.ErrnoException)?.code;
 
 /** Walks from `root` creating `parts`, refusing symlinks and non-directories on the way. */
-async function ensureDir(root: string, parts: string[]): Promise<string> {
+export async function ensureDir(root: string, parts: string[]): Promise<string> {
   await fsp.mkdir(root, { recursive: true });
   let cur = root;
   for (const part of parts) {
@@ -139,7 +139,7 @@ async function ensureDir(root: string, parts: string[]): Promise<string> {
 }
 
 /** Moves `part` into `dir` under `base` or the next free "name (n)": never over an existing file. */
-async function land(part: string, dir: string, base: string): Promise<string> {
+export async function land(part: string, dir: string, base: string): Promise<string> {
   for (;;) {
     const dest = join(dir, await uniqueName(dir, base));
     try {
