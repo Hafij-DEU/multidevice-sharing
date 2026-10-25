@@ -21,3 +21,10 @@ export function appEnv(home: string, extra: Record<string, string> = {}): Record
     ...extra,
   };
 }
+
+/** The app opens on Home: switch to the Send page. */
+export async function openSend(win: import('@playwright/test').Page): Promise<void> {
+  const { expect } = await import('@playwright/test');
+  await win.getByRole('navigation', { name: 'Pages' }).getByRole('button', { name: 'Send', exact: true }).click();
+  await expect(win.getByRole('heading', { name: 'Send to' })).toBeVisible();
+}

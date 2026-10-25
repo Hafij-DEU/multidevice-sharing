@@ -2,14 +2,14 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { _electron as electron, expect, test } from '@playwright/test';
-import { appEnv, MAIN } from './util.ts';
+import { appEnv, MAIN, openSend } from './util.ts';
 
 test('Send page has voice notes and the burn / print / send later options', async () => {
   const home = mkdtempSync(join(tmpdir(), 'md-e2e-o-'));
   const app = await electron.launch({ args: [MAIN], env: appEnv(home) });
   try {
     const win = await app.firstWindow();
-    await expect(win.getByRole('heading', { name: 'Send to' })).toBeVisible();
+    await openSend(win);
     await expect(win.getByRole('button', { name: /Voice note/ })).toBeVisible();
     await win.getByRole('button', { name: /Options/ }).click();
     await expect(win.getByText('Burn after reading')).toBeVisible();

@@ -255,3 +255,25 @@ code { font-size: 12.5px; padding: 1px 6px; border-radius: 6px; background: colo
 .badge.burn { background: color-mix(in srgb, #f97316 18%, transparent); }
 .badge.opened { background: color-mix(in srgb, var(--ok) 18%, transparent); margin-left: 6px; }
 .items { touch-action: pan-x; } /* a vertical flick on the list is a gesture (send), not a scroll */
+
+/* Home */
+.home-status { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 10px; padding: 16px; border-radius: var(--radius); background: var(--grad); color: #fff; box-shadow: var(--shadow); margin-bottom: 14px; }
+.home-status .muted { color: #fffd; }
+.home-title { font-size: 20px; font-weight: 700; }
+.home-devices { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.home-devices .chip { background: #ffffff2e; border-radius: 999px; padding: 4px 10px; font-size: 13px; }
+.home-devices .chip .muted { color: #fffc; }
+.home-notes { width: 100%; text-align: left; margin-bottom: 12px; }
+.tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; }
+.tile { display: grid; gap: 4px; justify-items: start; align-content: start; text-align: left; padding: 14px; min-height: 108px; border-radius: var(--radius); border: 1px solid var(--border); background: var(--panel); box-shadow: var(--shadow); cursor: pointer; color: inherit; font: inherit; }
+.tile:hover { transform: translateY(-1px); }
+.tile-icon { width: 38px; height: 38px; border-radius: 12px; display: grid; place-items: center; color: hsl(var(--h) 75% 45%); background: hsl(var(--h) 85% 92%); }
+.tile-icon svg { width: 22px; height: 22px; }
+.tile-title { font-weight: 650; }
+.tile-hint { font-size: 12px; color: var(--muted); }
+@media (prefers-color-scheme: dark) {
+  .tile-icon { color: hsl(var(--h) 85% 72%); background: hsl(var(--h) 45% 20%); }
+}
+@media (max-width: 480px) {
+  .tiles { grid-template-columns: repeat(2, 1fr); }
+}

@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { _electron as electron, expect, test, type ElectronApplication, type Page } from '@playwright/test';
-import { appEnv, MAIN } from './util.ts';
+import { appEnv, MAIN, openSend } from './util.ts';
 
 async function launch(home: string, extra: Record<string, string> = {}): Promise<{ app: ElectronApplication; win: Page }> {
   const app = await electron.launch({ args: [MAIN], env: appEnv(home, extra) });
@@ -67,6 +67,7 @@ test('one QR on the Send page adds several devices (this PC becomes the hub)', a
     const app = await electron.launch({ args: [MAIN], env: appEnv(h) });
     const win = await app.firstWindow();
     await expect(win.getByText('Starting…')).toHaveCount(0);
+    await openSend(win);
     return { app, win };
   }));
   const [A, B, C] = apps as [(typeof apps)[0], (typeof apps)[0], (typeof apps)[0]];

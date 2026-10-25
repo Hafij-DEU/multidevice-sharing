@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { _electron as electron, expect, test, type ElectronApplication, type Page } from '@playwright/test';
 import type { AppState, ReceivedRecord } from '../src/shared/api.ts';
-import { appEnv, MAIN } from './util.ts';
+import { appEnv, MAIN, openSend } from './util.ts';
 
 interface TestHooks {
   setPicked(paths: string[]): void;
@@ -15,7 +15,7 @@ type G = typeof globalThis & { __meshdropTest: TestHooks };
 async function launch(home: string): Promise<{ app: ElectronApplication; win: Page }> {
   const app = await electron.launch({ args: [MAIN], env: appEnv(home) });
   const win = await app.firstWindow();
-  await expect(win.getByRole('heading', { name: 'Send to' })).toBeVisible();
+  await openSend(win);
   await expect(win.getByText('Starting…')).toHaveCount(0);
   return { app, win };
 }

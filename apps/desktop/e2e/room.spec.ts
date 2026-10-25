@@ -3,14 +3,14 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { _electron as electron, expect, test } from '@playwright/test';
 import type { AppState } from '../src/shared/api.ts';
-import { appEnv, MAIN } from './util.ts';
+import { appEnv, MAIN, openSend } from './util.ts';
 
 test('room mode: open a room, a guest posts a photo, the PC saves it', async () => {
   const home = mkdtempSync(join(tmpdir(), 'md-e2e-room-'));
   const app = await electron.launch({ args: [MAIN], env: appEnv(home) });
   try {
     const win = await app.firstWindow();
-    await expect(win.getByRole('heading', { name: 'Send to' })).toBeVisible();
+    await openSend(win);
     await win.getByRole('button', { name: 'More', exact: true }).click();
     await win.getByRole('button', { name: /^Guests/ }).click();
     await win.getByLabel('Room name').fill('Party');

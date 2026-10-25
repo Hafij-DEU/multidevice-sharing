@@ -5,6 +5,7 @@ import { errorText } from './format.ts';
 import { GuestOffer } from './components/GuestOffer.tsx';
 import { Devices } from './pages/Devices.tsx';
 import { Guests } from './pages/Guests.tsx';
+import { Home } from './pages/Home.tsx';
 import { Inbox } from './pages/Inbox.tsx';
 import { Mesh } from './pages/Mesh.tsx';
 import { PairedDevices } from './pages/PairedDevices.tsx';
@@ -13,10 +14,11 @@ import { Settings } from './pages/Settings.tsx';
 import { Sync } from './pages/Sync.tsx';
 import { Transfers } from './pages/Transfers.tsx';
 
-/** Three tabs; the rarer pages live under More. */
-const TABS = ['Send', 'Received', 'More'] as const;
+/** Home (every feature one tap away), Send, Received; the rarer pages live under More. */
+const TABS = ['Home', 'Send', 'Received', 'More'] as const;
 type Tab = (typeof TABS)[number];
 const TAB_ICON: Record<Tab, string> = {
+  Home: 'M3 11l9-7 9 7M5 10v10h5v-6h4v6h5V10',
   Send: 'M4 12l16-8-6 16-2-7-8-1z',
   Received: 'M12 4v11M7 10l5 5 5-5M5 20h14',
   More: 'M5 12h.01M12 12h.01M19 12h.01',
@@ -46,7 +48,7 @@ const MORE_HINT: Record<Sub, string> = {
 export type Run = <T>(fn: () => Promise<T>, ok?: string) => Promise<T | undefined>;
 
 export function App() {
-  const [tab, setTab] = useState<Tab>('Send');
+  const [tab, setTab] = useState<Tab>('Home');
   const [sub, setSub] = useState<Sub | null>(null);
   const open = (t: Tab, s: Sub | null = null) => {
     setTab(t);
@@ -89,8 +91,8 @@ export function App() {
     open('More', 'Settings');
   }, [state?.platform, state?.keepAlive]);
 
-  // Android back button: the page steps back first (a More page → More, another tab → Send); only
-  // on Send itself does the app go to the background (MainActivity asks window.__mdBack).
+  // Android back button: the page steps back first (a More page → More, another tab → Home); only
+  // on Home itself does the app go to the background (MainActivity asks window.__mdBack).
   const nav = useRef({ tab, sub });
   nav.current = { tab, sub };
   useEffect(() => {
@@ -101,8 +103,8 @@ export function App() {
         setSub(null);
         return true;
       }
-      if (t !== 'Send') {
-        open('Send');
+      if (t !== 'Home') {
+        open('Home');
         return true;
       }
       return false;
@@ -167,6 +169,8 @@ export function App() {
         )}
         {!state ? (
           <p className="muted">Starting…</p>
+        ) : tab === 'Home' ? (
+          <Home state={state} run={run} go={(to) => ('tab' in to ? open(to.tab) : open('More', to.sub as Sub))} />
         ) : tab === 'Send' ? (
           <Devices state={state} run={run} />
         ) : tab === 'Received' ? (

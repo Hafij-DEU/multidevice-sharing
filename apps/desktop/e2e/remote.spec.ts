@@ -3,12 +3,12 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { _electron as electron, expect, test, type ElectronApplication, type Page } from '@playwright/test';
 import type { AppState } from '../src/shared/api.ts';
-import { appEnv, MAIN } from './util.ts';
+import { appEnv, MAIN, openSend } from './util.ts';
 
 async function launch(home: string): Promise<{ app: ElectronApplication; win: Page }> {
   const app = await electron.launch({ args: [MAIN], env: appEnv(home) });
   const win = await app.firstWindow();
-  await expect(win.getByRole('heading', { name: 'Send to' })).toBeVisible();
+  await openSend(win);
   return { app, win };
 }
 const stateOf = (win: Page) => win.evaluate(() => window.meshdrop.getState()) as Promise<AppState>;
