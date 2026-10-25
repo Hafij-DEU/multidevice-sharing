@@ -121,6 +121,10 @@ public final class AppController {
     private volatile List<Map<String, Object>> outbox = new ArrayList<>();
     /** The guest link's QR code (the engine keeps the rest of the session). */
     private volatile String guestQr;
+    /** This device's internet links on its hub (M9b), refreshed in the background. */
+    private volatile List<Object> memberLinks = new ArrayList<>();
+    private volatile long memberLinksAt;
+    private final java.util.concurrent.atomic.AtomicBoolean linksRefreshing = new java.util.concurrent.atomic.AtomicBoolean();
     private ScheduledFuture<?> pending;
     /** Photo backup: one batch at a time; what this run handed over (for the status line). */
     private final java.util.concurrent.atomic.AtomicBoolean backupBusy = new java.util.concurrent.atomic.AtomicBoolean();
@@ -319,6 +323,10 @@ public final class AppController {
         Map<String, Object> guest = x.guestState();
         if (guestQr != null && Boolean.TRUE.equals(guest.get("active"))) guest.put("qrSvg", guestQr);
         m.put("guest", guest);
+        if (mesh != null) {
+            m.put("links", new ArrayList<Object>(memberLinks));
+            if (x.hubState() == HubClient.State.ONLINE && System.currentTimeMillis() - memberLinksAt > 30_000) refreshLinks();
+        }
         Map<String, Object> sync = x.syncStatus();
         sync.put("suggested", ""); // Android: the folder is always picked (system folder picker)
         m.put("sync", sync);
@@ -1012,6 +1020,51 @@ public final class AppController {
         return (String) o;
     }
 
+    /** Fetches this device's links from its hub off the caller's thread, then redraws. */
+    private void refreshLinks() {
+        if (!linksRefreshing.compareAndSet(false, true)) return;
+        memberLinksAt = System.currentTimeMillis();
+        Thread t = new Thread(() -> {
+            try {
+                memberLinks = new ArrayList<Object>(e().linkList());
+                changed();
+            } catch (Exception ignored) {
+                // hub away: kept as it was
+            } finally {
+                linksRefreshing.set(false);
+            }
+        }, "links-refresh");
+        t.setDaemon(true);
+        t.start();
+    }
+
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> linkCreate(Map<String, Object> in) throws IOException {
+        List<io.github.hafijbge.meshdrop.engine.send.Source> sources = new ArrayList<>();
+        if (in.get("files") instanceof List) {
+            for (Object ref : (List<Object>) in.get("files")) {
+                io.github.hafijbge.meshdrop.engine.send.SendItem it = platform.item("file", str(ref));
+                if (it.source == null) throw new IllegalArgumentException("Only files can go in a link.");
+                sources.add(it.source);
+            }
+        }
+        double days = in.get("days") instanceof Number ? ((Number) in.get("days")).doubleValue() : 7;
+        long ms = Math.round(days * 24 * 3_600_000L);
+        String text = in.get("text") instanceof String ? (String) in.get("text") : null;
+        if (sources.isEmpty() && (text == null || text.isEmpty())) throw new IllegalArgumentException("Choose files first.");
+        String pw = in.get("password") instanceof String ? (String) in.get("password") : null;
+        int max = in.get("maxDownloads") instanceof Number ? ((Number) in.get("maxDownloads")).intValue() : 0;
+        io.github.hafijbge.meshdrop.engine.links.MemberLinks.Made made = e().linkCreate(sources, text, ms, pw, max);
+        Map<String, Object> r = new LinkedHashMap<>();
+        r.put("id", made.id);
+        r.put("url", made.url);
+        r.put("qrSvg", io.github.hafijbge.meshdrop.engine.guest.GuestPage.qrSvg(made.url));
+        r.put("expiresAt", made.expiresAt);
+        memberLinksAt = 0;
+        refreshLinks();
+        return r;
+    }
+
     private static int integer(Object o) {
         if (!(o instanceof Long)) throw new IllegalArgumentException("invalid argument");
         return ((Long) o).intValue();
@@ -1092,6 +1145,13 @@ public final class AppController {
                 changed();
                 return g;
             }
+            case "linkCreate":
+                return linkCreate(obj(a0));
+            case "linkRevoke":
+                e().linkRevoke(str(a0));
+                memberLinksAt = 0;
+                refreshLinks();
+                return null;
             case "guestEnd":
                 e().guestEnd();
                 guestQr = null;

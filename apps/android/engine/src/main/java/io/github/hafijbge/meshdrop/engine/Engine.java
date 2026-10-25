@@ -1462,6 +1462,59 @@ public final class Engine {
     }
 
     /** LAN targets go direct; address-less ones go through the hub, held when `held` says so. */
+    // ---- internet links made on this device (M9b) ----------------------------------------------
+
+    private Transport hubTransport() throws IOException {
+        HubClient h = hub;
+        String to = h == null ? null : h.linkedHub();
+        if (to == null) throw new IOException("Not connected to a hub: internet links need the hub PC or a relay hub.");
+        return new RelayTransport(identity, h, to, this::pubOf, "relay", 0);
+    }
+
+    private File memberLinksFile() {
+        return new File(cfg.home, "member-links.json");
+    }
+
+    @SuppressWarnings("unchecked")
+    private synchronized Map<String, Object> memberLinkUrls() {
+        try {
+            Object j = Json.parse(new String(Files.readAllBytes(memberLinksFile().toPath()), StandardCharsets.UTF_8));
+            if (j instanceof Map) return (Map<String, Object>) j;
+        } catch (IOException | RuntimeException ignored) {
+            // none yet
+        }
+        return new LinkedHashMap<>();
+    }
+
+    private synchronized void saveMemberLinkUrls(Map<String, Object> m) throws IOException {
+        io.github.hafijbge.meshdrop.engine.util.Atomic.write(memberLinksFile(), Json.stringify(m).getBytes(StandardCharsets.UTF_8));
+    }
+
+    /** Seals the files here and uploads only ciphertext to the hub (or relay hub) this device is linked to. */
+    public io.github.hafijbge.meshdrop.engine.links.MemberLinks.Made linkCreate(List<io.github.hafijbge.meshdrop.engine.send.Source> files, String text, long expiresInMs, String password, int maxDownloads) throws IOException {
+        if (mesh == null) throw new IOException("Internet links need a mesh with a hub.");
+        io.github.hafijbge.meshdrop.engine.links.MemberLinks.Made m = io.github.hafijbge.meshdrop.engine.links.MemberLinks.create(hubTransport(), files, text, expiresInMs, password, maxDownloads);
+        Map<String, Object> urls = memberLinkUrls();
+        urls.put(m.id, m.url);
+        saveMemberLinkUrls(urls);
+        return m;
+    }
+
+    /** This device's links on its hub, each with its full URL (key included) when it was made here. */
+    public List<Map<String, Object>> linkList() throws IOException {
+        List<Map<String, Object>> out = io.github.hafijbge.meshdrop.engine.links.MemberLinks.list(hubTransport());
+        Map<String, Object> urls = memberLinkUrls();
+        for (Map<String, Object> l : out) if (urls.get(l.get("id")) instanceof String) l.put("url", urls.get(l.get("id")));
+        return out;
+    }
+
+    public void linkRevoke(String id) throws IOException {
+        io.github.hafijbge.meshdrop.engine.links.MemberLinks.revoke(hubTransport(), id);
+        Map<String, Object> urls = memberLinkUrls();
+        urls.remove(id);
+        saveMemberLinkUrls(urls);
+    }
+
     private Transport transportFor(Sender.Target t, boolean held, long holdBytes) {
         if (t.host != null) return null;
         HubClient h = hub;
