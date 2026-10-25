@@ -121,6 +121,9 @@ public final class AppController {
     private volatile List<Map<String, Object>> outbox = new ArrayList<>();
     /** The guest link's QR code (the engine keeps the rest of the session). */
     private volatile String guestQr;
+    /** M10: this device rings (Find my device) until stopped or for at most a minute. */
+    private volatile boolean ringing;
+    private final Map<String, Object> deviceStatus = new java.util.concurrent.ConcurrentHashMap<>();
     /** This device's internet links on its hub (M9b), refreshed in the background. */
     private volatile List<Object> memberLinks = new ArrayList<>();
     private volatile long memberLinksAt;
@@ -197,6 +200,7 @@ public final class AppController {
         e.setReceiving(!paused && error == null);
         e.setIdle(idle);
         e.addListener(engineListener);
+        e.setAppHandler(this::onApp);
         engine = e;
         refreshOutbox();
         changed();
@@ -323,6 +327,9 @@ public final class AppController {
         Map<String, Object> guest = x.guestState();
         if (guestQr != null && Boolean.TRUE.equals(guest.get("active"))) guest.put("qrSvg", guestQr);
         m.put("guest", guest);
+        m.put("ringing", ringing);
+        m.put("notifyAccess", platform.notificationAccess());
+        m.put("deviceStatus", new LinkedHashMap<>(deviceStatus));
         if (mesh != null) {
             m.put("links", new ArrayList<Object>(memberLinks));
             if (x.hubState() == HubClient.State.ONLINE && System.currentTimeMillis() - memberLinksAt > 30_000) refreshLinks();
@@ -1020,6 +1027,106 @@ public final class AppController {
         return (String) o;
     }
 
+    // ---- M10: app messages ------------------------------------------------------------------
+
+    /** What this phone answers to app messages from trusted devices. */
+    public io.github.hafijbge.meshdrop.engine.recv.MeshServer.Reply onApp(String peer, Object raw) {
+        Map<String, Object> msg = raw instanceof Map ? obj(raw) : new LinkedHashMap<>();
+        Object kind = msg.get("kind");
+        Map<String, Object> body = new LinkedHashMap<>();
+        int status = 200;
+        if ("ring".equals(kind)) {
+            ring(!Boolean.FALSE.equals(msg.get("on")));
+            body.put("ok", true);
+        } else if ("status".equals(kind)) {
+            body.putAll(platform.status());
+        } else if ("reply".equals(kind)) {
+            String key = msg.get("key") instanceof String ? (String) msg.get("key") : "";
+            String text = msg.get("text") instanceof String ? (String) msg.get("text") : "";
+            if (key.isEmpty() || text.isEmpty() || text.length() > 4000) {
+                status = 400;
+                body.put("error", "bad-reply");
+            } else if (platform.replyNotification(key, text)) {
+                body.put("ok", true);
+            } else {
+                status = 404;
+                body.put("error", "gone");
+            }
+        } else if ("open-url".equals(kind)) {
+            String url = msg.get("url") instanceof String ? (String) msg.get("url") : "";
+            if (!settings.get().openLinks) {
+                status = 403;
+                body.put("error", "handoff-off");
+            } else if (!url.matches("^(?i)https?://\\S{1,4000}$")) {
+                status = 400;
+                body.put("error", "bad-url");
+            } else {
+                platform.openUrl(url);
+                body.put("ok", true);
+            }
+        } else if ("input".equals(kind) || "action".equals(kind) || "apps".equals(kind)) {
+            status = 403;
+            body.put("error", "remote-off"); // a phone is the remote, not the controlled device
+        } else {
+            status = 404;
+            body.put("error", "unknown-kind");
+        }
+        return new io.github.hafijbge.meshdrop.engine.recv.MeshServer.Reply(status, Json.stringify(body).getBytes(java.nio.charset.StandardCharsets.UTF_8));
+    }
+
+    private java.util.concurrent.ScheduledFuture<?> ringTimer;
+
+    private synchronized void ring(boolean on) {
+        if (ringTimer != null) ringTimer.cancel(false);
+        ringTimer = null;
+        ringing = on;
+        platform.ring(on);
+        if (on) ringTimer = RING_TIMER.schedule(() -> ring(false), 60, TimeUnit.SECONDS);
+        changed();
+    }
+
+    private static final java.util.concurrent.ExecutorService workers = java.util.concurrent.Executors.newCachedThreadPool(r -> {
+        Thread t = new Thread(r, "app-messages");
+        t.setDaemon(true);
+        return t;
+    });
+
+    private static final java.util.concurrent.ScheduledExecutorService RING_TIMER = java.util.concurrent.Executors.newSingleThreadScheduledExecutor(r -> {
+        Thread t = new Thread(r, "ring-timer");
+        t.setDaemon(true);
+        return t;
+    });
+
+    /** Forwards a notification posted on this phone to the devices picked in Settings (notifyTo). */
+    public void forwardNotification(Map<String, Object> note) {
+        for (String to : settings.get().notifyTo) {
+            Map<String, Object> m = new LinkedHashMap<>(note);
+            m.put("kind", "notify");
+            workers.execute(() -> {
+                try {
+                    e().appSend(to, m, 10_000);
+                } catch (Exception ignored) {
+                    // that PC is away: the notification is not kept for later
+                }
+            });
+        }
+    }
+
+    public void forwardNotificationRemoved(String key) {
+        for (String to : settings.get().notifyTo) {
+            Map<String, Object> m = new LinkedHashMap<>();
+            m.put("kind", "notify-removed");
+            m.put("key", key);
+            workers.execute(() -> {
+                try {
+                    e().appSend(to, m, 10_000);
+                } catch (Exception ignored) {
+                    // away
+                }
+            });
+        }
+    }
+
     /** Fetches this device's links from its hub off the caller's thread, then redraws. */
     private void refreshLinks() {
         if (!linksRefreshing.compareAndSet(false, true)) return;
@@ -1147,6 +1254,22 @@ public final class AppController {
             }
             case "linkCreate":
                 return linkCreate(obj(a0));
+            case "appSend": {
+                String to = str(a0);
+                Map<String, Object> r = e().appSend(to, obj(args.get(1)), 10_000);
+                if ("status".equals(obj(args.get(1)).get("kind")) && Long.valueOf(200).equals(r.get("status")) && r.get("body") instanceof Map) {
+                    Map<String, Object> st = new LinkedHashMap<>(obj(r.get("body")));
+                    st.put("at", System.currentTimeMillis());
+                    deviceStatus.put(to, st);
+                    changed();
+                }
+                return r;
+            }
+            case "ringStop":
+                ring(false);
+                return null;
+            case "noteDismiss":
+                return null;
             case "linkRevoke":
                 e().linkRevoke(str(a0));
                 memberLinksAt = 0;

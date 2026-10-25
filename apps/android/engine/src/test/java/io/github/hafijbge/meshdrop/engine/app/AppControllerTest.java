@@ -79,6 +79,37 @@ public class AppControllerTest {
         public void decorate(Map<String, Object> state) {
             state.put("platform", "android");
         }
+
+        final List<Boolean> rings = Collections.synchronizedList(new ArrayList<>());
+        final List<String> urls = Collections.synchronizedList(new ArrayList<>());
+        final List<String> replies = Collections.synchronizedList(new ArrayList<>());
+
+        @Override
+        public void ring(boolean on) {
+            rings.add(on);
+        }
+
+        @Override
+        public Map<String, Object> status() {
+            Map<String, Object> b = new java.util.LinkedHashMap<>();
+            b.put("level", 77L);
+            b.put("charging", false);
+            Map<String, Object> m = new java.util.LinkedHashMap<>();
+            m.put("battery", b);
+            return m;
+        }
+
+        @Override
+        public void openUrl(String url) {
+            urls.add(url);
+        }
+
+        @Override
+        public boolean replyNotification(String key, String text) {
+            if (!key.equals("k1")) return false;
+            replies.add(text);
+            return true;
+        }
     }
 
     static final class Node {
@@ -445,5 +476,39 @@ public class AppControllerTest {
         a.c.refresh();
         Thread.sleep(400);
         assertEquals(n, calls.get());
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    public void m10AppMessagesRingStatusReplyAndOpenUrl() throws Exception {
+        Node a = make("ay");
+        Node b = make("bee");
+        pair(a.c, b.c);
+        String bId = selfId(b.c);
+        Map<String, Object> r = (Map<String, Object>) a.c.call("appSend", List.of(bId, Map.of("kind", "ring")));
+        assertEquals(200L, r.get("status"));
+        assertEquals(List.of(true), b.p.rings);
+        assertEquals(true, state(b.c).get("ringing"));
+        b.c.call("ringStop", List.of());
+        assertEquals(List.of(true, false), b.p.rings);
+
+        r = (Map<String, Object>) a.c.call("appSend", List.of(bId, Map.of("kind", "status")));
+        assertEquals(200L, r.get("status"));
+        assertEquals(77L, ((Map<String, Object>) ((Map<String, Object>) ((Map<String, Object>) state(a.c).get("deviceStatus")).get(bId)).get("battery")).get("level"));
+
+        r = (Map<String, Object>) a.c.call("appSend", List.of(bId, Map.of("kind", "reply", "key", "k1", "text", "on my way")));
+        assertEquals(200L, r.get("status"));
+        assertEquals(List.of("on my way"), b.p.replies);
+        r = (Map<String, Object>) a.c.call("appSend", List.of(bId, Map.of("kind", "reply", "key", "old", "text", "x")));
+        assertEquals(404L, r.get("status"));
+
+        r = (Map<String, Object>) a.c.call("appSend", List.of(bId, Map.of("kind", "open-url", "url", "intent://evil")));
+        assertEquals(400L, r.get("status"));
+        r = (Map<String, Object>) a.c.call("appSend", List.of(bId, Map.of("kind", "open-url", "url", "https://example.com/x")));
+        assertEquals(200L, r.get("status"));
+        assertEquals(List.of("https://example.com/x"), b.p.urls);
+
+        r = (Map<String, Object>) a.c.call("appSend", List.of(bId, Map.of("kind", "input", "events", List.of())));
+        assertEquals(403L, r.get("status"));
     }
 }

@@ -427,6 +427,15 @@ public class AndroidPlatform implements Platform {
                         ? new Intent().setClassName("com.miui.securitycenter", "com.miui.permcenter.autostart.AutoStartManagementActivity")
                         : new Intent().setClassName("com.transsion.phonemaster", "com.cyin.himgr.autostart.AutoStartActivity");
                 break;
+            case "notification-access":
+                i = new Intent(android.provider.Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS);
+                break;
+            case "extendo": {
+                // Second screen: Extendo (its own app), or its download page when it is not installed.
+                Intent launch = ctx.getPackageManager().getLaunchIntentForPackage(EXTENDO);
+                i = launch != null ? launch : new Intent(Intent.ACTION_VIEW, Uri.parse(EXTENDO_PAGE));
+                break;
+            }
             case "battery-saver":
                 i = new Intent().setClassName("com.miui.powerkeeper", "com.miui.powerkeeper.ui.HiddenAppsConfigActivity")
                         .putExtra("package_name", pkg).putExtra("package_label", "MeshDrop");
@@ -444,5 +453,156 @@ public class AndroidPlatform implements Platform {
             }
             if (controller != null) controller.refresh();
         });
+    }
+
+    // ---- M10: find my device, status, link handoff, notification replies ------------------------
+
+    static final String EXTENDO = "io.github.hafijbge.extendo";
+    static final String EXTENDO_PAGE = "https://github.com/Hafij-BGE/Second-monitor/releases/latest";
+    private static final String RING = "ring";
+    private static final int RING_NOTE = 7;
+    private android.media.MediaPlayer ringer;
+    private int alarmVolumeBefore = -1;
+
+    @Override
+    public synchronized void ring(boolean on) {
+        android.media.AudioManager am = ctx.getSystemService(android.media.AudioManager.class);
+        android.app.NotificationManager nm = ctx.getSystemService(android.app.NotificationManager.class);
+        if (!on) {
+            if (ringer != null) {
+                ringer.stop();
+                ringer.release();
+                ringer = null;
+            }
+            if (alarmVolumeBefore >= 0) am.setStreamVolume(android.media.AudioManager.STREAM_ALARM, alarmVolumeBefore, 0);
+            alarmVolumeBefore = -1;
+            nm.cancel(RING_NOTE);
+            return;
+        }
+        if (ringer != null) return;
+        // The alarm stream plays even on silent; it goes to full volume while ringing and back after.
+        alarmVolumeBefore = am.getStreamVolume(android.media.AudioManager.STREAM_ALARM);
+        am.setStreamVolume(android.media.AudioManager.STREAM_ALARM, am.getStreamMaxVolume(android.media.AudioManager.STREAM_ALARM), 0);
+        Uri tone = android.media.RingtoneManager.getDefaultUri(android.media.RingtoneManager.TYPE_ALARM);
+        if (tone == null) tone = android.media.RingtoneManager.getDefaultUri(android.media.RingtoneManager.TYPE_RINGTONE);
+        try {
+            android.media.MediaPlayer p = new android.media.MediaPlayer();
+            p.setAudioAttributes(new android.media.AudioAttributes.Builder().setUsage(android.media.AudioAttributes.USAGE_ALARM)
+                    .setContentType(android.media.AudioAttributes.CONTENT_TYPE_SONIFICATION).build());
+            p.setDataSource(ctx, tone);
+            p.setLooping(true);
+            p.prepare();
+            p.start();
+            ringer = p;
+        } catch (java.io.IOException | RuntimeException e) {
+            ringer = null;
+        }
+        if (nm.getNotificationChannel(RING) == null) {
+            nm.createNotificationChannel(new android.app.NotificationChannel(RING, "Find my device", android.app.NotificationManager.IMPORTANCE_HIGH));
+        }
+        android.app.PendingIntent stop = android.app.PendingIntent.getBroadcast(ctx, 0, new Intent(ctx, RingStopReceiver.class), android.app.PendingIntent.FLAG_IMMUTABLE);
+        android.app.PendingIntent open = android.app.PendingIntent.getActivity(ctx, 0, new Intent(ctx, MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK), android.app.PendingIntent.FLAG_IMMUTABLE);
+        android.app.Notification n = new android.app.Notification.Builder(ctx, RING)
+                .setSmallIcon(R.drawable.ic_notify)
+                .setContentTitle("Find my device")
+                .setContentText("Another of your devices is looking for this one.")
+                .setContentIntent(open)
+                .setDeleteIntent(stop)
+                .addAction(new android.app.Notification.Action.Builder(null, "Stop", stop).build())
+                .setOngoing(true)
+                .build();
+        try {
+            nm.notify(RING_NOTE, n);
+        } catch (SecurityException ignored) {
+            // notifications off: the sound still plays
+        }
+    }
+
+    @Override
+    public Map<String, Object> status() {
+        Map<String, Object> m = new java.util.LinkedHashMap<>();
+        try {
+            android.os.BatteryManager bm = ctx.getSystemService(android.os.BatteryManager.class);
+            Map<String, Object> b = new java.util.LinkedHashMap<>();
+            b.put("level", (long) bm.getIntProperty(android.os.BatteryManager.BATTERY_PROPERTY_CAPACITY));
+            b.put("charging", bm.isCharging());
+            m.put("battery", b);
+        } catch (RuntimeException ignored) {
+            // unknown
+        }
+        try {
+            android.os.StatFs fs = new android.os.StatFs(android.os.Environment.getDataDirectory().getPath());
+            Map<String, Object> s = new java.util.LinkedHashMap<>();
+            s.put("free", fs.getAvailableBytes());
+            s.put("total", fs.getTotalBytes());
+            m.put("storage", s);
+        } catch (RuntimeException ignored) {
+            // unknown
+        }
+        try {
+            android.net.ConnectivityManager cm = ctx.getSystemService(android.net.ConnectivityManager.class);
+            android.net.NetworkCapabilities nc = cm.getNetworkCapabilities(cm.getActiveNetwork());
+            Map<String, Object> sig = new java.util.LinkedHashMap<>();
+            if (nc != null && nc.hasTransport(android.net.NetworkCapabilities.TRANSPORT_WIFI)) {
+                @SuppressWarnings("deprecation")
+                int rssi = ((WifiManager) ctx.getSystemService(Context.WIFI_SERVICE)).getConnectionInfo().getRssi();
+                sig.put("level", (long) Math.max(0, Math.min(4, (rssi + 100) / 12)));
+                sig.put("type", "Wi-Fi");
+            } else {
+                android.telephony.SignalStrength ss = ctx.getSystemService(android.telephony.TelephonyManager.class).getSignalStrength();
+                if (ss != null) {
+                    sig.put("level", (long) ss.getLevel());
+                    sig.put("type", "mobile");
+                }
+            }
+            if (!sig.isEmpty()) m.put("signal", sig);
+        } catch (RuntimeException ignored) {
+            // no permission or no radio
+        }
+        return m;
+    }
+
+    private static final String LINKS = "links";
+
+    @Override
+    public void openUrl(String url) {
+        Intent view = new Intent(Intent.ACTION_VIEW, Uri.parse(url)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        if (MainActivity.resumed) {
+            try {
+                ctx.startActivity(view);
+                return;
+            } catch (RuntimeException ignored) {
+                // no browser: the notification below
+            }
+        }
+        // In the background Android does not let an app open a page by itself: offer it instead.
+        android.app.NotificationManager nm = ctx.getSystemService(android.app.NotificationManager.class);
+        if (nm.getNotificationChannel(LINKS) == null) {
+            nm.createNotificationChannel(new android.app.NotificationChannel(LINKS, "Links from your devices", android.app.NotificationManager.IMPORTANCE_HIGH));
+        }
+        android.app.PendingIntent pi = android.app.PendingIntent.getActivity(ctx, nextNote, view, android.app.PendingIntent.FLAG_IMMUTABLE);
+        android.app.Notification n = new android.app.Notification.Builder(ctx, LINKS)
+                .setSmallIcon(R.drawable.ic_notify)
+                .setContentTitle("Open link")
+                .setContentText(url)
+                .setContentIntent(pi)
+                .setAutoCancel(true)
+                .build();
+        try {
+            nm.notify(nextNote++, n);
+        } catch (SecurityException ignored) {
+            // notifications not allowed
+        }
+    }
+
+    @Override
+    public boolean replyNotification(String key, String text) {
+        return NotifyListener.reply(key, text);
+    }
+
+    @Override
+    public boolean notificationAccess() {
+        String on = android.provider.Settings.Secure.getString(ctx.getContentResolver(), "enabled_notification_listeners");
+        return on != null && on.contains(ctx.getPackageName() + "/");
     }
 }

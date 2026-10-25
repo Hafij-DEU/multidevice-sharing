@@ -90,6 +90,24 @@ public final class SettingsStore {
                 if (!(v instanceof Long) || (Long) v < 0) throw new SettingsError("Invalid value for backupSince.");
                 s.backupSince = (Long) v;
                 break;
+            case "notifyTo":
+            case "remoteFrom": {
+                if (!(v instanceof java.util.List) || ((java.util.List<?>) v).size() > 64) throw new SettingsError("Invalid value for " + k + ".");
+                java.util.List<String> ids = new java.util.ArrayList<>();
+                for (Object o : (java.util.List<?>) v) {
+                    if (!(o instanceof String) || !((String) o).matches("^[0-9a-f]{64}$")) throw new SettingsError("Invalid value for " + k + ".");
+                    if (!ids.contains(o)) ids.add((String) o);
+                }
+                if (k.equals("notifyTo")) s.notifyTo = java.util.Collections.unmodifiableList(ids);
+                else s.remoteFrom = java.util.Collections.unmodifiableList(ids);
+                break;
+            }
+            case "openLinks":
+            case "phoneNotifications":
+                if (!(v instanceof Boolean)) throw new SettingsError("Invalid value for " + k + ".");
+                if (k.equals("openLinks")) s.openLinks = (Boolean) v;
+                else s.phoneNotifications = (Boolean) v;
+                break;
             case "guestMinutes":
                 if (!(v instanceof Long) && !(v instanceof Integer)) throw new SettingsError("Invalid value for guestMinutes.");
                 long gm = ((Number) v).longValue();

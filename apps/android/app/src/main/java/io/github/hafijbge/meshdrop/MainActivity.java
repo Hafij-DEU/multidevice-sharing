@@ -9,6 +9,9 @@ import java.io.IOException;
 
 /** The main window: the shared UI in a WebView, plus "Share → MeshDrop". */
 public final class MainActivity extends Activity {
+    /** The UI is in front (Android lets an app open a page by itself only then). */
+    static volatile boolean resumed;
+
     private WebView web;
     private Bridge bridge;
     private Pickers pickers;
@@ -73,6 +76,7 @@ public final class MainActivity extends Activity {
     @Override
     protected void onResume() {
         super.onResume();
+        resumed = true;
         AppController c = ((MeshApp) getApplication()).core().controller;
         c.refresh(); // a keep-alive step may have changed
         c.setForeground(true);
@@ -80,6 +84,7 @@ public final class MainActivity extends Activity {
 
     @Override
     protected void onPause() {
+        resumed = false;
         ((MeshApp) getApplication()).core().controller.setForeground(false);
         super.onPause();
     }

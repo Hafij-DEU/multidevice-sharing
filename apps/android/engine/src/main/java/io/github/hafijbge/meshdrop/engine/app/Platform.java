@@ -69,4 +69,27 @@ public interface Platform {
     default String thumbnail(String ref) {
         return null;
     }
+
+    // ---- M10 ----
+
+    /** Find my device: rings at full alarm volume (even on silent) until stopped. */
+    default void ring(boolean on) {}
+
+    /** {battery:{level,charging}, storage:{free,total}, signal:{level,type}} as far as known. */
+    default java.util.Map<String, Object> status() {
+        return new java.util.LinkedHashMap<>();
+    }
+
+    /** Opens an http(s) link a trusted device handed over (or offers it in a notification). */
+    default void openUrl(String url) {}
+
+    /** Answers a forwarded notification through its own reply action; false when it is gone. */
+    default boolean replyNotification(String key, String text) {
+        return false;
+    }
+
+    /** Notification access is granted (forwarding needs it). */
+    default boolean notificationAccess() {
+        return false;
+    }
 }

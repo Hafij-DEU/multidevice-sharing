@@ -23,6 +23,13 @@ public final class Settings implements Cloneable {
     /** Photo backup (Android): the PC that gets new camera photos ("": off), and the last MediaStore id handed over. */
     public String backupTarget = "";
     public long backupSince = 0;
+    /** M10: the devices this phone forwards its notifications to. */
+    public java.util.List<String> notifyTo = java.util.Collections.emptyList();
+    /** M10: links sent with "Open on device" open here. */
+    public boolean openLinks = true;
+    /** M10 (desktop meaning; kept for the shared settings shape). */
+    public java.util.List<String> remoteFrom = java.util.Collections.emptyList();
+    public boolean phoneNotifications = true;
 
     public static Settings defaults(String alias) {
         Settings s = new Settings();
@@ -53,6 +60,10 @@ public final class Settings implements Cloneable {
         m.put("guestMinutes", (long) guestMinutes);
         m.put("backupTarget", backupTarget);
         m.put("backupSince", backupSince);
+        m.put("notifyTo", new java.util.ArrayList<Object>(notifyTo));
+        m.put("openLinks", openLinks);
+        m.put("remoteFrom", new java.util.ArrayList<Object>(remoteFrom));
+        m.put("phoneNotifications", phoneNotifications);
         return m;
     }
 }
