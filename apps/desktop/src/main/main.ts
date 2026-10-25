@@ -17,6 +17,7 @@ import { autostartDir, gnomeShortcutCommands, installNautilusScript, parseStrLis
 import { HistoryStore } from './history.ts';
 import { mediaPlatform, remotePlatform } from './remote.ts';
 import { setupPhones } from './phonesetup.ts';
+import { onReplaced } from './selfupdate.ts';
 import { startHandoffServer } from './handoff.ts';
 import { SettingsStore, defaultSettings } from './settings.ts';
 
@@ -523,6 +524,14 @@ if (!app.requestSingleInstanceLock()) {
     if (clip) showPicker();
     const files = sendArgs(process.argv);
     if (files.length > 0) controller?.addShared(files);
+    if (app.isPackaged && !TEST) {
+      // updated underneath us: come back as the new version (hidden if the window was hidden)
+      onReplaced(join(process.resourcesPath, 'app.asar'), () => {
+        const shown = !!win && !win.isDestroyed() && win.isVisible();
+        app.relaunch({ args: [...process.argv.slice(1).filter((a) => a !== '--hidden'), ...(shown ? [] : ['--hidden'])] });
+        quit();
+      });
+    }
     if (app.isPackaged && !TEST && process.platform === 'linux') {
       try {
         installNautilusScript(launchCommand());
