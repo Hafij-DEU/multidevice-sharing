@@ -19,5 +19,4 @@ run am set-standby-bucket "$PKG" active                       # app standby: alw
 run cmd appops set "$PKG" 10008 allow                          # MIUI / HyperOS: autostart
 run cmd appops set "$PKG" 10021 allow                          # MIUI / HyperOS: start in background
 run cmd notification allow_listener "$PKG/$PKG.NotifyListener" # notifications to the PC (Remote page)
-run am start-foreground-service -n "$PKG/.MeshService"
 echo "Done. On Xiaomi also set Battery saver to 'No restrictions' for MeshDrop (Settings > Apps > MeshDrop)."
