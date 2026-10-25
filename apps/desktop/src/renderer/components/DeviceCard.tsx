@@ -1,5 +1,5 @@
 import type { CSSProperties } from 'react';
-import type { DeviceView } from '../../shared/api.ts';
+import type { DeviceStatus, DeviceView } from '../../shared/api.ts';
 import { Peer } from './Peer.tsx';
 
 const REACH: Record<DeviceView['reach'], string> = { lan: 'On this network', hub: 'Via hub', offline: 'Offline' };
@@ -12,7 +12,7 @@ function hueOf(id: string): number {
   return h;
 }
 
-export function DeviceCard({ d, checked, disabled, onToggle, onPair }: { d: DeviceView; checked: boolean; disabled?: boolean; onToggle?: () => void; onPair?: () => void }) {
+export function DeviceCard({ d, checked, disabled, onToggle, onPair, status }: { d: DeviceView; checked: boolean; disabled?: boolean; onToggle?: () => void; onPair?: () => void; status?: DeviceStatus }) {
   // A card with a checkbox is its label; one without must not be (a <label> would make its Pair
   // button take the whole card's text as its name, and any click on the card would press it).
   const Card = onToggle ? 'label' : 'div';
@@ -27,6 +27,7 @@ export function DeviceCard({ d, checked, disabled, onToggle, onPair }: { d: Devi
         <span className="device-sub" title={`${ROLE[d.role]} · ${d.deviceId.slice(0, 8)}`}>
           <span className={`dot reach-${d.reach}`} aria-hidden="true" />
           {REACH[d.reach]} · {ROLE[d.role]}
+          {status?.battery && d.reach !== 'offline' && ` · 🔋 ${status.battery.level}%${status.battery.charging ? '⚡' : ''}`}
         </span>
       </span>
       {onPair && (

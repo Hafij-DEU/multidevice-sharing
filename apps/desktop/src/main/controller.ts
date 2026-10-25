@@ -82,7 +82,9 @@ export function toPrims(events: RemoteEvent[]): InputPrim[] {
         }
         break;
       case 'key': {
-        const keysym = KEYSYMS[e.k];
+        // a named key, or one printable character (for shortcuts such as Control+c)
+        const one = typeof e.k === 'string' && [...e.k].length === 1 && e.k >= ' ' ? charKeysym(e.k) : undefined;
+        const keysym = Object.hasOwn(KEYSYMS, e.k) ? KEYSYMS[e.k] : one;
         if (keysym === undefined) break;
         const mods = (Array.isArray(e.mods) ? e.mods : []).map((m) => KEYSYMS[m]).filter((m): m is number => m !== undefined && [KEYSYMS.Shift, KEYSYMS.Control, KEYSYMS.Alt, KEYSYMS.Super].includes(m));
         for (const m of mods) out.push({ t: 'key', keysym: m, down: true });

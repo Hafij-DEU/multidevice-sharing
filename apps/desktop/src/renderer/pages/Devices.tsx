@@ -180,7 +180,7 @@ export function Devices({ state, run }: { state: AppState; run: Run }) {
       ) : (
         <div className="cards">
           {trusted.map((d) => (
-            <DeviceCard key={d.deviceId} d={d} checked={all ? d.reach !== 'offline' : selected.has(d.deviceId)} disabled={all} onToggle={() => toggle(d.deviceId)} />
+            <DeviceCard key={d.deviceId} d={d} status={state.deviceStatus?.[d.deviceId]} checked={all ? d.reach !== 'offline' : selected.has(d.deviceId)} disabled={all} onToggle={() => toggle(d.deviceId)} />
           ))}
         </div>
       )}
@@ -212,6 +212,21 @@ export function Devices({ state, run }: { state: AppState; run: Run }) {
       <button className="primary big" disabled={!canSend} onClick={() => void send()}>
         Send
       </button>
+      {text !== null && /^https?:\/\/\S+$/i.test(text.trim()) && targets.length > 0 && (
+        <button
+          onClick={() =>
+            void run(async () => {
+              for (const t of all ? trusted.filter((d) => d.reach !== 'offline').map((d) => d.deviceId) : targets) {
+                const r = await window.meshdrop.appSend(t, { kind: 'open-url', url: text.trim() });
+                if (r.status !== 200) throw new Error(r.status === 403 ? 'That device does not open links from other devices (its Settings).' : 'The device could not open the link.');
+              }
+              setText(null);
+            }, 'Opened on the device')
+          }
+        >
+          Open link on device
+        </button>
+      )}
       {targets.length === 0 && trusted.length > 0 && <p className="muted hint">Pick a device above. An offline one gets it when it is back.</p>}
 
       {recent.length > 0 && (

@@ -210,6 +210,8 @@ export interface AppState {
   ringing?: boolean;
   /** M10: why remote input does not work on this PC (absent: it does, or nobody tried yet). */
   inputError?: string;
+  /** Android: notification access is granted (needed to forward notifications). */
+  notifyAccess?: boolean;
 }
 
 /** A notification forwarded from a phone (M10). */

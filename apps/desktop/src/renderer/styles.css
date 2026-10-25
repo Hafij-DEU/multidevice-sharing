@@ -233,3 +233,18 @@ code { font-size: 12.5px; padding: 1px 6px; border-radius: 6px; background: colo
   .menu-icon svg { width: 1.4rem; height: 1.4rem; }
   .record .thumb { width: 4.5rem; height: 4.5rem; }
 }
+
+/* M10 Remote */
+.remote select { min-width: 220px; padding: 8px 12px; border-radius: 10px; border: 1px solid var(--border); background: var(--panel); color: inherit; font: inherit; }
+.segmented { display: flex; flex-wrap: wrap; gap: 4px; margin: 10px 0; }
+.segmented button { border-radius: 999px; }
+.segmented button.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+.touchpad, .laserpad { touch-action: none; user-select: none; height: min(52vh, 360px); border-radius: var(--radius); border: 1px dashed var(--border); background: color-mix(in srgb, var(--accent) 6%, var(--panel)); display: flex; align-items: flex-end; justify-content: center; padding: 10px; text-align: center; margin: 8px 0; }
+.laserpad { height: min(40vh, 280px); background: color-mix(in srgb, #ef4444 7%, var(--panel)); }
+.media-keys button { font-size: 22px; min-width: 56px; min-height: 48px; }
+.presenter button.big { flex: 1; min-height: 72px; font-size: 18px; }
+.row.wrap { flex-wrap: wrap; }
+.banner.warn { background: color-mix(in srgb, var(--warn) 18%, var(--panel)); padding: 10px 14px; border-radius: var(--radius); margin-bottom: 10px; }
+.notes li { border-bottom: 1px solid var(--border); padding: 8px 0; }
+.list.apps { max-height: 260px; overflow: auto; }
+.device-status { font-size: 12px; }

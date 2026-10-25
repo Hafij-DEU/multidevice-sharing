@@ -2,7 +2,7 @@
 // PC actions, the app list, ringing (Find my device) and this PC's own status.
 import { BrowserWindow, screen } from 'electron';
 import { execFile, spawn, type ChildProcess } from 'node:child_process';
-import { existsSync, readdirSync, readFileSync, statfsSync } from 'node:fs';
+import { appendFileSync, existsSync, readdirSync, readFileSync, statfsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
@@ -188,7 +188,10 @@ export function remotePlatform(opts: { home: string; script: string; inbox: () =
     ringing.on('exit', () => setTimeout(ringOnce, 200));
   };
   return {
-    input: (prims) => input.send(prims),
+    // Tests (MESHDROP_TEST_INPUT_LOG): input is written to a file instead of reaching the desktop.
+    input: process.env.MESHDROP_TEST_INPUT_LOG
+      ? async (prims) => appendFileSync(process.env.MESHDROP_TEST_INPUT_LOG!, prims.map((x) => JSON.stringify(x) + '\n').join(''))
+      : (prims) => input.send(prims),
     laser: (x, y, on) => laser.show(x, y, on),
     pcAction: async (a) => {
       const cmd: Record<typeof a, [string, string[]]> = {

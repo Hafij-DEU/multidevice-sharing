@@ -16,6 +16,8 @@ export function appEnv(home: string, extra: Record<string, string> = {}): Record
     // Ephemeral hub ingress and LAN guest ports: a real MeshDrop on this PC keeps the defaults.
     MESHDROP_INGRESS_PORT: '0',
     MESHDROP_GUEST_PORT: '0',
+    // Remote input goes to a file, never to this desktop (the portal would ask on screen).
+    MESHDROP_TEST_INPUT_LOG: join(home, 'input.log'),
     ...extra,
   };
 }
