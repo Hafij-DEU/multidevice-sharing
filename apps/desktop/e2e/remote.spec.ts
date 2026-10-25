@@ -40,10 +40,17 @@ test('a device allowed on the PC types and clicks there from the Remote page', a
     await expect.poll(logged).toContain('"keysym":105');
     await A.win.getByRole('tab', { name: 'Touchpad' }).click();
     // a slow CI runner can re-lay out the page under the pointer: click until one lands
-    await expect(async () => {
-      if (!logged().includes('"button":272')) await A.win.getByRole('button', { name: 'Left click' }).click();
-      expect(logged()).toContain('"button":272');
-    }).toPass({ timeout: 20_000, intervals: [1000] });
+    try {
+      await expect(async () => {
+        if (!logged().includes('"button":272')) await A.win.getByRole('button', { name: 'Left click' }).click();
+        expect(logged()).toContain('"button":272');
+      }).toPass({ timeout: 20_000, intervals: [1000] });
+    } catch (e) {
+      // what A saw: its devices (reach, address) and any error shown
+      const s = await stateOf(A.win);
+      console.log('remote debug', JSON.stringify({ devices: s.devices, toast: await A.win.locator('[role=status], [role=alert], .toast').allInnerTexts() }));
+      throw e;
+    }
     const keys = readFileSync(log, 'utf8').trim().split('\n').map((l) => JSON.parse(l) as { t: string; keysym?: number; down?: boolean }).filter((x) => x.t === 'key' && x.down).map((x) => x.keysym);
     expect(keys).toEqual([0x68, 0x69]);
     await A.win.screenshot({ path: join('test-results', 'remote-page.png') });

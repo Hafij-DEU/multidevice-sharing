@@ -79,7 +79,7 @@ test('pair two apps by address, send a file, see it in the other inbox', async (
 
     const card = A.win.locator(`.device-card[data-device="${b.self.deviceId}"]`);
     await expect(card).toBeVisible();
-    expect(await card.innerText()).toContain('<b>x</b>');
+    await expect(card).toContainText('<b>x</b>'); // it may show as Nearby (multicast) until pairing lands
     expect(await A.win.locator('.device-card b').count()).toBe(0);
     await expect(B.win.locator(`.device-card[data-device="${a.self.deviceId}"]`)).toBeVisible();
 
