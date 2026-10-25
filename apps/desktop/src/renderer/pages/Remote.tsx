@@ -29,6 +29,9 @@ function problem(r: { status: number; body: unknown } | undefined): string | und
 function useSender(target: string | null, onError: (e: string) => void) {
   const queue = useRef<RemoteEvent[]>([]);
   const busy = useRef(false);
+  useEffect(() => {
+    queue.current = []; // a click meant for one device never lands on another
+  }, [target]);
   const flush = async () => {
     if (busy.current || !target || queue.current.length === 0) return;
     busy.current = true;
@@ -258,7 +261,11 @@ function Control({ state, run, targets }: { state: AppState; run: Run; targets: 
     void run(() => Promise.reject(new Error(e)));
   });
   useEffect(() => {
-    if (target && !targets.some((t) => t.deviceId === target)) setTarget(targets[0]?.deviceId ?? null);
+    // also when the target was lost for a moment (null): pick it again once a device is back
+    if (!target || !targets.some((t) => t.deviceId === target)) {
+      const next = targets[0]?.deviceId ?? null;
+      if (next !== target) setTarget(next);
+    }
   }, [targets, target]);
   if (targets.length === 0) return <p className="muted">No paired device is reachable now.</p>;
   return (
