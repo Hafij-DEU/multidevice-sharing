@@ -69,6 +69,22 @@
             android:theme="@style/Theme.MeshDrop" />
 
         <activity
+            android:name=".ContinueOnPcActivity"
+            android:excludeFromRecents="true"
+            android:exported="true"
+            android:icon="@mipmap/ic_launcher"
+            android:label="Continue on PC"
+            android:noHistory="true"
+            android:taskAffinity=".continue"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar">
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="text/plain" />
+            </intent-filter>
+        </activity>
+
+        <activity
             android:name=".ClipboardSendActivity"
             android:excludeFromRecents="true"
             android:exported="false"

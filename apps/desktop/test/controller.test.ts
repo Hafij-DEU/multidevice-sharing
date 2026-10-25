@@ -615,4 +615,25 @@ describe('AppController internet access', () => {
     await A.c.appSend(bId, { kind: 'watch-end', code: body.code });
     expect(B.c.state().watch).toEqual([]);
   });
+
+  it('M13 handoff: a phone takes the browser page (fresh from the extension); a phone hands one over', async () => {
+    const A = await make('phone');
+    const B = await make('pc');
+    await pair(A.c, B.c);
+    const bId = B.c.state().self.deviceId;
+    expect(await A.c.appSend(bId, { kind: 'handoff-get' })).toMatchObject({ status: 404 });
+    B.c.handoffState({ url: 'https://www.youtube.com/watch?v=aqz-KE-bpKQ', title: 'Bunny', time: 10 });
+    // the extension is waiting: the phone's question gets a fresh snapshot
+    const cmd = B.c.handoffNextCommand(5000);
+    const ask = A.c.appSend(bId, { kind: 'handoff-get' });
+    expect(await cmd).toEqual({ type: 'snapshot' });
+    B.c.handoffState({ url: 'https://www.youtube.com/watch?v=aqz-KE-bpKQ', title: 'Bunny', time: 95 });
+    expect(await ask).toEqual({ status: 200, body: { url: 'https://www.youtube.com/watch?v=aqz-KE-bpKQ&t=95s', title: 'Bunny' } });
+    expect(B.c.state().handoff).toMatchObject({ extension: true, page: { title: 'Bunny' } });
+    // phone -> PC: through the extension, at the same second
+    const next = B.c.handoffNextCommand(5000);
+    expect(await A.c.appSend(bId, { kind: 'handoff-open', url: 'https://www.youtube.com/watch?v=aqz-KE-bpKQ', time: 42 })).toMatchObject({ status: 200 });
+    expect(await next).toMatchObject({ type: 'open', url: 'https://www.youtube.com/watch?v=aqz-KE-bpKQ&t=42s', time: 42 });
+    expect(await A.c.appSend(bId, { kind: 'handoff-open', url: 'javascript:alert(1)' })).toMatchObject({ status: 400 });
+  });
 });

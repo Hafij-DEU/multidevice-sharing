@@ -11,6 +11,7 @@ import { Mesh } from './pages/Mesh.tsx';
 import { PairedDevices } from './pages/PairedDevices.tsx';
 import { Remote } from './pages/Remote.tsx';
 import { WatchParty } from './pages/WatchParty.tsx';
+import { Handoff } from './pages/Handoff.tsx';
 import { Settings } from './pages/Settings.tsx';
 import { Sync } from './pages/Sync.tsx';
 import { Transfers } from './pages/Transfers.tsx';
@@ -24,11 +25,12 @@ const TAB_ICON: Record<Tab, string> = {
   Received: 'M12 4v11M7 10l5 5 5-5M5 20h14',
   More: 'M5 12h.01M12 12h.01M19 12h.01',
 };
-const MORE = ['Remote', 'Watch party', 'Devices', 'Sync', 'Guests', 'Mesh', 'Transfers', 'Settings'] as const;
+const MORE = ['Remote', 'Continue', 'Watch party', 'Devices', 'Sync', 'Guests', 'Mesh', 'Transfers', 'Settings'] as const;
 type Sub = (typeof MORE)[number];
 const ICON: Record<Sub, string> = {
   Remote: 'M7 3h10v18H7zM12 17h.01M10 7h4M9 11h6',
   'Watch party': 'M3 5h18v12H3zM8 21h8M10 9l5 3-5 3z',
+  Continue: 'M4 6h10v12H4zM17 9h3v9h-6M14 12h6M17 9l3 3-3 3',
   Sync: 'M4 12a8 8 0 0 1 14-5.3M20 4v4h-4M20 12a8 8 0 0 1-14 5.3M4 20v-4h4',
   Devices: 'M4 5h10v14H4zM16 9h4v10h-4M8 16h2',
   Guests: 'M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM4 21a8 8 0 0 1 16 0',
@@ -39,6 +41,7 @@ const ICON: Record<Sub, string> = {
 const MORE_HINT: Record<Sub, string> = {
   Remote: 'Touchpad, keyboard, slides and media for your PC; find a device; notifications',
   'Watch party': 'Watch YouTube or any video together, in step: share a 6-character code',
+  Continue: 'Carry on with a page on another device, at the same spot',
   Devices: 'Paired devices: unpair, or pair again',
   Sync: 'Keep one folder the same on your devices; phone photo backup',
   Guests: 'Let someone without the app send or get files from a browser',
@@ -206,6 +209,8 @@ export function App() {
             </div>
             {sub === 'Remote' ? (
               <Remote state={state} run={run} />
+            ) : sub === 'Continue' ? (
+              <Handoff state={state} run={run} />
             ) : sub === 'Watch party' ? (
               <WatchParty state={state} run={run} />
             ) : sub === 'Devices' ? (

@@ -1,0 +1,13 @@
+{
+  "manifest_version": 3,
+  "name": "MeshDrop Handoff",
+  "version": "1.0.0",
+  "description": "Continue the page you are on on your phone, at the same spot (scroll and video time), with MeshDrop.",
+  "permissions": ["tabs", "storage", "alarms"],
+  "host_permissions": ["<all_urls>"],
+  "background": { "service_worker": "background.js", "scripts": ["background.js"] },
+  "content_scripts": [{ "matches": ["http://*/*", "https://*/*"], "js": ["content.js"], "run_at": "document_idle" }],
+  "action": { "default_popup": "popup.html", "default_title": "MeshDrop: continue on your phone", "default_icon": { "64": "icons/64.png", "128": "icons/128.png" } },
+  "icons": { "64": "icons/64.png", "128": "icons/128.png" },
+  "browser_specific_settings": { "gecko": { "id": "handoff@meshdrop.hafijbge.github.io", "strict_min_version": "121.0" } }
+}

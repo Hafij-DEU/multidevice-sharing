@@ -48,6 +48,17 @@ export function Home({ state, run, go }: { state: AppState; run: Run; go: Go }) 
           onOpen: () => go({ tab: 'Send' }),
         }]
       : []),
+    {
+      id: 'continue', title: android ? 'Continue from PC' : 'Continue on phone', hint: android ? 'The page your PC browser shows, same spot' : state.handoff?.extension ? 'Your browser page, same spot' : 'Set up the browser extension',
+      icon: 'M4 6h10v12H4zM17 9h3v9h-6M14 12h6M17 9l3 3-3 3', hue: 160,
+      onOpen: () =>
+        android && window.meshdrop.handoffPull
+          ? void run(async () => {
+              const t = await window.meshdrop.handoffPull!();
+              return t ? `Opening ${t}` : 'Nothing open in the PC browser right now.';
+            })
+          : go({ sub: 'Continue' }),
+    },
     { id: 'remote', title: android ? 'Remote control' : 'Remote', hint: android ? 'Touchpad, keys, slides for your PC' : 'Control a device, who may control this PC', icon: 'M7 3h10v18H7zM12 17h.01M10 7h4M9 11h6', hue: 280, onOpen: () => go({ sub: 'Remote' }) },
     { id: 'find', title: 'Find my device', hint: 'Ring it, even on silent', icon: 'M12 2a7 7 0 0 1 7 7c0 5-7 13-7 13S5 14 5 9a7 7 0 0 1 7-7zM12 7v4', hue: 0, onOpen: () => go({ sub: 'Remote' }) },
     ...(state.guest ? [{ id: 'guests', title: 'Guests', hint: 'A browser sends or gets files', icon: 'M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM4 21a8 8 0 0 1 16 0', hue: 45, onOpen: () => go({ sub: 'Guests' }) }] : []),

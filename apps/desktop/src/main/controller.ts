@@ -15,6 +15,7 @@ import { loadOrCreateIdentity } from '@meshdrop/core/src/identity.ts';
 import { writeFileAtomic } from '@meshdrop/core/src/trust.ts';
 import { BUTTONS, KEYSYMS, charKeysym } from './keys.ts';
 import { ensureDir, land } from '@meshdrop/core/src/guest/uploads.ts';
+import { cleanHandoff, handoffUrl, type HandoffState } from '@meshdrop/core/src/handoff.ts';
 import type { AppState, DeviceStatus, ReceivedRecord, DeviceView, PhoneNote, RemoteEvent, ScheduledView, SendOptions, GuestView, LinkCreateInput, LinkView, ReachInput, ReachView, SendItemInput, Settings, SyncView, TransferView } from '../shared/api.ts';
 import type { HistoryStore } from './history.ts';
 import { SettingsError, type SettingsStore } from './settings.ts';
@@ -37,6 +38,8 @@ export interface Platform {
   print?(p: string): Promise<void>;
   /** M12: opens a page (the watch-party player) in its own window. */
   openWindow?(url: string): void;
+  /** M13: the browser extension, copied where a browser (even a snap one) can load it; returns the folder. */
+  extensionDir?(): Promise<string>;
   // ---- M10: remote control and friends (absent: not available on this platform) ----
   /** Low-level input (the RemoteDesktop portal); throws with a reason when there is none. */
   input?(events: InputPrim[]): Promise<void>;
@@ -456,6 +459,7 @@ export class AppController extends EventEmitter {
       deviceStatus: { ...this.#deviceStatus },
       ringing: this.#ringing !== null,
       ...(this.#inputError ? { inputError: this.#inputError } : {}),
+      handoff: { extension: this.#extensionOn, ...(this.#browser ? { page: { title: this.#browser.title ?? this.#browser.url, url: this.#browser.url } } : {}) },
       watch: e.watchList().map((w) => ({ ...w, ...(this.#watchHosts.has(w.code) ? { hostToken: this.#watchHosts.get(w.code)! } : {}) })),
       room: (() => {
         const r = e.roomState();
@@ -1121,6 +1125,17 @@ export class AppController extends EventEmitter {
         }
         return { status: 200, body: { ok: true } };
       }
+      case 'handoff-get': {
+        // a phone picks up where the PC's browser is
+        const b = await this.#browserNow();
+        const url = b ? handoffUrl(b) : null;
+        return url ? { status: 200, body: { url, title: b!.title ?? url } } : { status: 404, body: { error: 'nothing-open' } };
+      }
+      case 'handoff-open':
+      case 'handoff':
+        // a phone (or another PC) hands a page over
+        if (!s.openLinks) return { status: 403, body: { error: 'handoff-off' } };
+        return (await this.#handoffOpen(msg)) ? { status: 200, body: { ok: true } } : { status: 400, body: { error: 'bad-url' } };
       case 'watch-create': {
         // a phone hosts a watch party: the room lives on this PC (it has the ports and the bandwidth)
         if (this.#mode === 'client-only') return { status: 503, body: { error: 'unavailable' } };
@@ -1505,6 +1520,98 @@ export class AppController extends EventEmitter {
 
   #saveScheduled(): void {
     writeFileAtomic(this.#scheduledFile(), JSON.stringify(this.#scheduled));
+  }
+
+  // ---- M13 handoff (browser extension <-> phones) -----------------------------------------------
+
+  #browser: HandoffState | null = null;
+  #extSeen = 0;
+  #extQueue: Record<string, unknown>[] = [];
+  #extWaiters: ((c: Record<string, unknown>) => void)[] = [];
+  #stateWaiters: (() => void)[] = [];
+
+  get #extensionOn(): boolean {
+    return Date.now() - this.#extSeen < 60_000;
+  }
+
+  /** The extension reports the active tab's place. */
+  handoffState(raw: unknown): void {
+    this.#extSeen = Date.now();
+    const s = cleanHandoff(raw);
+    if (s) this.#browser = s;
+    for (const w of this.#stateWaiters.splice(0)) w();
+    this.#changed();
+  }
+
+  /** The extension waits for its next command (or {} after `timeoutMs`). */
+  handoffNextCommand(timeoutMs: number): Promise<Record<string, unknown>> {
+    this.#extSeen = Date.now();
+    const next = this.#extQueue.shift();
+    if (next) return Promise.resolve(next);
+    return new Promise((resolve) => {
+      const t = setTimeout(() => {
+        this.#extWaiters = this.#extWaiters.filter((w) => w !== done);
+        resolve({});
+      }, timeoutMs);
+      const done = (c: Record<string, unknown>) => {
+        clearTimeout(t);
+        resolve(c);
+      };
+      this.#extWaiters.push(done);
+    });
+  }
+
+  #toExtension(c: Record<string, unknown>): void {
+    const w = this.#extWaiters.shift();
+    if (w) w(c);
+    else this.#extQueue = [...this.#extQueue.slice(-9), c];
+  }
+
+  /** Phones the extension's popup can send to. */
+  handoffDevices(): { deviceId: string; alias: string }[] {
+    const e = this.#engine;
+    if (!e) return [];
+    return e.devices().filter((d) => d.trusted && d.reach !== 'offline' && d.deviceType === 'mobile').map((d) => ({ deviceId: d.deviceId, alias: d.alias }));
+  }
+
+  /** "Continue on this phone": the page opens there at the same spot. */
+  async handoffSend(to: string, raw?: unknown): Promise<boolean> {
+    const s = raw === undefined ? this.#browser : cleanHandoff(raw);
+    const url = s ? handoffUrl(s) : null;
+    if (!url) throw new Error('No page to hand over: open it in your browser (with the MeshDrop extension).');
+    const r = await this.#e.appSend(to, { kind: 'handoff', url, title: s!.title ?? url });
+    return r.status === 200;
+  }
+
+  /** Where the browser is now: a fresh snapshot when the extension is there (it may lag a few seconds otherwise). */
+  async #browserNow(): Promise<HandoffState | null> {
+    if (this.#extensionOn) {
+      const fresh = new Promise<void>((ok) => {
+        this.#stateWaiters.push(ok);
+        setTimeout(ok, 3000);
+      });
+      this.#toExtension({ type: 'snapshot' });
+      await fresh;
+    }
+    return this.#browser && Date.now() - (this.#browser.at ?? 0) < 86_400_000 ? this.#browser : null;
+  }
+
+  /** A page from a phone opens here: through the extension (same scroll and video time) or the default browser. */
+  async #handoffOpen(raw: unknown): Promise<boolean> {
+    const s = cleanHandoff(raw);
+    const url = s ? handoffUrl(s) : null;
+    if (!s || !url) return false;
+    if (this.#extensionOn) this.#toExtension({ type: 'open', url, ...(s.scroll !== undefined ? { scroll: s.scroll } : {}), ...(s.time !== undefined ? { time: s.time } : {}) });
+    else if (this.#platform.openUrl) await this.#platform.openUrl(url);
+    else return false;
+    return true;
+  }
+
+  async handoffExtension(): Promise<string> {
+    if (!this.#platform.extensionDir) throw new Error('The extension is not part of this build.');
+    const dir = await this.#platform.extensionDir();
+    this.#platform.revealPath(dir);
+    return dir;
   }
 
   // ---- M12 watch party --------------------------------------------------------------------------

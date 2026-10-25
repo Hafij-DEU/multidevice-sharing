@@ -4,7 +4,7 @@
 import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeImage, Notification, shell, Tray, type IpcMainInvokeEvent } from 'electron';
 import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, statSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, statSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -17,6 +17,7 @@ import { autostartDir, gnomeShortcutCommands, installNautilusScript, parseStrLis
 import { HistoryStore } from './history.ts';
 import { mediaPlatform, remotePlatform } from './remote.ts';
 import { setupPhones } from './phonesetup.ts';
+import { startHandoffServer } from './handoff.ts';
 import { SettingsStore, defaultSettings } from './settings.ts';
 
 const execFileP = promisify(execFile);
@@ -221,6 +222,13 @@ const platform: Platform = {
     });
     void w.loadURL(url);
   },
+  extensionDir: async () => {
+    // copied into the home folder: a snap browser (Brave, Opera) can read it there, not under /opt
+    const src = app.isPackaged ? join(process.resourcesPath, 'browser-extension') : join(__dirname, '../../../browser-extension');
+    const dest = join(homedir(), 'MeshDrop Browser Extension');
+    cpSync(src, dest, { recursive: true, force: true });
+    return dest;
+  },
   print: async (p) => {
     // received files are absolute paths in the inbox (never an option to lp)
     if (!p.startsWith('/')) throw new Error('bad path');
@@ -373,6 +381,8 @@ function wireIpc(): void {
     return ctl().appSend(str(id, 64), msg as Record<string, unknown>);
   });
   handle('ringStop', () => ctl().ringStop());
+  handle('handoffSend', (_e, id) => ctl().handoffSend(str(id, 64)).then(() => undefined));
+  handle('handoffExtension', () => ctl().handoffExtension());
   handle('watchCreate', (_e, n) => ctl().watchCreate(str(n, 60)));
   handle('watchResolve', (_e, c) => ctl().watchResolve(str(c, 10)));
   handle('watchOpen', (_e, u) => ctl().watchOpen(str(u, 2048)));
@@ -462,6 +472,19 @@ async function startController(): Promise<void> {
     for (const w of [win, picker]) if (w && !w.isDestroyed()) w.webContents.send('meshdrop:state', s);
   });
   await controller.start();
+  // the browser extension's door (127.0.0.1 only); tests use their own ports, so not under MESHDROP_TEST
+  if (!process.env.MESHDROP_TEST || process.env.MESHDROP_HANDOFF_PORT) {
+    const c = controller;
+    void startHandoffServer(
+      {
+        state: (s) => c.handoffState(s),
+        nextCommand: (ms) => c.handoffNextCommand(ms),
+        devices: () => c.handoffDevices(),
+        send: (to, s) => c.handoffSend(to, s).catch(() => false),
+      },
+      Number(process.env.MESHDROP_HANDOFF_PORT ?? 53321),
+    );
+  }
 }
 
 // One MeshDrop per config home: the Chromium profile lives beside it, and so does the instance lock.

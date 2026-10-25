@@ -1232,7 +1232,7 @@ public final class AppController {
                 status = 404;
                 body.put("error", "gone");
             }
-        } else if ("open-url".equals(kind)) {
+        } else if ("open-url".equals(kind) || "handoff".equals(kind)) {
             String url = msg.get("url") instanceof String ? (String) msg.get("url") : "";
             if (!settings.get().openLinks) {
                 status = 403;
@@ -1413,6 +1413,37 @@ public final class AppController {
         } catch (IOException | RuntimeException x) {
             return "Could not reach " + aliasOf(pc) + ".";
         }
+    }
+
+    // ---- M13 handoff ------------------------------------------------------------------------
+
+    /** Opens here the page the PC's browser shows, at the same spot; its title, or null when nothing is open. */
+    @SuppressWarnings("unchecked")
+    private String handoffPull() throws IOException {
+        String pc = watchPc();
+        if (pc == null) throw new IOException("No PC is reachable now.");
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("kind", "handoff-get");
+        Map<String, Object> r = e().appSend(pc, m, 10_000);
+        if (!Long.valueOf(200).equals(r.get("status")) || !(r.get("body") instanceof Map)) return null;
+        Map<String, Object> b = (Map<String, Object>) r.get("body");
+        if (!(b.get("url") instanceof String) || !((String) b.get("url")).matches("^https?://\\S+$")) return null;
+        platform.openUrl((String) b.get("url"));
+        return b.get("title") instanceof String ? (String) b.get("title") : (String) b.get("url");
+    }
+
+    /** Share → Continue on PC: the page (and a video's second) opens on the PC; the PC's name, for a toast. */
+    public String handoffPush(String url, long timeSec) throws IOException {
+        String pc = watchPc();
+        if (pc == null) throw new IOException("No PC is reachable now.");
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("kind", "handoff-open");
+        m.put("url", url);
+        if (timeSec > 0) m.put("time", timeSec);
+        Map<String, Object> r = e().appSend(pc, m, 10_000);
+        if (Long.valueOf(403).equals(r.get("status"))) throw new IOException("Opening links is turned off on " + aliasOf(pc) + " (its Settings).");
+        if (!Long.valueOf(200).equals(r.get("status"))) throw new IOException(aliasOf(pc) + " could not open it.");
+        return aliasOf(pc);
     }
 
     // ---- M12 watch party: rooms live on a PC (the hub first); the phone opens them in its browser ----
@@ -1646,6 +1677,8 @@ public final class AppController {
                 changed();
                 return g;
             }
+            case "handoffPull":
+                return handoffPull();
             case "watchCreate":
                 return watchCreate(str(a0));
             case "watchResolve":

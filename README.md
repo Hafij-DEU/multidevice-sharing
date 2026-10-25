@@ -96,6 +96,21 @@ More → Remote, on the phone and on the PC:
   open on the phone to start them.
 - **Second screen**: the phone's Remote page opens Extendo.
 
+## Continue on another device
+
+Carry on with what you were doing, at the same spot:
+
+- **PC browser → phone:** add the MeshDrop extension to your browser once: Home → Continue on phone →
+  "Get the extension folder", then in `brave://extensions` (or `chrome://extensions`,
+  `opera://extensions`) turn on Developer mode and *Load unpacked* the **MeshDrop Browser Extension**
+  folder in your home folder. Then on the phone, Home → **Continue from PC** opens the page your PC
+  browser shows: the same scroll position (scroll-to-text) and, for YouTube, the same second. The
+  extension's button (or the PC's Continue page) sends a page to a phone too. The extension talks only
+  to MeshDrop on this PC (127.0.0.1).
+- **Phone → PC:** in Chrome, YouTube or any app, Share → **Continue on PC**. The page opens in the PC
+  browser (through the extension: same scroll; without it, in the default browser); a video playing on
+  the phone continues at the same second (needs MeshDrop's notification access).
+
 ## Watch party
 
 Home → **Watch party**: watch together, in step. Start a room and share its **6-character code** (or

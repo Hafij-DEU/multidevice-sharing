@@ -18,6 +18,8 @@ extraResources:
     to: meshdrop
   - from: build/meshdrop-input.py
     to: meshdrop-input.py
+  - from: ../browser-extension
+    to: browser-extension
 linux:
   target: deb
   category: Network;FileTransfer

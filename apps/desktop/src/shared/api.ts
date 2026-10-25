@@ -256,6 +256,8 @@ export interface AppState {
   notifyAccess?: boolean;
   /** M10b: live streams (PC sound to a phone; a phone's camera or microphone used here). */
   streams?: { id: string; kind: 'audio' | 'camera' | 'mic'; peer: string; alias?: string }[];
+  /** M13 handoff: the PC's browser extension is connected, and the page it last saw. */
+  handoff?: { extension: boolean; page?: { title: string; url: string } };
   /** M12 watch parties this device hosts (or, on a phone, made on a PC). */
   watch?: { code: string; name: string; people?: number; playing?: string; links: string[]; hostToken?: string }[];
   /** M11 room mode: the shared drop board (desktop). */
@@ -323,6 +325,11 @@ export interface DesktopApi {
   setupPhones?(): Promise<{ serial: string; model: string; status: 'done' | 'unauthorized' | 'not-installed' | 'offline' | 'failed'; steps: { label: string; ok: boolean }[]; hint?: string }[]>;
   /** M11 phone as scanner (Android): a photo of a page, as a one-page PDF to send (null: cancelled). */
   scanDocument?(): Promise<SendItemInput | null>;
+  /** M13 handoff. PC: send the browser's current page to a phone. Phone: open the PC's current page here. */
+  handoffSend?(deviceId: string): Promise<void>;
+  handoffPull?(): Promise<string | null>;
+  /** PC: puts the browser extension in a folder your browser can load (returns the folder). */
+  handoffExtension?(): Promise<string>;
   /** M12 watch party: host a room (here, or on a PC from a phone); returns its code and links. */
   watchCreate?(name: string): Promise<{ code: string; links: string[]; hostToken: string; qrSvg: string }>;
   /** The link to open for a code (this device's rooms, the hub, PCs on this network); null: not found. */
