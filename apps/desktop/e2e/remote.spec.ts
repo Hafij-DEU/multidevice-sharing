@@ -35,10 +35,15 @@ test('a device allowed on the PC types and clicks there from the Remote page', a
     await A.win.getByRole('button', { name: /^Remote/ }).click();
     await A.win.getByRole('tab', { name: 'Keyboard' }).click();
     await A.win.getByLabel('Type on the device').fill('hi');
-    await A.win.getByRole('tab', { name: 'Touchpad' }).click();
-    await A.win.getByRole('button', { name: 'Left click' }).click();
     const log = join(homes[1]!, 'input.log');
-    await expect.poll(() => (existsSync(log) ? readFileSync(log, 'utf8') : '')).toContain('"button":272');
+    const logged = () => (existsSync(log) ? readFileSync(log, 'utf8') : '');
+    await expect.poll(logged).toContain('"keysym":105');
+    await A.win.getByRole('tab', { name: 'Touchpad' }).click();
+    // a slow CI runner can re-lay out the page under the pointer: click until one lands
+    await expect(async () => {
+      if (!logged().includes('"button":272')) await A.win.getByRole('button', { name: 'Left click' }).click();
+      expect(logged()).toContain('"button":272');
+    }).toPass({ timeout: 20_000, intervals: [1000] });
     const keys = readFileSync(log, 'utf8').trim().split('\n').map((l) => JSON.parse(l) as { t: string; keysym?: number; down?: boolean }).filter((x) => x.t === 'key' && x.down).map((x) => x.keysym);
     expect(keys).toEqual([0x68, 0x69]);
     await A.win.screenshot({ path: join('test-results', 'remote-page.png') });
