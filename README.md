@@ -95,6 +95,22 @@ internet links point at it. From a terminal: `meshdrop hub reach detect`, `meshd
 `meshdrop hub reach cloudflare HOST`, `meshdrop hub reach port-forward NAME --token-file F [--manual]`,
 `meshdrop hub reach off` (applied by the running `meshdrop listen`).
 
+### A hub that is always on (relay hubs)
+
+When the hub PC is off, a **relay hub** keeps things going: sends over the internet, files waiting for an
+offline device, and internet links. A relay hub is one of your mesh devices that is always on, such as a
+cheap VPS or a second PC, reachable at a public `wss://` address.
+
+1. On the always-on machine: `meshdrop join <invite>` (an invite from the hub PC), then run
+   `meshdrop listen` as a service. Put a TLS proxy or tunnel in front of its loopback port 53319
+   (`--ingress-port N` to change it), for example Caddy with `reverse_proxy 127.0.0.1:53319`.
+2. On the hub PC: Mesh → Relay hubs, enter that device's address (`wss://relay.example.com/mesh/v1/hub`),
+   Save. Or `meshdrop hub relays <device-id-prefix>=wss://relay.example.com/mesh/v1/hub`.
+
+Every device gets the list (signed by the hub PC). While the hub PC is away they link to the relay; they
+move back to the hub PC within 5 minutes after it returns, and fetch anything the relay held for them.
+A relay never holds the mesh key: adding or removing devices still needs the hub PC.
+
 ## Folder sync and photo backup
 
 **More → Sync** keeps folders the same on your devices whenever they are on the same Wi-Fi. Add as many folders as you like (the PC suggests `~/MeshDrop Sync`; on the phone you pick them), not your working folders. Folders match by name: give a folder the same name on each device (it starts as the folder's own name). Tick the devices to sync each folder with, on both devices.
@@ -118,11 +134,13 @@ send you files and a message, and download files you offer ("Offer files…"). T
 - The page is plain HTTP on your network (browsers reject self-signed certificates), so use it on Wi-Fi
   you trust.
 
-**Internet links** (on the hub PC): Guests → Internet links → choose files, how long the link works
+**Internet links**: Guests → Internet links → choose files, how long the link works
 (1 hour to 30 days), an optional password and download limit, and whether they may send files back.
 The files are encrypted on your PC; the key is the part of the link after `#`, which browsers never
 send to a server, so the hub's disk and any tunnel only see ciphertext. "Remove" ends a link at once.
-The link uses the hub's internet address (see "Reach your PC from anywhere").
+The link uses the hub's internet address (see "Reach your PC from anywhere"). Phones and other member
+devices make links too: the files are encrypted on that device and the hub PC (or a relay hub, while
+the PC is off) keeps only the ciphertext. Links made on a member cannot take files back.
 From a terminal: `meshdrop link create FILE... [--days N] [--passphrase-file F] [--max-downloads N]
 [--allow-uploads]`, `meshdrop link list`, `meshdrop link revoke ID`.
 
@@ -137,7 +155,7 @@ meshdrop pair <host[:port]> <name>  trust a device by address (both sides)
 meshdrop send <device|all> <path…>  send files or folders (--text "..." for text)
 meshdrop outbox / resume            unfinished sends
 meshdrop guest                      a guest QR link for a browser on this network
-meshdrop hub init / invite / join / members / hub revoke / hub recovery-export
+meshdrop hub init / invite / join / members / hub revoke / hub relays / hub recovery-export
 ```
 
 Every command takes `--home DIR` to use another config folder. `meshdrop --help` lists all options.
