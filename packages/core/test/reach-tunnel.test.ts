@@ -3,6 +3,7 @@ import type { ChildProcess } from 'node:child_process';
 import { describe, expect, it } from 'vitest';
 import type { RunResult, Runner, Spawner } from '../src/reach/runner.ts';
 import { Cloudflare, Tailscale } from '../src/reach/tunnel.ts';
+import { execRunner } from '../src/reach/runner.ts';
 
 const ok = (stdout = ''): RunResult => ({ code: 0, stdout, stderr: '' });
 function fake(table: Record<string, RunResult | ((args: string[]) => RunResult)>, calls: string[][] = []): Runner {
@@ -29,8 +30,20 @@ describe('Tailscale Funnel driver', () => {
     }, calls), () => 53319);
     expect(await t.status()).toEqual({ provider: 'tailscale', state: 'off', host: 'pc.tail1234.ts.net' });
     expect(await t.enable()).toMatchObject({ state: 'on', host: 'pc.tail1234.ts.net' });
-    expect(calls).toContainEqual(['tailscale', 'funnel', '--bg', '--https=443', 'http://127.0.0.1:53319']);
+    expect(calls).toContainEqual(['tailscale', 'funnel', '--bg', '--yes', '--https=443', 'http://127.0.0.1:53319']);
     expect((await t.status()).state).toBe('on');
+  });
+
+  it('asks for the approval link when the tailnet has not allowed Funnel yet, and runs one attempt at a time', async () => {
+    const calls: string[][] = [];
+    const t = new Tailscale(fake({
+      'tailscale status': ok(running),
+      'tailscale funnel --bg': () => ({ code: 1, stdout: 'Funnel is not enabled on your tailnet.\nTo enable, visit:\n\n         https://login.tailscale.com/f/funnel?node=abc123\n', stderr: '' }),
+    }, calls), () => 53319);
+    const [a, b] = await Promise.all([t.enable(), t.enable()]);
+    expect(a).toBe(b);
+    expect(calls.filter((c) => c.includes('--bg'))).toHaveLength(1);
+    expect(a).toMatchObject({ state: 'error', fix: expect.stringContaining('https://login.tailscale.com/f/funnel?node=abc123') });
   });
 
   it('turns a refused funnel into an error with a fix', async () => {
@@ -73,5 +86,14 @@ describe('Cloudflare named tunnel driver', () => {
     expect(cf.status().state).toBe('on');
     await cf.disable();
     expect(cf.status().state).toBe('off');
+  });
+});
+
+describe('the program runner', () => {
+  it('kills a program that ignores SIGTERM when its time is up', async () => {
+    const t0 = Date.now();
+    const r = await execRunner('sh', ['-c', 'trap "" TERM; sleep 20'], { timeoutMs: 300 });
+    expect(r.code).not.toBe(0);
+    expect(Date.now() - t0).toBeLessThan(5000);
   });
 });

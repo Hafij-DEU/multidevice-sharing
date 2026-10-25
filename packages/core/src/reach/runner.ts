@@ -8,7 +8,8 @@ export type Spawner = (cmd: string, args: string[]) => ChildProcess;
 
 export const execRunner: Runner = (cmd, args, opts = {}) =>
   new Promise((resolve) => {
-    execFile(cmd, args, { timeout: opts.timeoutMs ?? 30_000, maxBuffer: 4 * 1024 * 1024 }, (err, stdout, stderr) => {
+    // SIGKILL: a CLI waiting on a prompt (tailscale funnel) ignores SIGTERM and would never end
+    execFile(cmd, args, { timeout: opts.timeoutMs ?? 30_000, killSignal: 'SIGKILL', maxBuffer: 4 * 1024 * 1024 }, (err, stdout, stderr) => {
       const e = err as (NodeJS.ErrnoException & { code?: number | string }) | null;
       const code = !e ? 0 : e.code === 'ENOENT' ? 127 : typeof e.code === 'number' ? e.code : 1;
       resolve({ code, stdout: String(stdout), stderr: String(stderr) || (e && e.code === 'ENOENT' ? `${cmd}: not found` : '') });

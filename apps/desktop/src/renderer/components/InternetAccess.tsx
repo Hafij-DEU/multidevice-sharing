@@ -3,6 +3,23 @@ import type { ReachInput, ReachMode, ReachView } from '../../shared/api.ts';
 import type { Run } from '../App.tsx';
 import { fmtTime } from '../format.ts';
 
+/** Text with its https links clickable (a provider's page to approve something opens in the browser). */
+function Linked({ text }: { text: string }) {
+  return (
+    <>
+      {text.split(/(https:\/\/\S+)/).map((part, i) =>
+        i % 2 ? (
+          <a key={i} href={part} target="_blank" rel="noreferrer">
+            {part}
+          </a>
+        ) : (
+          part
+        ),
+      )}
+    </>
+  );
+}
+
 const MODES: [ReachMode, string][] = [
   ['off', 'Off (this network only)'],
   ['tailscale', 'Tailscale Funnel (free account, no domain needed)'],
@@ -35,9 +52,13 @@ export function InternetAccess({ reach, run }: { reach: ReachView; run: Run }) {
   return (
     <div className="reach">
       <p className={reach.state === 'on' ? 'ok-text' : reach.state === 'off' ? 'muted' : 'error-text'}>
-        {reach.state === 'on' ? <>Reachable at <code>{reach.url}</code>{reach.certExpiresAt ? <> · certificate until {fmtTime(reach.certExpiresAt)}</> : null}</> : reach.state === 'off' ? 'Not reachable from the internet.' : reach.state === 'starting' ? 'Starting…' : reach.error ?? reach.state}
+        {reach.state === 'on' ? <>Reachable at <code>{reach.url}</code>{reach.certExpiresAt ? <> · certificate until {fmtTime(reach.certExpiresAt)}</> : null}</> : reach.state === 'off' ? 'Not reachable from the internet.' : reach.state === 'starting' ? 'Starting…' : <Linked text={reach.error ?? reach.state} />}
       </p>
-      {reach.fix && reach.state !== 'on' && <p className="muted">To fix: {reach.fix}</p>}
+      {reach.fix && reach.state !== 'on' && (
+        <p className="muted">
+          To fix: <Linked text={reach.fix} />
+        </p>
+      )}
       {reach.mode === 'port-forward' && reach.listenPort !== undefined && reach.mapped === 'manual' && (
         <p className="muted">Your router must forward TCP port 443 to this PC's port {reach.listenPort}.</p>
       )}

@@ -55,16 +55,30 @@ export class Tailscale {
     return { ...s, state: on ? 'on' : 'off' };
   }
 
-  async enable(): Promise<TunnelStatus> {
+  #enabling: Promise<TunnelStatus> | null = null;
+
+  /** One attempt at a time: a second call while one runs gets the same answer. */
+  enable(): Promise<TunnelStatus> {
+    this.#enabling ??= this.#enable().finally(() => {
+      this.#enabling = null;
+    });
+    return this.#enabling;
+  }
+
+  async #enable(): Promise<TunnelStatus> {
     const s = await this.#self();
     if (s.state !== 'off') return s;
-    const r = await this.#run('tailscale', ['funnel', '--bg', '--https=443', `http://127.0.0.1:${this.#port()}`], { timeoutMs: 60_000 });
+    // --yes: never wait on a prompt; a tailnet without Funnel answers with the page that allows it
+    const r = await this.#run('tailscale', ['funnel', '--bg', '--yes', '--https=443', `http://127.0.0.1:${this.#port()}`], { timeoutMs: 60_000 });
     if (r.code !== 0) {
-      const msg = firstLine(r.stderr || r.stdout);
-      const fix = /access denied|permission|operator/i.test(msg)
+      const out = `${r.stdout}\n${r.stderr}`;
+      const approve = /https:\/\/login\.tailscale\.com\/\S+/.exec(out)?.[0];
+      const fix = /access denied|permission|operator/i.test(out)
         ? 'Run once: sudo tailscale set --operator=$USER'
-        : 'Allow Funnel for this device in the Tailscale admin console (Access controls → nodeAttrs "funnel"), then try again';
-      return { ...s, state: 'error', error: msg, fix };
+        : approve
+          ? `Open ${approve} and allow Funnel (and HTTPS certificates), then press Apply`
+          : 'Allow Funnel for this device in the Tailscale admin console (Access controls → nodeAttrs "funnel"), then try again';
+      return { ...s, state: 'error', error: approve ? 'Funnel is not allowed on your tailnet yet' : firstLine(r.stderr || r.stdout), fix };
     }
     return { ...s, state: 'on' };
   }
