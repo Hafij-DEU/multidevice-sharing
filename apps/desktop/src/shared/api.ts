@@ -314,6 +314,11 @@ export interface DesktopApi {
   pickOpenPath(): Promise<string | null>;
   pathForFile(file: File): string;
   send(targets: string[] | 'all', items: SendItemInput[], opts?: SendOptions): Promise<void>;
+  /**
+   * PC: sets up every phone plugged in with USB debugging (keep-alive settings and permissions, through
+   * adb). Absent on Android.
+   */
+  setupPhones?(): Promise<{ serial: string; model: string; status: 'done' | 'unauthorized' | 'not-installed' | 'offline' | 'failed'; steps: { label: string; ok: boolean }[]; hint?: string }[]>;
   /** M11 phone as scanner (Android): a photo of a page, as a one-page PDF to send (null: cancelled). */
   scanDocument?(): Promise<SendItemInput | null>;
   /** M11 room mode. */

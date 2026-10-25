@@ -37,6 +37,67 @@ export function PairedDevices({ state, run }: { state: AppState; run: Run }) {
           ))}
         </ul>
       )}
+      {window.meshdrop.setupPhones && <PhoneSetup run={run} />}
     </section>
+  );
+}
+
+type SetupResult = Awaited<ReturnType<NonNullable<typeof window.meshdrop.setupPhones>>>;
+
+const WHY: Record<Exclude<SetupResult[number]['status'], 'done'>, string> = {
+  unauthorized: 'On the phone, tap Allow on "Allow USB debugging?", then press the button again.',
+  'not-installed': 'Install MeshDrop on it first (App Hub, or the APK).',
+  offline: 'The phone is not answering: unplug it and plug it in again.',
+  failed: 'Could not talk to the phone.',
+};
+
+/** Keeps MeshDrop running on a phone that stops apps in the background, without a terminal. */
+function PhoneSetup({ run }: { run: Run }) {
+  const [res, setRes] = useState<SetupResult | null>(null);
+  const [busy, setBusy] = useState(false);
+  return (
+    <>
+      <h2>Set up a phone (USB)</h2>
+      <p className="muted">
+        Some phones (Xiaomi above all) stop apps in the background. Plug the phone into this PC with USB debugging on (Settings → Developer options), then press the
+        button: MeshDrop is allowed to run in the background, start by itself and use the camera, microphone and notifications, with no questions later. Nothing
+        else on the phone changes; you can turn USB debugging off afterwards.
+      </p>
+      <button
+        className="primary"
+        disabled={busy}
+        onClick={() =>
+          void run(async () => {
+            setBusy(true);
+            try {
+              const r = await window.meshdrop.setupPhones!();
+              setRes(r);
+              if (r.length === 0) throw new Error('No phone found. Plug it in with USB debugging on, and allow this PC on the phone.');
+            } finally {
+              setBusy(false);
+            }
+          })
+        }
+      >
+        {busy ? 'Setting up…' : 'Set up plugged-in phones'}
+      </button>
+      {res && res.length > 0 && (
+        <ul className="list">
+          {res.map((p) => (
+            <li key={p.serial}>
+              <strong>{p.model}</strong>{' '}
+              {p.status === 'done' ? (
+                <span className="ok-text">
+                  ready: {p.steps.filter((s) => s.ok).length} of {p.steps.length} settings applied (the rest do not apply to this phone)
+                </span>
+              ) : (
+                <span className="error-text">{WHY[p.status]}</span>
+              )}
+              {p.hint && <div className="muted">{p.hint}</div>}
+            </li>
+          ))}
+        </ul>
+      )}
+    </>
   );
 }

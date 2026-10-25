@@ -49,3 +49,15 @@ deb:
   artifactName: meshdrop_${version}_amd64.deb
   afterInstall: build/after-install.tpl
   afterRemove: build/after-remove.tpl
+  # optional helpers, installed with MeshDrop by default: adb (Set up a phone), python3-gi (remote
+  # control through the desktop portal), PipeWire and GStreamer tools (sound, camera, microphone), lp
+  recommends:
+    - libappindicator3-1
+    - adb
+    - python3-gi
+    - pipewire-bin
+    - gstreamer1.0-tools
+    - gstreamer1.0-pipewire
+    - gstreamer1.0-plugins-good
+    - gstreamer1.0-plugins-bad
+    - cups-client

@@ -16,6 +16,7 @@ import { AppController, type Platform } from './controller.ts';
 import { autostartDir, gnomeShortcutCommands, installNautilusScript, parseStrList, READ_KEYBINDINGS, sendArgs, setAutostart, validBinding } from './desktop.ts';
 import { HistoryStore } from './history.ts';
 import { mediaPlatform, remotePlatform } from './remote.ts';
+import { setupPhones } from './phonesetup.ts';
 import { SettingsStore, defaultSettings } from './settings.ts';
 
 const execFileP = promisify(execFile);
@@ -363,6 +364,7 @@ function wireIpc(): void {
     return ctl().appSend(str(id, 64), msg as Record<string, unknown>);
   });
   handle('ringStop', () => ctl().ringStop());
+  handle('setupPhones', () => setupPhones());
   handle('streamStop', (_e, id) => ctl().streamStop(str(id, 64)));
   handle('noteDismiss', (_e, k) => ctl().noteDismiss(k === undefined ? undefined : str(k, 300)));
   handle('addByAddress', (_e, h, p, a, id) => ctl().addByAddress(str(h, 255), int(p), str(a, 64), id === undefined ? undefined : str(id, 128)));

@@ -69,7 +69,8 @@ keep it, every update must be signed with it). Install it from the phone's file 
    hub until it comes back. Creating the mesh, inviting, revoking and recovery stay on the PC.
 
 Some phones (Xiaomi/HyperOS above all) still stop apps in the background. With the phone on USB and
-USB debugging on, this lifts every limit at once (no root): `bash apps/android/scripts/keep-alive-adb.sh`.
+USB debugging on, the PC app lifts every limit at once (no root): More → Devices → **Set up a phone (USB)**
+(the same as `bash apps/android/scripts/keep-alive-adb.sh`).
 
 ## Remote, find my device, notifications
 
