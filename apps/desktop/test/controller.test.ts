@@ -597,4 +597,22 @@ describe('AppController internet access', () => {
     await until(() => C.c.state().received[0]?.cleaned === true, 5000);
     expect(existsSync(old)).toBe(false);
   });
+
+  it('M12: a paired device has a watch party made on this PC; codes resolve to links', async () => {
+    const A = await make('ay');
+    const B = await make('bee');
+    await pair(A.c, B.c);
+    const bId = B.c.state().self.deviceId;
+    const r = await A.c.appSend(bId, { kind: 'watch-create', name: 'Movie night' });
+    expect(r.status).toBe(200);
+    const body = r.body as { code: string; hostToken: string; links: string[] };
+    expect(body.code).toMatch(/^[A-Z0-9]{6}$/);
+    expect(B.c.state().watch).toEqual([expect.objectContaining({ code: body.code, name: 'Movie night', hostToken: body.hostToken })]);
+    expect(await B.c.watchResolve(body.code.toLowerCase())).toBe(body.links.at(-1));
+    expect(await B.c.watchResolve('ZZZZZZ')).toBeNull();
+    await expect(B.c.watchResolve('nope')).rejects.toThrow(/6 letters/);
+    await expect(B.c.watchOpen('https://evil.example/x')).rejects.toThrow(/watch-party link/);
+    await A.c.appSend(bId, { kind: 'watch-end', code: body.code });
+    expect(B.c.state().watch).toEqual([]);
+  });
 });

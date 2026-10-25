@@ -35,6 +35,8 @@ export interface Platform {
   thumbnail(p: string): Promise<string | null>;
   /** M11: prints a file on the default printer. */
   print?(p: string): Promise<void>;
+  /** M12: opens a page (the watch-party player) in its own window. */
+  openWindow?(url: string): void;
   // ---- M10: remote control and friends (absent: not available on this platform) ----
   /** Low-level input (the RemoteDesktop portal); throws with a reason when there is none. */
   input?(events: InputPrim[]): Promise<void>;
@@ -454,6 +456,7 @@ export class AppController extends EventEmitter {
       deviceStatus: { ...this.#deviceStatus },
       ringing: this.#ringing !== null,
       ...(this.#inputError ? { inputError: this.#inputError } : {}),
+      watch: e.watchList().map((w) => ({ ...w, ...(this.#watchHosts.has(w.code) ? { hostToken: this.#watchHosts.get(w.code)! } : {}) })),
       room: (() => {
         const r = e.roomState();
         return r.active && this.#roomQr ? { ...r, qrSvg: this.#roomQr } : r;
@@ -1118,6 +1121,17 @@ export class AppController extends EventEmitter {
         }
         return { status: 200, body: { ok: true } };
       }
+      case 'watch-create': {
+        // a phone hosts a watch party: the room lives on this PC (it has the ports and the bandwidth)
+        if (this.#mode === 'client-only') return { status: 503, body: { error: 'unavailable' } };
+        const r = this.#e.watchCreate(typeof msg.name === 'string' ? msg.name : `${alias() ?? 'Phone'}'s watch party`);
+        this.#watchHosts.set(r.code, r.hostToken);
+        this.#changed();
+        return { status: 200, body: r };
+      }
+      case 'watch-end':
+        if (typeof msg.code === 'string' && this.#watchHosts.has(msg.code)) await this.watchEnd(msg.code);
+        return { status: 200, body: { ok: true } };
       case 'clipboard-get': {
         // M11 shake to grab: what is copied here goes to the asking device (devices allowed to control
         // this PC, or any of my devices while the shared clipboard is on)
@@ -1491,6 +1505,62 @@ export class AppController extends EventEmitter {
 
   #saveScheduled(): void {
     writeFileAtomic(this.#scheduledFile(), JSON.stringify(this.#scheduled));
+  }
+
+  // ---- M12 watch party --------------------------------------------------------------------------
+
+  /** Host keys of the rooms made here or for a phone (the host opens its room with #h=<key>). */
+  #watchHosts = new Map<string, string>();
+
+  async watchCreate(name: string): Promise<{ code: string; links: string[]; hostToken: string; qrSvg: string }> {
+    this.#notClientOnly();
+    const r = this.#e.watchCreate(name);
+    this.#watchHosts.set(r.code, r.hostToken);
+    this.#changed();
+    return { ...r, qrSvg: r.links[0] ? await QRCode.toString(r.links[0], { type: 'svg', margin: 1 }) : '' };
+  }
+
+  async watchEnd(code: string): Promise<void> {
+    await this.#e.watchEnd(code);
+    this.#watchHosts.delete(code);
+    this.#changed();
+  }
+
+  async watchPlayLocal(code: string, path: string): Promise<void> {
+    await this.#e.watchPlayLocal(code, path);
+  }
+
+  async watchOpen(url: string): Promise<void> {
+    if (!/^https?:\/\/[^\s]+\/w\/[A-Za-z0-9]{6}(#h=[A-Za-z0-9_-]+)?$/.test(url)) throw new Error('Not a watch-party link.');
+    if (this.#platform.openWindow) this.#platform.openWindow(url);
+    else await this.#platform.openUrl?.(url);
+  }
+
+  /** Finds a room by code: here, then the hub's internet address, then other MeshDrop PCs on this network. */
+  async watchResolve(raw: string): Promise<string | null> {
+    const code = raw.trim().toUpperCase();
+    if (!/^[A-Z0-9]{6}$/.test(code)) throw new Error('A room code has 6 letters or digits.');
+    const e = this.#e;
+    if (e.watch.get(code)) return e.watchLinks(code).at(-1) ?? e.watchLinks(code)[0] ?? null;
+    const bases: string[] = [];
+    for (const u of e.hubStatus().urls) {
+      try {
+        const p = new URL(u);
+        bases.push(`${p.protocol === 'wss:' ? 'https:' : 'http:'}//${p.host}`);
+      } catch {
+        /* skip */
+      }
+    }
+    for (const d of e.devices()) if (d.reach === 'lan' && d.host && d.deviceType !== 'mobile') bases.push(`http://${d.host.includes(':') ? `[${d.host}]` : d.host}:53320`);
+    for (const b of bases) {
+      try {
+        const r = await fetch(`${b}/w/api/${code}`, { signal: AbortSignal.timeout(4000) });
+        if (r.ok) return `${b}/w/${code}`;
+      } catch {
+        /* not there */
+      }
+    }
+    return null;
   }
 
   // ---- M11 room mode ----------------------------------------------------------------------------

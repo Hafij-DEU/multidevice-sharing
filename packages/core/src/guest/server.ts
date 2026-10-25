@@ -31,6 +31,8 @@ export interface GuestServerOptions {
   onClaim?: () => void;
   /** M11 room mode: the room now (null: none); its board is under /r/. */
   room?: () => Room | null;
+  /** M12 watch party routes (/w/); true when it took the request. */
+  watch?: (req: IncomingMessage, res: ServerResponse) => boolean;
 }
 
 const MAX_OFFER_JSON = 2 * 1024 * 1024; // 1000 names + 1 MiB of thumbnails + 64 KiB of text
@@ -129,6 +131,7 @@ export function createGuestServer(o: GuestServerOptions): Server {
     const url = new URL(req.url ?? '/', 'http://guest');
     const seg = url.pathname.split('/').slice(1);
     const method = req.method ?? 'GET';
+    if (o.watch?.(req, res)) return;
     if (seg[0] === 'r') {
       const room = o.room?.();
       if (!room || !(await room.handle(req, res, url, ROOM_PAGE))) json(res, 404, { error: 'not-found' });

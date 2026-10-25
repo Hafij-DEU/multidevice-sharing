@@ -96,6 +96,22 @@ More → Remote, on the phone and on the PC:
   open on the phone to start them.
 - **Second screen**: the phone's Remote page opens Extendo.
 
+## Watch party
+
+Home → **Watch party**: watch together, in step. Start a room and share its **6-character code** (or
+the link or QR code). Everyone sees the same moment: play, pause, jumps and speed follow along for
+everybody; one tick lets only the host control playback. There is a chat and a list of who is watching.
+
+- **What plays:** YouTube links (the official YouTube player); Google Drive links (the file must be shared
+  "anyone with the link", and the room PC relays it); Dropbox links; any link to a video file; and your
+  own videos (on the PC: "Play a video from this PC…", read where it is; in the player: "Your video…"
+  uploads it to the room).
+- **Where rooms live:** on your MeshDrop PC (the hub, or a phone's PC), never in an outside cloud. On
+  your Wi-Fi the room works at once; friends elsewhere need the hub's internet address
+  (Mesh → Internet access). Friends without MeshDrop open the link in any browser.
+- **Joining:** type the code in Watch party (it looks on your hub and your network), or open the link.
+- A room ends when you press End, or after 6 hours with nobody in it; uploaded videos go with it.
+
 ## Extras
 
 - **Voice notes**: Send → Voice note records a message in the app; it goes like a file.

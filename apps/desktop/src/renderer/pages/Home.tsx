@@ -52,7 +52,9 @@ export function Home({ state, run, go }: { state: AppState; run: Run; go: Go }) 
     { id: 'find', title: 'Find my device', hint: 'Ring it, even on silent', icon: 'M12 2a7 7 0 0 1 7 7c0 5-7 13-7 13S5 14 5 9a7 7 0 0 1 7-7zM12 7v4', hue: 0, onOpen: () => go({ sub: 'Remote' }) },
     ...(state.guest ? [{ id: 'guests', title: 'Guests', hint: 'A browser sends or gets files', icon: 'M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM4 21a8 8 0 0 1 16 0', hue: 45, onOpen: () => go({ sub: 'Guests' }) }] : []),
     ...(state.room ? [{ id: 'room', title: 'Room', hint: state.room.active ? `Open · ${state.room.posts.length} posts` : 'One QR, a shared board', icon: 'M3 21V9l9-6 9 6v12zM9 21v-6h6v6', hue: 170, onOpen: () => go({ sub: 'Guests' }) }] : []),
-    { id: 'links', title: 'Internet links', hint: 'Share with anyone, encrypted', icon: 'M10 14a5 5 0 0 0 7 0l3-3a5 5 0 0 0-7-7l-1 1M14 10a5 5 0 0 0-7 0l-3 3a5 5 0 0 0 7 7l1-1', hue: 220, onOpen: () => go({ sub: 'Guests' }) },
+    ...(window.meshdrop.watchCreate
+      ? [{ id: 'watch', title: 'Watch party', hint: (state.watch ?? []).length ? `${(state.watch ?? []).length} room open` : 'Watch together with a 6-character code', icon: 'M3 5h18v12H3zM8 21h8M10 9l5 3-5 3z', hue: 350, onOpen: () => go({ sub: 'Watch party' }) }]
+      : []),
     ...(state.sync ? [{ id: 'sync', title: 'Sync & backup', hint: `${state.sync.folders.length} folder${state.sync.folders.length === 1 ? '' : 's'} synced`, icon: 'M4 12a8 8 0 0 1 14-5.3M20 4v4h-4M20 12a8 8 0 0 1-14 5.3M4 20v-4h4', hue: 190, onOpen: () => go({ sub: 'Sync' }) }] : []),
     { id: 'devices', title: 'Devices', hint: android ? 'Paired devices' : 'Paired devices, set up a phone', icon: 'M4 5h10v14H4zM16 9h4v10h-4M8 16h2', hue: 240, onOpen: () => go({ sub: 'Devices' }) },
     { id: 'mesh', title: 'Mesh', hint: 'Reach your devices from anywhere', icon: 'M5 12a2 2 0 1 0 0 .01M19 5a2 2 0 1 0 0 .01M19 19a2 2 0 1 0 0 .01M7 11l10-5M7 13l10 5', hue: 300, onOpen: () => go({ sub: 'Mesh' }) },

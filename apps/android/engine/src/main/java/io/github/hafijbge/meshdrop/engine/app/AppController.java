@@ -341,6 +341,7 @@ public final class AppController {
         if (guestQr != null && Boolean.TRUE.equals(guest.get("active"))) guest.put("qrSvg", guestQr);
         m.put("guest", guest);
         m.put("ringing", ringing);
+        m.put("watch", watchView());
         loadScheduled();
         m.put("scheduled", scheduledView());
         Map<String, Object> casting = new LinkedHashMap<>();
@@ -1414,6 +1415,100 @@ public final class AppController {
         }
     }
 
+    // ---- M12 watch party: rooms live on a PC (the hub first); the phone opens them in its browser ----
+
+    /** Rooms this phone made (on a PC), with their host keys. */
+    private final List<Map<String, Object>> watchRooms = new ArrayList<>();
+
+    /** The PC that hosts rooms for this phone: the mesh hub if it is reachable, else a PC on this network. */
+    private String watchPc() {
+        MembershipStore mesh = e().mesh();
+        String hub = mesh == null ? null : mesh.list().hubId;
+        String any = null;
+        for (io.github.hafijbge.meshdrop.engine.EngineDevice d : e().devices()) {
+            if (!d.trusted || "offline".equals(d.reach) || "mobile".equals(d.deviceType) || "localsend".equals(d.role)) continue;
+            if (d.deviceId.equals(hub)) return d.deviceId;
+            if (any == null) any = d.deviceId;
+        }
+        return any;
+    }
+
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> watchCreate(String name) throws IOException {
+        String pc = watchPc();
+        if (pc == null) throw new IOException("Watch parties run on your MeshDrop PC: none is reachable now.");
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("kind", "watch-create");
+        m.put("name", name);
+        Map<String, Object> r = e().appSend(pc, m, 15_000);
+        if (!Long.valueOf(200).equals(r.get("status")) || !(r.get("body") instanceof Map)) throw new IOException("The PC could not open a room.");
+        Map<String, Object> b = new LinkedHashMap<>((Map<String, Object>) r.get("body"));
+        Map<String, Object> keep = new LinkedHashMap<>();
+        keep.put("code", b.get("code"));
+        keep.put("name", name);
+        keep.put("links", b.get("links"));
+        keep.put("hostToken", b.get("hostToken"));
+        keep.put("pc", pc);
+        synchronized (watchRooms) {
+            watchRooms.add(keep);
+        }
+        b.put("qrSvg", b.get("links") instanceof List && !((List<Object>) b.get("links")).isEmpty() ? io.github.hafijbge.meshdrop.engine.guest.GuestPage.qrSvg(String.valueOf(((List<Object>) b.get("links")).get(0))) : "");
+        changed();
+        return b;
+    }
+
+    /** The link for a room code: rooms made here, the hub's internet address, then MeshDrop PCs on this network. */
+    @SuppressWarnings("unchecked")
+    private String watchResolve(String raw) {
+        String code = raw.trim().toUpperCase(java.util.Locale.ROOT);
+        if (!code.matches("^[A-Z0-9]{6}$")) throw new IllegalArgumentException("A room code has 6 letters or digits.");
+        synchronized (watchRooms) {
+            for (Map<String, Object> w : watchRooms) {
+                if (code.equals(w.get("code")) && w.get("links") instanceof List && !((List<Object>) w.get("links")).isEmpty()) return String.valueOf(((List<Object>) w.get("links")).get(0));
+            }
+        }
+        List<String> bases = new ArrayList<>();
+        MembershipStore mesh = e().mesh();
+        if (mesh != null) {
+            for (String u : mesh.list().urls) {
+                try {
+                    java.net.URI p = new java.net.URI(u);
+                    bases.add(("wss".equals(p.getScheme()) ? "https://" : "http://") + p.getRawAuthority());
+                } catch (java.net.URISyntaxException ignored) {
+                    // skip
+                }
+            }
+        }
+        for (io.github.hafijbge.meshdrop.engine.EngineDevice d : e().devices()) {
+            if ("lan".equals(d.reach) && d.host != null && !"mobile".equals(d.deviceType)) bases.add("http://" + (d.host.contains(":") ? "[" + d.host + "]" : d.host) + ":53320");
+        }
+        for (String b : bases) {
+            try {
+                java.net.HttpURLConnection c = (java.net.HttpURLConnection) new java.net.URL(b + "/w/api/" + code).openConnection();
+                c.setConnectTimeout(4000);
+                c.setReadTimeout(4000);
+                int s = c.getResponseCode();
+                c.disconnect();
+                if (s == 200) return b + "/w/" + code;
+            } catch (IOException | RuntimeException ignored) {
+                // not there
+            }
+        }
+        return null;
+    }
+
+    private List<Object> watchView() {
+        List<Object> out = new ArrayList<>();
+        synchronized (watchRooms) {
+            for (Map<String, Object> w : watchRooms) {
+                Map<String, Object> v = new LinkedHashMap<>(w);
+                v.remove("pc");
+                out.add(v);
+            }
+        }
+        return out;
+    }
+
     /** Fetches this device's links from its hub off the caller's thread, then redraws. */
     private void refreshLinks() {
         if (!linksRefreshing.compareAndSet(false, true)) return;
@@ -1550,6 +1645,36 @@ public final class AppController {
                 guestQr = (String) g.get("qrSvg");
                 changed();
                 return g;
+            }
+            case "watchCreate":
+                return watchCreate(str(a0));
+            case "watchResolve":
+                return watchResolve(str(a0));
+            case "watchOpen": {
+                String url = str(a0);
+                if (!url.matches("^https?://[^\\s]+/w/[A-Za-z0-9]{6}(#h=[A-Za-z0-9_-]+)?$")) throw new IllegalArgumentException("Not a watch-party link.");
+                platform.openUrl(url);
+                return null;
+            }
+            case "watchEnd": {
+                String code = str(a0);
+                Map<String, Object> room = null;
+                synchronized (watchRooms) {
+                    for (Map<String, Object> w : watchRooms) if (code.equals(w.get("code"))) room = w;
+                    watchRooms.remove(room);
+                }
+                if (room != null) {
+                    Map<String, Object> m = new LinkedHashMap<>();
+                    m.put("kind", "watch-end");
+                    m.put("code", code);
+                    try {
+                        e().appSend((String) room.get("pc"), m, 10_000);
+                    } catch (IOException ignored) {
+                        // the PC ends idle rooms by itself
+                    }
+                }
+                changed();
+                return null;
             }
             case "linkCreate":
                 return linkCreate(obj(a0));

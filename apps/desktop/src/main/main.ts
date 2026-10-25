@@ -212,6 +212,15 @@ const platform: Platform = {
     openUrl: (u) => shell.openExternal(u),
   }),
   ...mediaPlatform(),
+  openWindow: (url) => {
+    // the watch-party player: an ordinary web page in its own window (no app powers)
+    const w = new BrowserWindow({ width: 1280, height: 800, title: 'Watch party', autoHideMenuBar: true, webPreferences: { contextIsolation: true, sandbox: true, nodeIntegration: false } });
+    w.webContents.setWindowOpenHandler(({ url: u }) => {
+      if (/^https:\/\//.test(u)) void shell.openExternal(u);
+      return { action: 'deny' };
+    });
+    void w.loadURL(url);
+  },
   print: async (p) => {
     // received files are absolute paths in the inbox (never an option to lp)
     if (!p.startsWith('/')) throw new Error('bad path');
@@ -364,6 +373,11 @@ function wireIpc(): void {
     return ctl().appSend(str(id, 64), msg as Record<string, unknown>);
   });
   handle('ringStop', () => ctl().ringStop());
+  handle('watchCreate', (_e, n) => ctl().watchCreate(str(n, 60)));
+  handle('watchResolve', (_e, c) => ctl().watchResolve(str(c, 10)));
+  handle('watchOpen', (_e, u) => ctl().watchOpen(str(u, 2048)));
+  handle('watchEnd', (_e, c) => ctl().watchEnd(str(c, 6)));
+  handle('watchPlayLocal', (_e, c, p) => ctl().watchPlayLocal(str(c, 6), str(p)));
   handle('setupPhones', () => setupPhones());
   handle('streamStop', (_e, id) => ctl().streamStop(str(id, 64)));
   handle('noteDismiss', (_e, k) => ctl().noteDismiss(k === undefined ? undefined : str(k, 300)));

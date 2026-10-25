@@ -277,3 +277,8 @@ code { font-size: 12.5px; padding: 1px 6px; border-radius: 6px; background: colo
 @media (max-width: 480px) {
   .tiles { grid-template-columns: repeat(2, 1fr); }
 }
+
+/* Watch party */
+.watch-code { font: 700 34px/1.1 ui-monospace, monospace; letter-spacing: 0.18em; margin: 4px 0 8px; }
+.watch-code.small { font-size: 15px; letter-spacing: 0.1em; margin: 0 6px 0 0; }
+.watch-input { font: 600 20px ui-monospace, monospace; letter-spacing: 0.25em; width: 170px; text-transform: uppercase; }

@@ -256,6 +256,8 @@ export interface AppState {
   notifyAccess?: boolean;
   /** M10b: live streams (PC sound to a phone; a phone's camera or microphone used here). */
   streams?: { id: string; kind: 'audio' | 'camera' | 'mic'; peer: string; alias?: string }[];
+  /** M12 watch parties this device hosts (or, on a phone, made on a PC). */
+  watch?: { code: string; name: string; people?: number; playing?: string; links: string[]; hostToken?: string }[];
   /** M11 room mode: the shared drop board (desktop). */
   room?: { active: boolean; url?: string; qrSvg?: string; title?: string; expiresAt?: number; posts: { id: string; name: string; size: number; by: string; at: number; image: boolean }[] };
   /** M11: sends waiting for their time. */
@@ -321,6 +323,15 @@ export interface DesktopApi {
   setupPhones?(): Promise<{ serial: string; model: string; status: 'done' | 'unauthorized' | 'not-installed' | 'offline' | 'failed'; steps: { label: string; ok: boolean }[]; hint?: string }[]>;
   /** M11 phone as scanner (Android): a photo of a page, as a one-page PDF to send (null: cancelled). */
   scanDocument?(): Promise<SendItemInput | null>;
+  /** M12 watch party: host a room (here, or on a PC from a phone); returns its code and links. */
+  watchCreate?(name: string): Promise<{ code: string; links: string[]; hostToken: string; qrSvg: string }>;
+  /** The link to open for a code (this device's rooms, the hub, PCs on this network); null: not found. */
+  watchResolve?(code: string): Promise<string | null>;
+  /** Opens the player: a window on the PC, the browser on a phone. */
+  watchOpen?(url: string): Promise<void>;
+  watchEnd?(code: string): Promise<void>;
+  /** PC: plays a video file from this PC in the room (no upload). */
+  watchPlayLocal?(code: string, path: string): Promise<void>;
   /** M11 room mode. */
   roomStart?(minutes: number, title: string): Promise<void>;
   roomEnd?(): Promise<void>;

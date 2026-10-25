@@ -32,6 +32,9 @@ import { GuestBook } from './guest/book.ts';
 import { GUEST_PAGE } from './guest/page.ts';
 import { createGuestServer, type SharedFile } from './guest/server.ts';
 import { Room, type RoomPost } from './guest/room.ts';
+import { WatchRooms, WatchError } from './watch/rooms.ts';
+import { createWatchHandler } from './watch/server.ts';
+import { WATCH_PAGE } from './watch/page.ts';
 import { ensureDir, GuestUploads, land, type GuestEvent, type GuestFile } from './guest/uploads.ts';
 import { LINK_PAGE } from './links/page.ts';
 import { lsRegister, lsSend } from './localsend/client.ts';
@@ -719,7 +722,7 @@ export class Engine extends EventEmitter {
         relays: () => this.relayStore.current(), local,
         held: new HeldStore(join(this.home, 'hub', 'held'), heldOpts), invites: this.invites,
         hubLan: () => this.lanAddrs(port),
-        ingressHttp: createLinkHandler({ store: this.links(), uploads: (id) => this.linkUploads(id), page: LINK_PAGE }),
+        ingressHttp: this.ingressHandler(),
       });
       hub.attach(server);
       try {
@@ -741,7 +744,7 @@ export class Engine extends EventEmitter {
         relays: () => this.relayStore.current(), local,
         held: new HeldStore(join(this.home, 'hub', 'held'), heldOpts), invites: this.invites,
         hubLan: () => this.lanAddrs(port),
-        ingressHttp: createLinkHandler({ store: this.links(), uploads: (id) => this.linkUploads(id), page: LINK_PAGE }),
+        ingressHttp: this.ingressHandler(),
       });
       relayHub.attach(server);
       try {
@@ -783,6 +786,7 @@ export class Engine extends EventEmitter {
         alias: () => this.alias,
         page: GUEST_PAGE,
         room: () => (this.room?.live ? this.room : null),
+        watch: this.watchHandler,
         onClaim: () => this.emitEvent({ source: 'guest', type: 'opened' }),
       });
       const want = (this.opts.guest && this.opts.guest.port) ?? DEFAULT_GUEST_PORT;
@@ -923,6 +927,7 @@ export class Engine extends EventEmitter {
     await r.relayHub?.close();
     await this.endGuest(false);
     await this.roomEnd();
+    await this.watchRooms?.stop();
     if (r.ls) {
       r.ls.discovery?.stop();
       const closed = new Promise<void>((resolve) => r.ls!.server.close(() => resolve()));
@@ -2026,6 +2031,72 @@ export class Engine extends EventEmitter {
     const url = `http://${host.includes(':') ? `[${host}]` : host}:${r.guestPort}/g/${token}`;
     this.guestUrl = url;
     return { url, qrSvg: await QRCode.toString(url, { type: 'svg', margin: 1 }), expiresAt };
+  }
+
+  // ---- M12 watch party ----------------------------------------------------------------------
+
+  /** Watch-party rooms on this device (served on the LAN guest server and, on a hub, the internet ingress). */
+  private watchRooms: WatchRooms | null = null;
+  get watch(): WatchRooms {
+    this.watchRooms ??= new WatchRooms(join(this.home, 'watch'));
+    return this.watchRooms;
+  }
+  private readonly watchHandler = (req: import('node:http').IncomingMessage, res: import('node:http').ServerResponse): boolean => {
+    this.watchRouter ??= createWatchHandler({ rooms: this.watch, page: WATCH_PAGE });
+    return this.watchRouter(req, res);
+  };
+  private watchRouter: ReturnType<typeof createWatchHandler> | null = null;
+
+  /** The hub's internet ingress: watch parties, then internet links. */
+  private ingressHandler(): (req: import('node:http').IncomingMessage, res: import('node:http').ServerResponse) => boolean {
+    const links = createLinkHandler({ store: this.links(), uploads: (id) => this.linkUploads(id), page: LINK_PAGE });
+    return (req, res) => this.watchHandler(req, res) || links(req, res);
+  }
+
+  /** Where people open a room: the hub's internet address (if it has one), then this PC on the LAN. */
+  watchLinks(code: string): string[] {
+    const r = this.running;
+    const out: string[] = [];
+    if (r?.hub || r?.relayHub) {
+      const base = this.servedLinkBase();
+      if (!/^http:\/\/127\.0\.0\.1/.test(base)) out.push(`${base}/w/${code}`);
+    }
+    if (r?.guest) {
+      const host = this.lanAddrs(r.port)[0]?.host ?? '127.0.0.1';
+      out.push(`http://${host.includes(':') ? `[${host}]` : host}:${r.guestPort}/w/${code}`);
+    }
+    return out;
+  }
+
+  /** Opens a watch party here; the host key opens it as host (the creator's link carries it in #h=). */
+  watchCreate(name: string): { code: string; hostToken: string; links: string[] } {
+    const r = this.requireRunning();
+    if (!r.guest && !r.hub && !r.relayHub) throw new Error('Watch parties need the MeshDrop PC (its guest port is in use).');
+    this.watch.start();
+    const room = this.watch.create(name);
+    return { code: room.code, hostToken: room.hostToken, links: this.watchLinks(room.code) };
+  }
+
+  watchList(): { code: string; name: string; people: number; playing?: string; links: string[] }[] {
+    return this.watch.list().map((w) => {
+      const v = w.view();
+      return { code: w.code, name: w.name, people: v.members.length, ...(v.state.source ? { playing: v.state.source.title } : {}), links: this.watchLinks(w.code) };
+    });
+  }
+
+  async watchEnd(code: string): Promise<void> {
+    await this.watch.end(code);
+  }
+
+  /** The host PC plays one of its own files in the room (no copy: it is read where it is). */
+  async watchPlayLocal(code: string, path: string): Promise<void> {
+    const room = this.watch.get(code);
+    if (!room) throw new WatchError(404, 'no-such-room');
+    const st = await lstat(path);
+    if (!st.isFile()) throw new Error('Pick a video file.');
+    const id = randomBytes(9).toString('base64url');
+    room.media.set(id, { path, name: basename(path), size: st.size, owned: false });
+    room.playMedia(id, '');
   }
 
   // ---- M11 room mode ------------------------------------------------------------------------

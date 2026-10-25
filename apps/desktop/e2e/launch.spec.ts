@@ -10,7 +10,7 @@ test('the app starts on Home; its tiles and tabs lead to every page', async () =
   try {
     const win = await app.firstWindow();
     await expect(win).toHaveTitle('MeshDrop');
-    for (const tile of ['send', 'received', 'remote', 'find', 'links', 'devices', 'mesh', 'settings']) await expect(win.locator(`[data-tile="${tile}"]`)).toBeVisible();
+    for (const tile of ['send', 'received', 'remote', 'find', 'watch', 'devices', 'mesh', 'settings']) await expect(win.locator(`[data-tile="${tile}"]`)).toBeVisible();
     await win.locator('[data-tile="remote"]').click();
     await expect(win.getByRole('heading', { name: 'Remote' })).toBeVisible();
     await win.getByRole('navigation', { name: 'Pages' }).getByRole('button', { name: 'Home', exact: true }).click();
