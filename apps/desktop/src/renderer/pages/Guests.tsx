@@ -93,10 +93,81 @@ function LanGuests({ state, run }: { state: AppState; run: Run }) {
   );
 }
 
+/** M11 room mode: one QR, a shared board everyone on the Wi-Fi can post to and download from. */
+function RoomMode({ state, run }: { state: AppState; run: Run }) {
+  const [title, setTitle] = useState('');
+  const [hours, setHours] = useState(3);
+  const room = state.room;
+  if (!room) return null;
+  if (!room.active) {
+    return (
+      <section>
+        <p className="muted">At a party or in a class: everyone scans one QR and gets a shared board. Anyone can post photos and files, and everyone can download them. It ends after the time you pick, and then everything in it is deleted (except what you saved).</p>
+        <div className="row wrap">
+          <input aria-label="Room name" placeholder={`${state.settings.alias}'s room`} value={title} onChange={(e) => setTitle(e.target.value)} maxLength={80} />
+          <select aria-label="Room length" value={hours} onChange={(e) => setHours(Number(e.target.value))}>
+            {[1, 3, 6, 12, 24].map((h) => (
+              <option key={h} value={h}>
+                {h} hour{h === 1 ? '' : 's'}
+              </option>
+            ))}
+          </select>
+          <button className="primary" onClick={() => void run(() => window.meshdrop.roomStart!(hours * 60, title))}>
+            Open a room
+          </button>
+        </div>
+      </section>
+    );
+  }
+  return (
+    <section>
+      <div className="invite">
+        {room.qrSvg && <img className="qr" src={`data:image/svg+xml;base64,${btoa(room.qrSvg)}`} alt="Room QR code" width={200} height={200} />}
+        <div className="invite-side">
+          <p>
+            <strong>{room.title}</strong> · until {new Date(room.expiresAt ?? 0).toLocaleTimeString()}
+          </p>
+          <div className="row">
+            <input aria-label="Room link" readOnly value={room.url ?? ''} className="grow" onFocus={(e) => e.target.select()} />
+            <button onClick={() => void run(() => navigator.clipboard.writeText(room.url ?? ''), 'Copied')}>Copy</button>
+          </div>
+          <div className="row">
+            <button onClick={() => void run(async () => window.meshdrop.roomPost!(await window.meshdrop.pickFiles()))}>Post files…</button>
+            <button onClick={() => void run(async () => {
+              for (const p of room.posts) await window.meshdrop.roomSave!(p.id);
+            }, 'Saved to Received')} disabled={room.posts.length === 0}>
+              Save all
+            </button>
+            <button className="danger" onClick={() => void run(() => window.meshdrop.roomEnd!(), 'Room ended')}>
+              End room
+            </button>
+          </div>
+        </div>
+      </div>
+      <ul className="list">
+        {room.posts.map((p) => (
+          <li key={p.id} className="row space">
+            <span>
+              {p.image ? '🖼' : '📄'} {p.name} <span className="muted">· {fmtBytes(p.size)} · {p.by}</span>
+            </span>
+            <button onClick={() => void run(() => window.meshdrop.roomSave!(p.id), 'Saved to Received')}>Save</button>
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
 export function Guests({ state, run }: { state: AppState; run: Run }) {
   return (
     <>
       <LanGuests state={state} run={run} />
+      {state.room && (
+        <>
+          <h2>Room</h2>
+          <RoomMode state={state} run={run} />
+        </>
+      )}
       <h2>Internet links</h2>
       <InternetLinks state={state} run={run} />
     </>

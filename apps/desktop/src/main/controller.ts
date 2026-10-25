@@ -454,6 +454,10 @@ export class AppController extends EventEmitter {
       deviceStatus: { ...this.#deviceStatus },
       ringing: this.#ringing !== null,
       ...(this.#inputError ? { inputError: this.#inputError } : {}),
+      room: (() => {
+        const r = e.roomState();
+        return r.active && this.#roomQr ? { ...r, qrSvg: this.#roomQr } : r;
+      })(),
       scheduled: this.#scheduled.map(({ items: _i, ...v }) => ({ ...v, targets: [...v.targets], aliases: [...v.aliases], names: [...v.names] })),
       streams: [...this.#streams].map(([id, s]) => ({ id, kind: s.kind, peer: s.peer, ...(s.alias ? { alias: s.alias } : {}) })),
       platform: 'desktop',
@@ -1465,6 +1469,33 @@ export class AppController extends EventEmitter {
 
   #saveScheduled(): void {
     writeFileAtomic(this.#scheduledFile(), JSON.stringify(this.#scheduled));
+  }
+
+  // ---- M11 room mode ----------------------------------------------------------------------------
+
+  #roomQr: string | undefined;
+
+  async roomStart(minutes: number, title: string): Promise<void> {
+    this.#notClientOnly();
+    this.#roomQr = (await this.#e.roomStart({ minutes, title })).qrSvg;
+    this.#changed();
+  }
+
+  async roomEnd(): Promise<void> {
+    await this.#e.roomEnd();
+    this.#roomQr = undefined;
+    this.#changed();
+  }
+
+  async roomPost(paths: string[]): Promise<void> {
+    for (const p of paths) await this.#e.roomPost(p);
+    this.#changed();
+  }
+
+  async roomSave(id: string): Promise<string> {
+    const p = await this.#e.roomSave(id);
+    if (this.#settings.get().notifications) this.#platform.notify('Saved from the room', p.slice(p.lastIndexOf('/') + 1), () => this.#platform.revealPath(p));
+    return p;
   }
 
   async scheduleCancel(id: string): Promise<void> {

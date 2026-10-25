@@ -17,8 +17,8 @@
 // Events: everything is emitted on the single 'event' channel as an EngineEvent.
 import { X509Certificate, createPublicKey, randomBytes, type KeyObject } from 'node:crypto';
 import { EventEmitter } from 'node:events';
-import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, statSync, unlinkSync, watch, writeSync, type FSWatcher } from 'node:fs';
-import { lstat, open, readdir } from 'node:fs/promises';
+import { closeSync, createReadStream, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, statSync, unlinkSync, watch, writeSync, type FSWatcher } from 'node:fs';
+import { copyFile, lstat, open, readdir } from 'node:fs/promises';
 import type { Server as HttpServer } from 'node:http';
 import { createServer as createHttpsServer, type Server } from 'node:https';
 import { homedir, hostname, networkInterfaces } from 'node:os';
@@ -31,6 +31,7 @@ import QRCode from 'qrcode';
 import { GuestBook } from './guest/book.ts';
 import { GUEST_PAGE } from './guest/page.ts';
 import { createGuestServer, type SharedFile } from './guest/server.ts';
+import { Room, type RoomPost } from './guest/room.ts';
 import { ensureDir, GuestUploads, land, type GuestEvent, type GuestFile } from './guest/uploads.ts';
 import { LINK_PAGE } from './links/page.ts';
 import { lsRegister, lsSend } from './localsend/client.ts';
@@ -90,7 +91,7 @@ export type EngineEvent =
   | { source: 'guest'; type: 'file'; id: string; path: string }
   | { source: 'guest'; type: 'rejected'; id: string }
   | { source: 'guest'; type: 'failed'; id: string; error: string }
-  | { source: 'guest'; type: 'ended' | 'opened' }
+  | { source: 'guest'; type: 'ended' | 'opened' | 'room' }
   /** Folder sync: a round with `partner` finished (counts are what changed here), or failed. */
   | { source: 'sync'; type: 'round'; folder: string; partner: string; pulled: number; deleted: number; conflicts: number; errors: number }
   | { source: 'sync'; type: 'error'; folder: string; partner: string; error: string }
@@ -781,6 +782,7 @@ export class Engine extends EventEmitter {
         shared: () => this.guestShared,
         alias: () => this.alias,
         page: GUEST_PAGE,
+        room: () => (this.room?.live ? this.room : null),
         onClaim: () => this.emitEvent({ source: 'guest', type: 'opened' }),
       });
       const want = (this.opts.guest && this.opts.guest.port) ?? DEFAULT_GUEST_PORT;
@@ -920,6 +922,7 @@ export class Engine extends EventEmitter {
     await r.hub?.close();
     await r.relayHub?.close();
     await this.endGuest(false);
+    await this.roomEnd();
     if (r.ls) {
       r.ls.discovery?.stop();
       const closed = new Promise<void>((resolve) => r.ls!.server.close(() => resolve()));
@@ -2023,6 +2026,64 @@ export class Engine extends EventEmitter {
     const url = `http://${host.includes(':') ? `[${host}]` : host}:${r.guestPort}/g/${token}`;
     this.guestUrl = url;
     return { url, qrSvg: await QRCode.toString(url, { type: 'svg', margin: 1 }), expiresAt };
+  }
+
+  // ---- M11 room mode ------------------------------------------------------------------------
+
+  private room: Room | null = null;
+  private roomUrl: string | null = null;
+  private roomTimer: NodeJS.Timeout | null = null;
+
+  /** Opens a room: one QR for everyone on this Wi-Fi to share photos and files on one board. */
+  async roomStart(opts: { minutes?: number; title?: string } = {}): Promise<{ url: string; qrSvg: string; expiresAt: number }> {
+    const r = this.requireRunning();
+    if (!r.guest) throw new Error(`rooms are not available: port ${(this.opts.guest && this.opts.guest.port) ?? DEFAULT_GUEST_PORT} is in use`);
+    await this.roomEnd();
+    const minutes = Math.min(24 * 60, Math.max(5, Math.round(opts.minutes ?? 180)));
+    const title = (opts.title ?? '').replace(/[\u0000-\u001f]/g, ' ').trim().slice(0, 80) || `${this.alias}'s room`;
+    this.room = await Room.open(join(this.home, 'room'), title, minutes * 60_000, () => this.emitEvent({ source: 'guest', type: 'room' }));
+    this.roomTimer = setTimeout(() => void this.roomEnd(), minutes * 60_000);
+    this.roomTimer.unref();
+    const host = this.lanAddrs(r.port)[0]?.host ?? '127.0.0.1';
+    this.roomUrl = `http://${host.includes(':') ? `[${host}]` : host}:${r.guestPort}/r/${this.room.token}`;
+    return { url: this.roomUrl, qrSvg: await QRCode.toString(this.roomUrl, { type: 'svg', margin: 1 }), expiresAt: this.room.expiresAt };
+  }
+
+  /** Ends the room: the link stops and everything posted in it is deleted (saved copies stay). */
+  async roomEnd(): Promise<void> {
+    if (this.roomTimer) clearTimeout(this.roomTimer);
+    this.roomTimer = null;
+    const room = this.room;
+    this.room = null;
+    this.roomUrl = null;
+    await room?.close();
+  }
+
+  roomState(): { active: boolean; url?: string; title?: string; expiresAt?: number; posts: RoomPost[] } {
+    const room = this.room;
+    if (!room?.live) return { active: false, posts: [] };
+    return { active: true, url: this.roomUrl!, title: room.title, expiresAt: room.expiresAt, posts: room.posts() };
+  }
+
+  /** The host posts one of its own files to the room. */
+  async roomPost(path: string): Promise<void> {
+    const room = this.room;
+    if (!room?.live) throw new Error('No room is open.');
+    const st = await lstat(path);
+    if (!st.isFile()) throw new Error('Only files can be posted.');
+    await room.add(basename(path), this.alias, createReadStream(path), st.size);
+  }
+
+  /** Copies a post into the inbox (free name, never over a file); returns where it went. */
+  async roomSave(id: string): Promise<string> {
+    const room = this.room;
+    const src = room?.pathOf(id);
+    const post = room?.posts().find((p) => p.id === id);
+    if (!src || !post) throw new Error('That post is gone.');
+    const dir = await ensureDir(this.inboxDir, []);
+    const tmp = join(dir, `.room-${id}.part`);
+    await copyFile(src, tmp);
+    return land(tmp, dir, post.name);
   }
 
   /** Ends the guest session: the link stops working, unfinished uploads are deleted, shares are cleared. */

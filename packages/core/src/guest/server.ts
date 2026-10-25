@@ -13,6 +13,8 @@
 import { createReadStream } from 'node:fs';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { GuestBook } from './book.ts';
+import type { Room } from './room.ts';
+import { ROOM_PAGE } from './room-page.ts';
 import { GuestError, type GuestUploads } from './uploads.ts';
 
 export interface SharedFile { id: string; name: string; size: number; path: string }
@@ -27,6 +29,8 @@ export interface GuestServerOptions {
   page: { html: string; js: string; css: string };
   /** The link was opened by its (first and only) browser. */
   onClaim?: () => void;
+  /** M11 room mode: the room now (null: none); its board is under /r/. */
+  room?: () => Room | null;
 }
 
 const MAX_OFFER_JSON = 2 * 1024 * 1024; // 1000 names + 1 MiB of thumbnails + 64 KiB of text
@@ -125,6 +129,11 @@ export function createGuestServer(o: GuestServerOptions): Server {
     const url = new URL(req.url ?? '/', 'http://guest');
     const seg = url.pathname.split('/').slice(1);
     const method = req.method ?? 'GET';
+    if (seg[0] === 'r') {
+      const room = o.room?.();
+      if (!room || !(await room.handle(req, res, url, ROOM_PAGE))) json(res, 404, { error: 'not-found' });
+      return;
+    }
     if (seg[0] !== 'g') return json(res, 404, { error: 'not-found' });
     if (method === 'GET' && seg.length === 2 && seg[1] === 'app.js') return send(res, 200, o.page.js, 'text/javascript; charset=utf-8');
     if (method === 'GET' && seg.length === 2 && seg[1] === 'app.css') return send(res, 200, o.page.css, 'text/css; charset=utf-8');

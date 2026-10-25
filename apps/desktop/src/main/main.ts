@@ -339,6 +339,10 @@ function wireIpc(): void {
   });
   handle('send', (_e, t, i, o) => ctl().send(targets(t), items(i), sendOpts(o)));
   handle('scheduleCancel', (_e, id) => ctl().scheduleCancel(str(id, 64)));
+  handle('roomStart', (_e, m, t) => ctl().roomStart(int(m), str(t, 80)));
+  handle('roomEnd', () => ctl().roomEnd());
+  handle('roomPost', (_e, ps) => ctl().roomPost(strs(ps, 100)));
+  handle('roomSave', (_e, id) => ctl().roomSave(str(id, 32)));
   handle('saveBlob', (_e, name, b64) => {
     // a voice note recorded in the window: saved under the config folder, then sent like any file
     const n = str(name, 100).replace(/[^A-Za-z0-9._ -]/g, '_');

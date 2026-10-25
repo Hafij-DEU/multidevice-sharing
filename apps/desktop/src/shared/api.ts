@@ -252,6 +252,8 @@ export interface AppState {
   notifyAccess?: boolean;
   /** M10b: live streams (PC sound to a phone; a phone's camera or microphone used here). */
   streams?: { id: string; kind: 'audio' | 'camera' | 'mic'; peer: string; alias?: string }[];
+  /** M11 room mode: the shared drop board (desktop). */
+  room?: { active: boolean; url?: string; qrSvg?: string; title?: string; expiresAt?: number; posts: { id: string; name: string; size: number; by: string; at: number; image: boolean }[] };
   /** M11: sends waiting for their time. */
   scheduled?: ScheduledView[];
   /** M10b Android: what this phone streams now. */
@@ -308,6 +310,11 @@ export interface DesktopApi {
   pickOpenPath(): Promise<string | null>;
   pathForFile(file: File): string;
   send(targets: string[] | 'all', items: SendItemInput[], opts?: SendOptions): Promise<void>;
+  /** M11 room mode. */
+  roomStart?(minutes: number, title: string): Promise<void>;
+  roomEnd?(): Promise<void>;
+  roomPost?(paths: string[]): Promise<void>;
+  roomSave?(id: string): Promise<string>;
   /** M11: cancels a scheduled send. */
   scheduleCancel(id: string): Promise<void>;
   /** M11 voice notes: saves recorded bytes (base64) as a file to send; returns its path. */
