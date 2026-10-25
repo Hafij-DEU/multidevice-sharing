@@ -452,7 +452,7 @@ describe('AppController internet access', () => {
       engineOptions: {
         hub: { ingressPort: 0 }, guest: { port: 0 },
         reach: {
-          runner: async (cmd, args) => {
+          runner: async (_cmd, args) => {
             if (!installed) return { code: 127, stdout: '', stderr: 'not found' };
             if (args[0] === 'status') return { code: 0, stdout: JSON.stringify({ BackendState: 'Running', Self: { DNSName: 'hub.tail1.ts.net.' } }), stderr: '' };
             return { code: 0, stdout: '{}', stderr: '' };

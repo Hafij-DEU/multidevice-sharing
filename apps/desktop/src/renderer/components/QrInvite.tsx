@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import type { Run } from '../App.tsx';
 
 export interface Invite {
@@ -16,13 +16,13 @@ const fmtLeft = (ms: number) => {
 export function QrInvite({ invite, onRenew, run, group }: { invite: Invite; onRenew: () => void; run: Run; group?: boolean }) {
   const [now, setNow] = useState(Date.now());
   useEffect(() => {
-    const t = setInterval(() => setNow(Date.now()), 250);
+    const t = setInterval(() => setNow(Date.now()), 1000); // the countdown shows whole seconds
     return () => clearInterval(t);
   }, []);
   const left = Math.max(0, invite.expiresAt - now);
   const expired = left === 0;
   // The SVG is ASCII (qrcode output), so btoa is safe.
-  const src = `data:image/svg+xml;base64,${btoa(invite.qrSvg)}`;
+  const src = useMemo(() => `data:image/svg+xml;base64,${btoa(invite.qrSvg)}`, [invite.qrSvg]);
   return (
     <div className="invite">
       <img className={`qr${expired ? ' expired' : ''}`} src={src} alt="Invite QR code" width={220} height={220} />

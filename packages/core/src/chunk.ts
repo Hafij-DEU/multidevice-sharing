@@ -42,7 +42,6 @@ export interface Offer { v: 1; sessionId: string; from: string; to: string; enc:
 export interface HaveMap { [fileId: number]: number[] } // chunk indices already verified by receiver
 
 export const CHUNK_SIZE = 4194304;
-const TAG_LEN = 16;
 const U32_MAX = 0xffffffff;
 
 export function chunkCount(size: number): number {

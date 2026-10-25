@@ -249,6 +249,7 @@ export class AppController extends EventEmitter {
   #outbox: AppState['outbox'] = [];
   #timer: NodeJS.Timeout | null = null;
   #lastEmit = 0;
+  #lastJson = '';
   #stopped = false;
   #paused = false;
   /** The guest link's QR code (the engine keeps the rest of the session). */
@@ -450,7 +451,7 @@ export class AppController extends EventEmitter {
       mode: this.#mode,
       hub: { role: st.role, online: st.online, version: st.version, members: st.members, urls: st.urls, ingressPort: e.hubIngressPort, linkedTo: st.linkedTo ?? null, relayHub: st.relayHub === true },
       relays: e.relays(),
-      devices: e.devices().map((d): DeviceView => ({ ...d, self: false })),
+      devices: e.devices().map(({ lastSeen: _seen, ...d }): DeviceView => ({ ...d, self: false })), // lastSeen ticks with every announce; the UI shows none of it
       transfers: [...this.#transfers.values()].reverse().map(({ done: _d, sizes: _s, rateAt: _a, rateSent: _r, ...t }) => t),
       outbox: this.#outbox.map((o) => ({ ...o })),
       received: this.#history.received(),
@@ -506,15 +507,20 @@ export class AppController extends EventEmitter {
     this.#changed();
   }
 
-  /** Schedules a 'state' event: at most one per STATE_INTERVAL_MS, always carrying the latest state. */
+  /** Schedules a 'state' event: at most one per STATE_INTERVAL_MS, always carrying the latest state,
+   *  and none when nothing changed (each one re-renders the whole window). */
   #changed(): void {
     if (this.#timer || this.#stopped) return;
     const wait = Math.max(0, this.#lastEmit + STATE_INTERVAL_MS - Date.now());
     this.#timer = setTimeout(() => {
       this.#timer = null;
       if (!this.#engine) return;
+      const s = this.state();
+      const json = JSON.stringify(s);
+      if (json === this.#lastJson) return;
+      this.#lastJson = json;
       this.#lastEmit = Date.now();
-      this.emit('state', this.state());
+      this.emit('state', s);
     }, wait);
   }
 

@@ -534,11 +534,6 @@ export class HubServer extends EventEmitter {
     return this.#opts.members.anchor.export({ type: 'spki', format: 'pem' }) as string;
   }
 
-  /** True on a relay hub (no root key): membership changes happen on the main hub. */
-  get isRelay(): boolean {
-    return !this.#opts.rootKey;
-  }
-
   #requireRoot(): KeyObject {
     if (!this.#opts.rootKey) throw new Error('This is a relay hub: do that on the main hub.');
     return this.#opts.rootKey;

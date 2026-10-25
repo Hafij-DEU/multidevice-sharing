@@ -6,7 +6,6 @@ import { join } from 'node:path';
 import { writeFileAtomic } from '@meshdrop/core/src/trust.ts';
 
 export const AUTOSTART_NAME = 'io.github.hafijbge.meshdrop.desktop';
-export const DEFAULT_BINDING = '<Primary><Alt>c';
 const MEDIA_KEYS = 'org.gnome.settings-daemon.plugins.media-keys';
 const KEYBINDING_BASE = '/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings';
 

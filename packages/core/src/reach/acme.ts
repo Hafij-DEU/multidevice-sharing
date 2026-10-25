@@ -4,7 +4,6 @@ import { createHash, generateKeyPairSync, sign, type KeyObject } from 'node:cryp
 import { buildCsr } from '../x509.ts';
 
 export const LETS_ENCRYPT = 'https://acme-v02.api.letsencrypt.org/directory';
-export const LETS_ENCRYPT_STAGING = 'https://acme-staging-v02.api.letsencrypt.org/directory';
 
 export class AcmeError extends Error {
   constructor(message: string) {

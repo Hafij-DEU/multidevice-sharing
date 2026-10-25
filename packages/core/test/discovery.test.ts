@@ -44,7 +44,7 @@ function mk(self: Announce, port: number, extra: Partial<ConstructorParameters<t
   return d;
 }
 
-function once<T>(d: Discovery, event: 'peer' | 'lost', pred: (p: PeerInfo) => boolean = () => true, ms = 1000): Promise<PeerInfo> {
+function once(d: Discovery, event: 'peer' | 'lost', pred: (p: PeerInfo) => boolean = () => true, ms = 1000): Promise<PeerInfo> {
   return new Promise((resolve, reject) => {
     const t = setTimeout(() => {
       d.off(event, on);

@@ -134,10 +134,6 @@ public final class WebSocket {
         return new String(b.toByteArray(), StandardCharsets.ISO_8859_1);
     }
 
-    public boolean isOpen() {
-        return !closed.get() && !closeSent;
-    }
-
     public void sendText(String text) throws IOException {
         send(OP_TEXT, text.getBytes(StandardCharsets.UTF_8));
     }

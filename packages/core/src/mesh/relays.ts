@@ -118,8 +118,4 @@ export class RelayStore {
     writeFileAtomic(this.#file, JSON.stringify(this.#signed));
     return 'updated';
   }
-
-  clear(): void {
-    this.#signed = null;
-  }
 }

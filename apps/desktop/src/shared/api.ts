@@ -10,7 +10,6 @@ export interface DeviceView {
   trusted: boolean;
   reach: Reach;
   deviceType?: string;
-  lastSeen?: number;
   /** Nearby devices: their address, for one-click pairing. */
   host?: string;
   port?: number;

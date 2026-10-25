@@ -5,7 +5,7 @@
 //                 router forwards to (UPnP or NAT-PMP when the router allows, else a manual rule)
 // When a mode is up, its wss:// URL is the hub URL devices and internet links use.
 import { X509Certificate, createPrivateKey, createPublicKey, generateKeyPairSync, type KeyObject } from 'node:crypto';
-import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { createServer as createHttpsServer, type Server as HttpsServer } from 'node:https';
 import { join } from 'node:path';
 import { writeFileAtomic } from '../trust.ts';
@@ -298,10 +298,5 @@ export class ReachManager {
       this.#published = null;
     }
     this.#status = { mode: this.#cfg.mode, state: 'off', tokenSet: this.#tokenSet() };
-  }
-
-  /** Forget the DuckDNS token and certificates (the owner leaves port-forward mode for good). */
-  forgetSecrets(): void {
-    for (const f of ['duckdns-token', 'account.key', 'key.pem', 'cert.pem']) rmSync(join(this.#dir, f), { force: true });
   }
 }

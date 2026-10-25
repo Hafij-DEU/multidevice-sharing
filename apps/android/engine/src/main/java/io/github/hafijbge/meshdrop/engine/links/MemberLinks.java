@@ -52,10 +52,6 @@ public final class MemberLinks {
         return Math.max(1, (size + CHUNK - 1) / CHUNK);
     }
 
-    static long sealedSize(long size) {
-        return size + 16 * chunkCount(size);
-    }
-
     static byte[] nonce(long fileIdx, long chunkIdx) {
         return ByteBuffer.allocate(12).putInt((int) fileIdx).putLong(chunkIdx).array();
     }

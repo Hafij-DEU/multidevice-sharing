@@ -201,7 +201,7 @@ describe('sendTo', () => {
 
     it('422 integrity from complete is terminal source-changed (not retried)', async () => {
       const [a] = await makeEngines(1);
-      const f = await fakeWith((method, url) => {
+      const f = await fakeWith((_method, url) => {
         if (url.endsWith('/offer')) return [200, JSON.stringify({ have: {} })];
         if (url.includes('/chunk/')) return [204, ''];
         if (url.includes('/complete/')) return [422, JSON.stringify({ error: 'integrity' })];

@@ -120,10 +120,6 @@ export class HeldStore {
     return m !== null && !m.finished;
   }
 
-  async has(to: string, sid: string): Promise<boolean> {
-    return (await this.#meta(to, sid)) !== null;
-  }
-
   /** Total bytes reserved by all held sessions. */
   async #used(): Promise<number> {
     let used = 0;

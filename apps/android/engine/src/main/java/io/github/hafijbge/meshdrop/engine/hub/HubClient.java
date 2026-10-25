@@ -571,15 +571,6 @@ public final class HubClient {
         workers.shutdownNow();
     }
 
-    /** Sends a JSON control message to the hub; false if not online. */
-    public boolean sendControl(Map<String, Object> m) {
-        Link l;
-        synchronized (this) {
-            l = state == State.ONLINE ? link : null;
-        }
-        return l != null && l.send(m);
-    }
-
     // ---- connection ---------------------------------------------------------------------------
 
     private List<Endpoint> targets() {

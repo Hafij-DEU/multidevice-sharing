@@ -147,6 +147,7 @@ public final class AppController {
     private volatile long lastIdleBackup;
     private static final long IDLE_BACKUP_MS = 15 * 60_000;
     private long lastEmit;
+    private String lastJson;
     private volatile boolean stopped;
 
     public AppController(SettingsStore settings, HistoryStore history, Platform platform, EngineFactory factory) {
@@ -158,6 +159,9 @@ public final class AppController {
 
     public void addStateListener(StateListener l) {
         stateListeners.add(l);
+        synchronized (this) {
+            lastJson = null; // the newcomer gets the next push even if nothing else changed
+        }
     }
 
     public void removeStateListener(StateListener l) {
@@ -316,7 +320,6 @@ public final class AppController {
             dm.put("trusted", d.trusted);
             dm.put("reach", d.reach);
             if (d.deviceType != null) dm.put("deviceType", d.deviceType);
-            if (d.lastSeen > 0) dm.put("lastSeen", d.lastSeen);
             if (d.host != null && d.port > 0) {
                 dm.put("host", d.host);
                 dm.put("port", (long) d.port);
@@ -370,7 +373,8 @@ public final class AppController {
         changed();
     }
 
-    /** Schedules a state push: at most one per STATE_INTERVAL_MS, always carrying the latest state. */
+    /** Schedules a state push: at most one per STATE_INTERVAL_MS, always carrying the latest state,
+     *  and none when nothing changed (each one re-renders the whole page). */
     private synchronized void changed() {
         if (stopped || (pending != null && !pending.isDone())) return;
         long wait = Math.max(0, lastEmit + STATE_INTERVAL_MS - System.currentTimeMillis());
@@ -384,6 +388,10 @@ public final class AppController {
                 json = stateJson();
             } catch (RuntimeException ex) {
                 return;
+            }
+            synchronized (this) {
+                if (json.equals(lastJson)) return;
+                lastJson = json;
             }
             for (StateListener l : stateListeners) {
                 try {

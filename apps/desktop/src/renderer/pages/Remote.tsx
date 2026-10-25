@@ -29,9 +29,11 @@ function problem(r: { status: number; body: unknown } | undefined): string | und
 function useSender(target: string | null, onError: (e: string) => void) {
   const queue = useRef<RemoteEvent[]>([]);
   const busy = useRef(false);
-  useEffect(() => {
-    queue.current = []; // a click meant for one device never lands on another
-  }, [target]);
+  const sentTo = useRef(target);
+  if (sentTo.current !== target) {
+    if (sentTo.current) queue.current = []; // input meant for one PC never lands on another
+    sentTo.current = target;
+  }
   const flush = async () => {
     if (busy.current || !target || queue.current.length === 0) return;
     busy.current = true;
@@ -252,7 +254,10 @@ const PANELS = ['Touchpad', 'Keyboard', 'Media', 'Presenter', 'PC'] as const;
 
 /** Control another device (a PC) from this one: touchpad, keyboard, media keys, slides, PC actions. */
 function Control({ state, run, targets }: { state: AppState; run: Run; targets: DeviceView[] }) {
-  const [target, setTarget] = useState<string | null>(targets[0]?.deviceId ?? null);
+  // Every paired PC stays listed (a device that is away for a moment keeps its place): picking
+  // only reachable ones dropped the chosen PC whenever it blinked offline, and input went nowhere.
+  const pick = () => (targets.find((d) => d.reach !== 'offline') ?? targets[0])?.deviceId ?? null;
+  const [target, setTarget] = useState<string | null>(pick);
   const [panel, setPanel] = useState<(typeof PANELS)[number]>('Touchpad');
   const lastErr = useRef(0);
   const send = useSender(target, (e) => {
@@ -261,13 +266,13 @@ function Control({ state, run, targets }: { state: AppState; run: Run; targets: 
     void run(() => Promise.reject(new Error(e)));
   });
   useEffect(() => {
-    // also when the target was lost for a moment (null): pick it again once a device is back
     if (!target || !targets.some((t) => t.deviceId === target)) {
-      const next = targets[0]?.deviceId ?? null;
+      const next = pick();
       if (next !== target) setTarget(next);
     }
-  }, [targets, target]);
-  if (targets.length === 0) return <p className="muted">No paired device is reachable now.</p>;
+  });
+  if (targets.length === 0) return <p className="muted">No paired PC yet.</p>;
+  const away = targets.find((d) => d.deviceId === target)?.reach === 'offline';
   return (
     <div className="remote">
       <div className="row">
@@ -275,10 +280,12 @@ function Control({ state, run, targets }: { state: AppState; run: Run; targets: 
           {targets.map((d) => (
             <option key={d.deviceId} value={d.deviceId}>
               {d.alias}
+              {d.reach === 'offline' ? ' (away)' : ''}
             </option>
           ))}
         </select>
       </div>
+      {away && <p className="muted">This PC is away right now: clicks and keys reach it again once it is back.</p>}
       <div className="segmented" role="tablist">
         {PANELS.map((p) => (
           <button key={p} role="tab" aria-selected={panel === p} className={panel === p ? 'active' : ''} onClick={() => setPanel(p)}>
@@ -318,7 +325,6 @@ function Status({ s }: { s: NonNullable<AppState['deviceStatus']>[string] | unde
 export function Remote({ state, run }: { state: AppState; run: Run }) {
   const android = state.platform === 'android';
   const trusted = state.devices.filter((d) => d.trusted && d.role !== 'localsend');
-  const reachable = trusted.filter((d) => d.reach !== 'offline');
   const [replying, setReplying] = useState<{ from: string; key: string; text: string } | null>(null);
   const s = state.settings;
   const allow = (id: string, on: boolean) =>
@@ -355,7 +361,7 @@ export function Remote({ state, run }: { state: AppState; run: Run }) {
       )}
 
       <h2>Control a device</h2>
-      <Control state={state} run={run} targets={reachable.filter((d) => d.deviceType !== 'mobile')} />
+      <Control state={state} run={run} targets={trusted.filter((d) => d.deviceType !== 'mobile')} />
 
       <h2>Find my device</h2>
       <ul className="list">

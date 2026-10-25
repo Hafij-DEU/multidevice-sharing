@@ -651,10 +651,6 @@ export class Engine extends EventEmitter {
     return this.running?.port ?? this.opts.port ?? DEFAULT_MESH_PORT;
   }
 
-  get started(): boolean {
-    return this.running !== null;
-  }
-
   private emitEvent(e: EngineEvent): void {
     try {
       this.emit('event', e);
@@ -973,13 +969,6 @@ export class Engine extends EventEmitter {
     if (matches.length === 0) throw new UnknownDeviceError(query, 'unknown');
     if (matches.length > 1) throw new UnknownDeviceError(query, 'ambiguous', matches);
     return matches[0]!;
-  }
-
-  private targetFor(deviceId: string, peers: Map<string, PeerInfo>): Target | undefined {
-    const t = this.trustSource.get(deviceId);
-    const p = peers.get(deviceId);
-    if (!t || !p) return undefined;
-    return { deviceId, host: p.host, port: p.port, publicKey: createPublicKey(t.publicKeyPem) };
   }
 
   /** Every device this one may send to: mesh members and manually paired devices, never itself. */

@@ -48,11 +48,6 @@ public final class Prepared {
         return out;
     }
 
-    public long totalBytes() {
-        long n = 0;
-        for (Manifest.FileEntry f : files) n += f.size;
-        return n;
-    }
 
     public static Prepared of(List<SendItem> items, AtomicBoolean cancel) throws IOException {
         if (items == null || items.isEmpty()) throw new IllegalArgumentException("nothing to send");

@@ -6,7 +6,6 @@ import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
 
-import io.github.hafijbge.meshdrop.engine.crypto.P256;
 import io.github.hafijbge.meshdrop.engine.identity.X509;
 import io.github.hafijbge.meshdrop.engine.send.MultiSend;
 import io.github.hafijbge.meshdrop.engine.send.Outbox;
