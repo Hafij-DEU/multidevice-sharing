@@ -103,7 +103,7 @@ Carry on with what you were doing, at the same spot:
 - **PC browser → phone:** add the MeshDrop extension to your browser once: Home → Continue on phone →
   "Get the extension folder", then in `brave://extensions` (or `chrome://extensions`,
   `opera://extensions`) turn on Developer mode and *Load unpacked* the **MeshDrop Browser Extension**
-  folder in your home folder. Then on the phone, Home → **Continue from PC** opens the page your PC
+  folder in Documents (App Hub puts it there too: MeshDrop card → Extension, and keeps it updated). Then on the phone, Home → **Continue from PC** opens the page your PC
   browser shows: the same scroll position (scroll-to-text) and, for YouTube, the same second. The
   extension's button (or the PC's Continue page) sends a page to a phone too. The extension talks only
   to MeshDrop on this PC (127.0.0.1).

@@ -223,9 +223,10 @@ const platform: Platform = {
     void w.loadURL(url);
   },
   extensionDir: async () => {
-    // copied into the home folder: a snap browser (Brave, Opera) can read it there, not under /opt
+    // copied into Documents (where App Hub keeps it up to date too): a snap browser (Brave, Opera)
+    // can read it there, not under /opt
     const src = app.isPackaged ? join(process.resourcesPath, 'browser-extension') : join(__dirname, '../../../browser-extension');
-    const dest = join(homedir(), 'MeshDrop Browser Extension');
+    const dest = join(app.getPath('documents'), 'MeshDrop Browser Extension');
     cpSync(src, dest, { recursive: true, force: true });
     return dest;
   },

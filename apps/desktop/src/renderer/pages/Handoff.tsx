@@ -49,7 +49,7 @@ export function Handoff({ state, run }: { state: AppState; run: Run }) {
               Open <code>brave://extensions</code> (Chrome: <code>chrome://extensions</code>, Opera: <code>opera://extensions</code>) and turn on <b>Developer mode</b>.
             </li>
             <li>
-              Press <b>Load unpacked</b> and pick the <b>MeshDrop Browser Extension</b> folder in your home folder.
+              Press <b>Load unpacked</b> and pick the <b>MeshDrop Browser Extension</b> folder in Documents.
             </li>
           </ol>
         </>

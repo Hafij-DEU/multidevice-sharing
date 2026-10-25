@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { handoffUrl, cleanHandoff } from '@meshdrop/core/src/handoff.ts';
 import { startHandoffServer } from '../src/main/handoff.ts';
@@ -43,5 +44,12 @@ describe('the extension door', () => {
     } finally {
       srv?.close();
     }
+  });
+});
+
+describe('the extension package', () => {
+  it('carries the app version: App Hub updates the unpacked copy when the release is newer', () => {
+    const json = (p: string) => JSON.parse(readFileSync(new URL(p, import.meta.url), 'utf8')) as { version: string };
+    expect(json('../../browser-extension/manifest.json').version).toBe(json('../package.json').version);
   });
 });
