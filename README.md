@@ -68,6 +68,27 @@ keep it, every update must be signed with it). Install it from the phone's file 
    devices through it when they are not on the same Wi-Fi; files for a device that is off wait on the
    hub until it comes back. Creating the mesh, inviting, revoking and recovery stay on the PC.
 
+Some phones (Xiaomi/HyperOS above all) still stop apps in the background. With the phone on USB and
+USB debugging on, this lifts every limit at once (no root): `bash apps/android/scripts/keep-alive-adb.sh`.
+
+## Remote, find my device, notifications
+
+More → Remote, on the phone and on the PC:
+
+- **Control a PC** from the phone: touchpad (tap to click, two fingers to scroll), keyboard (typing
+  appears on the PC), media and volume keys, a **presenter** with next/previous slide and a laser dot
+  that follows your finger on the PC screen, and PC actions (lock, sleep, shut down, restart, open an
+  app). On the PC, tick the devices that may control it first. The first time, GNOME asks once to allow
+  remote interaction (the XDG RemoteDesktop portal; it works on Wayland).
+- **Find my device**: Ring makes the phone ring at full volume even on silent (or the PC play an alarm)
+  until Stop. Battery, free space and signal of your phones show on the PC.
+- **Phone notifications on the PC**: on the phone, tick the PCs to show them on and allow notification
+  access once. Messages with a reply action (SMS in Google Messages, chat apps) can be answered from
+  the PC.
+- **Link handoff**: type or paste a link in Send → Text and press "Open link on device"; sharing a link
+  to MeshDrop on the phone works the same way. The other device opens it in its browser.
+- **Second screen**: the phone's Remote page opens Extendo.
+
 ## LocalSend
 
 People using the LocalSend app on the same Wi-Fi show up on Devices as "LocalSend". You can send them
