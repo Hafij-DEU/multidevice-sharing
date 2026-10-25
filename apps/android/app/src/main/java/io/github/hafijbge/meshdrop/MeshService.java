@@ -34,6 +34,11 @@ public final class MeshService extends Service {
     }
 
     private static volatile MeshService live;
+
+    /** The service is up in this process (the watchdog restarts it when it is not). */
+    static boolean running() {
+        return live != null;
+    }
     private boolean receivingNote = true;
 
     /**
@@ -56,6 +61,7 @@ public final class MeshService extends Service {
         nm.createNotificationChannel(ch);
         startForeground(NOTE_ID, notification(true), ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE);
         live = this;
+        Watchdog.schedule(this);
         Core core = ((MeshApp) getApplication()).core();
         new Thread(() -> {
             try {
@@ -124,6 +130,15 @@ public final class MeshService extends Service {
             getSystemService(NotificationManager.class).notify(NOTE_ID, notification(on));
         }
         return START_STICKY;
+    }
+
+    /** Swiped away from Recents: come back a few seconds later (the user did not turn receiving off). */
+    @Override
+    public void onTaskRemoved(Intent rootIntent) {
+        android.app.AlarmManager am = getSystemService(android.app.AlarmManager.class);
+        PendingIntent pi = PendingIntent.getForegroundService(this, 1, new Intent(this, MeshService.class), PendingIntent.FLAG_IMMUTABLE);
+        if (am != null) am.setAndAllowWhileIdle(android.app.AlarmManager.ELAPSED_REALTIME_WAKEUP, android.os.SystemClock.elapsedRealtime() + 3000, pi);
+        super.onTaskRemoved(rootIntent);
     }
 
     @Override
