@@ -239,6 +239,10 @@ public final class Engine {
             return t;
         });
         MeshServer.Options so = new MeshServer.Options();
+        so.app = (peer, msg) -> {
+            MeshServer.AppHandler h = appHandler;
+            return h == null ? new MeshServer.Reply(404, "{\"error\":\"not-found\"}".getBytes(StandardCharsets.UTF_8)) : h.handle(peer, msg);
+        };
         so.port = cfg.port;
         so.alias = cfg.alias;
         so.deviceType = cfg.deviceType;
@@ -1396,6 +1400,34 @@ public final class Engine {
      * LAN if discovery knows the device (or one of its directory addresses answers), else the hub
      * relay if it is online there, else held on the hub, else unreachable.
      */
+    // ---- app messages (M10): remote control, ring, status, notifications ----------------------
+
+    private volatile MeshServer.AppHandler appHandler;
+
+    public void setAppHandler(MeshServer.AppHandler h) {
+        appHandler = h;
+    }
+
+    /** {status, body} of an app message to a paired device: LAN when it is there, else through the hub. */
+    public Map<String, Object> appSend(String deviceId, Map<String, Object> msg, int timeoutMs) throws IOException {
+        Route r = route(deviceId);
+        Sender.Target t = target(deviceId, r);
+        if (t == null || r.kind.equals("held")) throw new IOException("That device is not reachable now.");
+        Transport tr = t.host != null ? new LanTransport(identity, t, 5_000) : transportFor(t, false, 0);
+        if (tr == null) throw new IOException("That device is not reachable now.");
+        Http.Response res = tr.request("POST", "/mesh/v1/app", Json.stringify(msg).getBytes(StandardCharsets.UTF_8), "application/json", timeoutMs, null, null);
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("status", (long) res.status);
+        Object body = null;
+        try {
+            body = res.body.length == 0 ? null : Json.parse(res.text());
+        } catch (RuntimeException ignored) {
+            // not JSON
+        }
+        out.put("body", body);
+        return out;
+    }
+
     private Route route(String deviceId) {
         Discovery d = discovery;
         Discovery.PeerInfo p = d == null ? null : d.peer(deviceId);

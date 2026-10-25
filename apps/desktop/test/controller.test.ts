@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 import { Engine } from '@meshdrop/core/src/engine.ts';
-import { AppController, type Platform } from '../src/main/controller.ts';
+import { AppController, toPrims, type InputPrim, type Platform } from '../src/main/controller.ts';
 import { HistoryStore } from '../src/main/history.ts';
 import { SettingsStore, defaultSettings } from '../src/main/settings.ts';
 import type { AppState, Settings } from '../src/shared/api.ts';
@@ -38,6 +38,10 @@ interface FakePlatform extends Platform {
   clipFilesWritten: string[][];
   opened: string[];
   revealed: string[];
+  prims: InputPrim[];
+  lasers: [number, number, boolean][];
+  rings: boolean[];
+  urls: string[];
 }
 function fakePlatform(): FakePlatform {
   const p: FakePlatform = {
@@ -56,6 +60,15 @@ function fakePlatform(): FakePlatform {
     readClipboard: () => p.clipboardText,
     opened: [],
     revealed: [],
+    prims: [],
+    lasers: [],
+    rings: [],
+    urls: [],
+    input: async (x) => void p.prims.push(...x),
+    laser: (x, y, on) => void p.lasers.push([x, y, on]),
+    ring: (on) => void p.rings.push(on),
+    openUrl: async (u) => void p.urls.push(u),
+    status: async () => ({ battery: { level: 42, charging: true } }),
     openPath: async (x) => void p.opened.push(x),
     revealPath: (x) => void p.revealed.push(x),
     thumbnail: async () => null,
@@ -440,5 +453,47 @@ describe('AppController internet access', () => {
     await until(() => c.state().reach?.state === 'on');
     expect(c.state().reach).toMatchObject({ mode: 'tailscale', url: 'wss://hub.tail1.ts.net/mesh/v1/hub' });
     expect(c.state().hub.urls).toEqual(['wss://hub.tail1.ts.net/mesh/v1/hub']);
+  });
+
+  it('M10 app messages: input only from allowed devices, ring, notifications, link handoff, status', async () => {
+    const A = await make('ay');
+    const B = await make('bee');
+    await pair(A.c, B.c);
+    const aId = A.c.state().self.deviceId;
+    const bId = B.c.state().self.deviceId;
+    const input = { kind: 'input', events: [{ t: 'move', dx: 5, dy: -3 }, { t: 'click', b: 'left' }, { t: 'laser', x: 0.5, y: 0.25, on: true }] };
+    expect(await A.c.appSend(bId, input)).toMatchObject({ status: 403, body: { error: 'remote-off' } });
+    expect(B.p.prims).toEqual([]);
+    await B.c.setSettings({ remoteFrom: [aId] });
+    expect(await A.c.appSend(bId, input)).toMatchObject({ status: 200 });
+    expect(B.p.prims).toEqual([{ t: 'move', dx: 5, dy: -3 }, { t: 'button', button: 272, down: true }, { t: 'button', button: 272, down: false }]);
+    expect(B.p.lasers).toEqual([[0.5, 0.25, true]]);
+
+    expect(await A.c.appSend(bId, { kind: 'ring' })).toMatchObject({ status: 200 });
+    expect(B.c.state().ringing).toBe(true);
+    await B.c.ringStop();
+    expect(B.p.rings).toEqual([true, false]);
+
+    await A.c.appSend(bId, { kind: 'notify', key: 'k1', app: 'Messages', title: 'Mum', text: 'call me', time: 5, replyable: true });
+    expect(B.c.state().phoneNotes).toEqual([expect.objectContaining({ from: aId, key: 'k1', title: 'Mum', text: 'call me', replyable: true })]);
+    await A.c.appSend(bId, { kind: 'notify-removed', key: 'k1' });
+    expect(B.c.state().phoneNotes).toEqual([]);
+
+    expect(await A.c.appSend(bId, { kind: 'open-url', url: 'javascript:alert(1)' })).toMatchObject({ status: 400 });
+    expect(await A.c.appSend(bId, { kind: 'open-url', url: 'https://example.com/a' })).toMatchObject({ status: 200 });
+    expect(B.p.urls).toEqual(['https://example.com/a']);
+    await B.c.setSettings({ openLinks: false });
+    expect(await A.c.appSend(bId, { kind: 'open-url', url: 'https://example.com/b' })).toMatchObject({ status: 403 });
+
+    expect(await A.c.appSend(bId, { kind: 'status' })).toMatchObject({ status: 200, body: { battery: { level: 42 } } });
+    expect(A.c.state().deviceStatus?.[bId]).toMatchObject({ battery: { level: 42, charging: true } });
+  });
+
+  it('toPrims types text and keys with modifiers', () => {
+    expect(toPrims([{ t: 'text', s: 'aé€' }]).filter((p) => p.t === 'key' && p.down).map((p) => (p as { keysym: number }).keysym)).toEqual([0x61, 0xe9, 0x01000000 + 0x20ac]);
+    expect(toPrims([{ t: 'key', k: 'Tab', mods: ['Alt'] }])).toEqual([
+      { t: 'key', keysym: 0xffe9, down: true }, { t: 'key', keysym: 0xff09, down: true }, { t: 'key', keysym: 0xff09, down: false }, { t: 'key', keysym: 0xffe9, down: false },
+    ]);
+    expect(toPrims([{ t: 'key', k: 'rm -rf' }])).toEqual([]);
   });
 });

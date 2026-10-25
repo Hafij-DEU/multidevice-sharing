@@ -16,6 +16,8 @@ extraResources:
     to: cli.cjs
   - from: build/meshdrop
     to: meshdrop
+  - from: build/meshdrop-input.py
+    to: meshdrop-input.py
 linux:
   target: deb
   category: Network;FileTransfer

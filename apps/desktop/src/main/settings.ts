@@ -29,6 +29,9 @@ export function defaultSettings(over: Partial<Settings> = {}): Settings {
     clipboardSync: false,
     notifications: true,
     guestMinutes: 60,
+    remoteFrom: [],
+    openLinks: true,
+    phoneNotifications: true,
     ...over,
   };
 }
@@ -65,7 +68,10 @@ function validate(s: Settings): void {
   if (!Number.isInteger(s.guestMinutes) || s.guestMinutes < 5 || s.guestMinutes > 1440) {
     throw new SettingsError('A guest link must last between 5 minutes and 24 hours (1440 minutes).');
   }
-  for (const k of ['discovery', 'autostart', 'startHidden', 'closeToTray', 'clipboardReceive', 'clipboardSync', 'notifications'] as const) {
+  if (!Array.isArray(s.remoteFrom) || s.remoteFrom.length > 64 || s.remoteFrom.some((d) => typeof d !== 'string' || !/^[0-9a-f]{64}$/.test(d))) {
+    throw new SettingsError('Invalid list of devices that may control this PC.');
+  }
+  for (const k of ['discovery', 'autostart', 'startHidden', 'closeToTray', 'clipboardReceive', 'clipboardSync', 'notifications', 'openLinks', 'phoneNotifications'] as const) {
     if (typeof s[k] !== 'boolean') throw new SettingsError(`Invalid value for ${k}.`);
   }
 }

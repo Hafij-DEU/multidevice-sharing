@@ -66,6 +66,14 @@ export interface Settings {
   notifications: boolean;
   /** How long a guest link works, in minutes (5..1440). */
   guestMinutes: number;
+  /** Devices allowed to control this device (pointer, keyboard, PC actions); empty: none (M10). */
+  remoteFrom: string[];
+  /** Links sent from your own devices with "Open on device" open in the browser. */
+  openLinks: boolean;
+  /** Show notifications forwarded from your phones. */
+  phoneNotifications: boolean;
+  /** Android: the devices this phone forwards its notifications to. */
+  notifyTo?: string[];
 }
 
 export interface GuestFileView { name: string; size: number; type?: string; thumb?: string }
@@ -194,11 +202,56 @@ export interface AppState {
   links?: LinkView[];
   /** Internet access of the hub PC. */
   reach?: ReachView;
+  /** M10: notifications forwarded from phones (newest first). */
+  phoneNotes?: PhoneNote[];
+  /** M10: battery, storage and signal of reachable devices, by device id. */
+  deviceStatus?: Record<string, DeviceStatus>;
+  /** M10: this device is ringing (Find my device), until stopped. */
+  ringing?: boolean;
+  /** M10: why remote input does not work on this PC (absent: it does, or nobody tried yet). */
+  inputError?: string;
 }
+
+/** A notification forwarded from a phone (M10). */
+export interface PhoneNote {
+  from: string;
+  fromAlias?: string;
+  key: string;
+  app: string;
+  title: string;
+  text: string;
+  time: number;
+  /** It has a reply action (messages, SMS): the PC can answer it. */
+  replyable: boolean;
+}
+
+/** Battery, storage and signal a device reports (M10). */
+export interface DeviceStatus {
+  at: number;
+  battery?: { level: number; charging: boolean };
+  storage?: { free: number; total: number };
+  signal?: { level: number; type?: string };
+}
+
+/** Pointer, keyboard and laser events the Remote page sends to a PC (M10 "input"). */
+export type RemoteEvent =
+  | { t: 'move'; dx: number; dy: number }
+  | { t: 'button'; b: 'left' | 'right' | 'middle'; down: boolean }
+  | { t: 'click'; b: 'left' | 'right' | 'middle' }
+  | { t: 'scroll'; dx: number; dy: number }
+  | { t: 'text'; s: string }
+  | { t: 'key'; k: string; mods?: string[] }
+  | { t: 'laser'; x: number; y: number; on: boolean };
 
 export interface DesktopApi {
   getState(): Promise<AppState>;
   onState(cb: (s: AppState) => void): () => void;
+  /** M10: an app message (remote input, ring, status, reply, open-url) to a paired device: its answer. */
+  appSend(deviceId: string, msg: Record<string, unknown>): Promise<{ status: number; body: unknown }>;
+  /** M10: stops this device's own ringing. */
+  ringStop(): Promise<void>;
+  /** M10: forgets one forwarded phone notification (or all with no key). */
+  noteDismiss(key?: string): Promise<void>;
   pickFiles(): Promise<string[]>;
   pickFolder(): Promise<string | null>;
   pickSavePath(defaultName: string): Promise<string | null>;

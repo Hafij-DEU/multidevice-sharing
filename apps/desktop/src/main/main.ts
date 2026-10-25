@@ -15,6 +15,7 @@ import type { AppState, LinkCreateInput, ReachInput, ReceivedRecord, SendItemInp
 import { AppController, type Platform } from './controller.ts';
 import { autostartDir, gnomeShortcutCommands, installNautilusScript, parseStrList, READ_KEYBINDINGS, sendArgs, setAutostart, validBinding } from './desktop.ts';
 import { HistoryStore } from './history.ts';
+import { remotePlatform } from './remote.ts';
 import { SettingsStore, defaultSettings } from './settings.ts';
 
 const execFileP = promisify(execFile);
@@ -202,6 +203,13 @@ const platform: Platform = {
   },
   revealPath: (p) => shell.showItemInFolder(p),
   thumbnail: thumbnailOf,
+  ...remotePlatform({
+    home: HOME,
+    // packaged: resources/meshdrop-input.py; from the source tree: build/
+    script: app.isPackaged ? join(process.resourcesPath, 'meshdrop-input.py') : join(__dirname, '../../build/meshdrop-input.py'),
+    inbox: () => ctl().state().settings.inbox,
+    openUrl: (u) => shell.openExternal(u),
+  }),
 };
 
 // ---- IPC: argument checks -------------------------------------------------------------------------
@@ -229,17 +237,21 @@ const items = (x: unknown): SendItemInput[] => {
     throw new ArgError('invalid argument');
   });
 };
-const SETTING_TYPES: Record<keyof Settings, 'string' | 'number' | 'boolean'> = {
+const SETTING_TYPES: Record<keyof Settings, 'string' | 'number' | 'boolean' | 'string[]' | null> = {
   alias: 'string', inbox: 'string', port: 'number', discovery: 'boolean', autostart: 'boolean',
   startHidden: 'boolean', closeToTray: 'boolean', clipboardReceive: 'boolean', clipboardSync: 'boolean', notifications: 'boolean',
-  guestMinutes: 'number',
+  guestMinutes: 'number', remoteFrom: 'string[]', openLinks: 'boolean', phoneNotifications: 'boolean', notifyTo: null,
 };
 const settingsPatch = (x: unknown): Partial<Settings> => {
   if (typeof x !== 'object' || x === null || Array.isArray(x)) throw new ArgError('invalid argument');
   const out: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(x)) {
     const t = SETTING_TYPES[k as keyof Settings];
-    if (t === undefined || typeof v !== t) throw new ArgError(`invalid setting ${k}`);
+    if (t === 'string[]') {
+      out[k] = strs(v, 64);
+      continue;
+    }
+    if (t === undefined || t === null || typeof v !== t) throw new ArgError(`invalid setting ${k}`);
     out[k] = v;
   }
   return out as Partial<Settings>;
@@ -316,6 +328,12 @@ function wireIpc(): void {
   handle('resumeOutbox', (_e) => ctl().resumeOutbox());
   handle('removeOutbox', (_e, id) => ctl().removeOutbox(str(id, 128)));
   handle('pairProbe', (_e, h, p) => ctl().pairProbe(str(h, 255), int(p)));
+  handle('appSend', (_e, id, msg) => {
+    if (typeof msg !== 'object' || msg === null || Array.isArray(msg) || JSON.stringify(msg).length > 200_000) throw new ArgError('invalid message');
+    return ctl().appSend(str(id, 64), msg as Record<string, unknown>);
+  });
+  handle('ringStop', () => ctl().ringStop());
+  handle('noteDismiss', (_e, k) => ctl().noteDismiss(k === undefined ? undefined : str(k, 300)));
   handle('addByAddress', (_e, h, p, a, id) => ctl().addByAddress(str(h, 255), int(p), str(a, 64), id === undefined ? undefined : str(id, 128)));
   handle('scanSubnet', (_e) => ctl().scanSubnet());
   handle('hubInit', (_e, u) => ctl().hubInit(strs(u, 16)));

@@ -63,12 +63,20 @@ export interface MeshServerOptions {
   accepting?: () => boolean;
   /** Folder sync routes (`sync/...`, trusted peers; LAN server only, never the relay). Without it: 404. */
   sync?: (peer: string, method: string, seg: string[], query: URLSearchParams) => Promise<MeshResponse>;
+  /**
+   * App messages (M10, `POST app` with a small JSON body {kind, ...}): remote control, find my phone,
+   * phone status, notifications. The app decides per kind and per device; without it: 404.
+   */
+  app?: (peer: string, msg: unknown) => Promise<{ status: number; body: unknown }>;
   /** Internet links made on members (M9b, `links/...`; a hub only). Without it: 404. */
   links?: (peer: string, method: string, seg: string[], query: URLSearchParams, body: (cap: number) => Promise<Buffer>) => Promise<MeshResponse>;
 }
 
 /** Max body of a join request (device id, alias, certificate, proof). */
 export const MAX_JOIN_BODY = 64 * 1024;
+
+/** An app message (M10) is small: input events, a notification, a reply. */
+export const MAX_APP_BODY = 256 * 1024;
 
 export interface MeshRequest {
   /** Authenticated caller, or null when the transport could not identify one. */
@@ -436,6 +444,18 @@ export function createMeshHandler(opts: MeshServerOptions): MeshHandler {
     if (seg[0] === 'sync') {
       if (!opts.sync) throw new HttpError(404, 'not-found');
       return opts.sync(peer, method, seg.slice(1), url.searchParams);
+    }
+    if (method === 'POST' && seg.length === 1 && seg[0] === 'app') {
+      if (!opts.app) throw new HttpError(404, 'not-found');
+      let msg: unknown;
+      try {
+        msg = JSON.parse((await readBody(req, MAX_APP_BODY)).toString('utf8'));
+      } catch (e) {
+        if (e instanceof BodyTooLarge) throw e;
+        throw new HttpError(400, 'bad-json');
+      }
+      const r = await opts.app(peer, msg);
+      return reply(r.status, r.body);
     }
     if (seg[0] === 'links') {
       if (!opts.links) throw new HttpError(404, 'not-found');

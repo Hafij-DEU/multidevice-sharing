@@ -309,3 +309,22 @@ describe('Engine pairing code (security review #3)', () => {
     expect(A.e.devices().find((d) => d.deviceId === B.e.identity.deviceId)?.trusted).toBe(true);
   });
 });
+
+describe('app messages (M10)', () => {
+  it('reach the paired device app over the LAN; 404 without a handler', async () => {
+    const A = await make({ alias: 'ay' });
+    await A.e.start();
+    const B = await make({ alias: 'bee' });
+    await B.e.start();
+    await A.e.pairManual('127.0.0.1', B.e.port, 'bee');
+    await B.e.pairManual('127.0.0.1', A.e.port, 'ay');
+    expect(await A.e.appSend(B.e.identity.deviceId, { kind: 'ping' })).toMatchObject({ status: 404 });
+    const seen: unknown[] = [];
+    B.e.setAppHandler(async (peer, msg) => {
+      seen.push([peer, msg]);
+      return { status: 200, body: { pong: true } };
+    });
+    expect(await A.e.appSend(B.e.identity.deviceId, { kind: 'ping', n: 1 })).toEqual({ status: 200, body: { pong: true } });
+    expect(seen).toEqual([[A.e.identity.deviceId, { kind: 'ping', n: 1 }]]);
+  });
+});

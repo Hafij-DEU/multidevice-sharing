@@ -13,7 +13,8 @@ import { CHUNK_SIZE } from '@meshdrop/core/src/chunk.ts';
 import { Engine, liveListener, type EngineEvent, type EngineOptions, type SendItem } from '@meshdrop/core/src/engine.ts';
 import { loadOrCreateIdentity } from '@meshdrop/core/src/identity.ts';
 import { writeFileAtomic } from '@meshdrop/core/src/trust.ts';
-import type { AppState, DeviceView, GuestView, LinkCreateInput, LinkView, ReachInput, ReachView, SendItemInput, Settings, SyncView, TransferView } from '../shared/api.ts';
+import { BUTTONS, KEYSYMS, charKeysym } from './keys.ts';
+import type { AppState, DeviceStatus, DeviceView, PhoneNote, RemoteEvent, GuestView, LinkCreateInput, LinkView, ReachInput, ReachView, SendItemInput, Settings, SyncView, TransferView } from '../shared/api.ts';
 import type { HistoryStore } from './history.ts';
 import { SettingsError, type SettingsStore } from './settings.ts';
 
@@ -31,6 +32,67 @@ export interface Platform {
   revealPath(p: string): void;
   /** A small preview of an image or video as a data: URL, or null when there is none. */
   thumbnail(p: string): Promise<string | null>;
+  // ---- M10: remote control and friends (absent: not available on this platform) ----
+  /** Low-level input (the RemoteDesktop portal); throws with a reason when there is none. */
+  input?(events: InputPrim[]): Promise<void>;
+  laser?(x: number, y: number, on: boolean): void;
+  pcAction?(a: 'lock' | 'sleep' | 'shutdown' | 'restart'): Promise<void>;
+  apps?(): Promise<{ id: string; name: string }[]>;
+  openApp?(id: string): Promise<void>;
+  ring?(on: boolean): void;
+  openUrl?(url: string): Promise<void>;
+  status?(): Promise<Omit<DeviceStatus, 'at'>>;
+}
+
+/** What the input helper understands (see build/meshdrop-input.py). */
+export type InputPrim =
+  | { t: 'move'; dx: number; dy: number }
+  | { t: 'button'; button: number; down: boolean }
+  | { t: 'axis'; dx: number; dy: number }
+  | { t: 'key'; keysym: number; down: boolean };
+
+const MAX_PHONE_NOTES = 50;
+const STATUS_POLL_MS = 60_000;
+const RING_MAX_MS = 60_000;
+
+/** Turns the Remote page's events into input primitives (unknown keys are skipped). */
+export function toPrims(events: RemoteEvent[]): InputPrim[] {
+  const out: InputPrim[] = [];
+  const num = (v: unknown, lim: number) => (typeof v === 'number' && Number.isFinite(v) ? Math.max(-lim, Math.min(lim, v)) : 0);
+  for (const e of events.slice(0, 500)) {
+    switch (e?.t) {
+      case 'move':
+        out.push({ t: 'move', dx: num(e.dx, 2000), dy: num(e.dy, 2000) });
+        break;
+      case 'button':
+      case 'click': {
+        const button = BUTTONS[e.b];
+        if (!button) break;
+        if (e.t === 'button') out.push({ t: 'button', button, down: e.down === true });
+        else out.push({ t: 'button', button, down: true }, { t: 'button', button, down: false });
+        break;
+      }
+      case 'scroll':
+        out.push({ t: 'axis', dx: num(e.dx, 500), dy: num(e.dy, 500) });
+        break;
+      case 'text':
+        for (const ch of String(e.s).slice(0, 2000)) {
+          const keysym = charKeysym(ch);
+          out.push({ t: 'key', keysym, down: true }, { t: 'key', keysym, down: false });
+        }
+        break;
+      case 'key': {
+        const keysym = KEYSYMS[e.k];
+        if (keysym === undefined) break;
+        const mods = (Array.isArray(e.mods) ? e.mods : []).map((m) => KEYSYMS[m]).filter((m): m is number => m !== undefined && [KEYSYMS.Shift, KEYSYMS.Control, KEYSYMS.Alt, KEYSYMS.Super].includes(m));
+        for (const m of mods) out.push({ t: 'key', keysym: m, down: true });
+        out.push({ t: 'key', keysym, down: true }, { t: 'key', keysym, down: false });
+        for (const m of mods.reverse()) out.push({ t: 'key', keysym: m, down: false });
+        break;
+      }
+    }
+  }
+  return out;
 }
 
 export interface ControllerOptions {
@@ -155,6 +217,11 @@ export class AppController extends EventEmitter {
   #shared: SendItemInput[] = [];
   /** The hub's internet links (refreshed on changes and every 30 s: download counts move on their own). */
   #links: LinkView[] = [];
+  #phoneNotes: PhoneNote[] = [];
+  #deviceStatus: Record<string, DeviceStatus> = {};
+  #ringing: NodeJS.Timeout | null = null;
+  #inputError: string | undefined;
+  #statusTimer: NodeJS.Timeout | null = null;
   #linkTimer: NodeJS.Timeout | null = null;
 
   constructor(opts: ControllerOptions) {
@@ -177,6 +244,9 @@ export class AppController extends EventEmitter {
     this.#linkTimer = null;
     if (this.#clipTimer) clearInterval(this.#clipTimer);
     this.#clipTimer = null;
+    if (this.#statusTimer) clearInterval(this.#statusTimer);
+    this.#statusTimer = null;
+    if (this.#ringing) void this.ringStop();
     if (this.#timer) clearTimeout(this.#timer);
     this.#timer = null;
     await this.#halt();
@@ -200,6 +270,11 @@ export class AppController extends EventEmitter {
   async #run(opts: EngineOptions): Promise<Engine> {
     const e = await Engine.create(opts);
     e.on('event', (ev: EngineEvent) => this.#onEvent(ev));
+    e.setAppHandler((peer, msg) => this.#onApp(peer, msg));
+    if (!this.#statusTimer) {
+      this.#statusTimer = setInterval(() => void this.#pollStatus(), STATUS_POLL_MS);
+      this.#statusTimer.unref();
+    }
     try {
       await e.start();
     } catch (x) {
@@ -319,6 +394,10 @@ export class AppController extends EventEmitter {
       outbox: this.#outbox.map((o) => ({ ...o })),
       received: this.#history.received(),
       settings: this.#settings.get(),
+      phoneNotes: this.#phoneNotes.map((n) => ({ ...n })),
+      deviceStatus: { ...this.#deviceStatus },
+      ringing: this.#ringing !== null,
+      ...(this.#inputError ? { inputError: this.#inputError } : {}),
       platform: 'desktop',
       ...(this.#shared.length > 0 ? { sharedPending: this.#shared.length } : {}),
       receiving: this.#mode === 'serving' && !this.#paused && this.#error === undefined,
@@ -849,6 +928,128 @@ export class AppController extends EventEmitter {
     }
     const st = this.#e.reachStatus();
     if (st && (st.state === 'error' || st.state === 'missing' || st.state === 'logged-out')) throw new Error([st.error, st.fix].filter(Boolean).join(' — ') || st.state);
+  }
+
+  // ---- M10: app messages (remote control, ring, status, notifications, link handoff) -------------
+
+  async #onApp(peer: string, raw: unknown): Promise<{ status: number; body: unknown }> {
+    const msg = (typeof raw === 'object' && raw !== null ? raw : {}) as Record<string, unknown>;
+    const s = this.#settings.get();
+    const p = this.#platform;
+    const may = s.remoteFrom.includes(peer);
+    const alias = () => this.#e.devices().find((d) => d.deviceId === peer)?.alias;
+    switch (msg.kind) {
+      case 'input': {
+        if (!may) return { status: 403, body: { error: 'remote-off' } };
+        const events = Array.isArray(msg.events) ? (msg.events as RemoteEvent[]) : [];
+        for (const e of events) if (e?.t === 'laser') p.laser?.(Number(e.x), Number(e.y), e.on === true);
+        const prims = toPrims(events);
+        if (prims.length === 0) return { status: 200, body: { ok: true } };
+        if (!p.input) return { status: 503, body: { error: 'input-unavailable' } };
+        try {
+          await p.input(prims);
+          if (this.#inputError) {
+            this.#inputError = undefined;
+            this.#changed();
+          }
+          return { status: 200, body: { ok: true } };
+        } catch (e) {
+          this.#inputError = e instanceof Error ? e.message : String(e);
+          this.#changed();
+          return { status: 503, body: { error: 'input-unavailable', reason: this.#inputError } };
+        }
+      }
+      case 'action': {
+        if (!may) return { status: 403, body: { error: 'remote-off' } };
+        const a = msg.a;
+        if (a === 'open') {
+          if (typeof msg.app !== 'string' || !/^[A-Za-z0-9._-]{1,200}$/.test(msg.app) || !p.openApp) return { status: 400, body: { error: 'bad-app' } };
+          await p.openApp(msg.app);
+        } else if (a === 'lock' || a === 'sleep' || a === 'shutdown' || a === 'restart') {
+          if (!p.pcAction) return { status: 501, body: { error: 'unsupported' } };
+          await p.pcAction(a);
+        } else return { status: 400, body: { error: 'bad-action' } };
+        return { status: 200, body: { ok: true } };
+      }
+      case 'apps':
+        if (!may) return { status: 403, body: { error: 'remote-off' } };
+        return { status: 200, body: { apps: (await p.apps?.()) ?? [] } };
+      case 'ring':
+        if (msg.on === false) await this.ringStop();
+        else this.#ring(alias());
+        return { status: 200, body: { ok: true } };
+      case 'status':
+        return { status: 200, body: (await p.status?.()) ?? {} };
+      case 'notify': {
+        if (!s.phoneNotifications) return { status: 200, body: { ok: true, shown: false } };
+        const str = (v: unknown, n: number) => (typeof v === 'string' ? v.replace(/[\u0000-\u001f]/g, ' ').slice(0, n) : '');
+        const note: PhoneNote = {
+          from: peer, key: str(msg.key, 300), app: str(msg.app, 100), title: str(msg.title, 200), text: str(msg.text, 2000),
+          time: typeof msg.time === 'number' ? msg.time : Date.now(), replyable: msg.replyable === true,
+          ...(alias() ? { fromAlias: alias()! } : {}),
+        };
+        if (!note.key) return { status: 400, body: { error: 'bad-note' } };
+        this.#phoneNotes = [note, ...this.#phoneNotes.filter((n) => !(n.from === peer && n.key === note.key))].slice(0, MAX_PHONE_NOTES);
+        if (s.notifications) p.notify(`${note.fromAlias ?? 'Phone'} · ${note.app || note.title}`, note.app ? `${note.title}: ${note.text}` : note.text);
+        this.#changed();
+        return { status: 200, body: { ok: true } };
+      }
+      case 'notify-removed':
+        this.#phoneNotes = this.#phoneNotes.filter((n) => !(n.from === peer && n.key === msg.key));
+        this.#changed();
+        return { status: 200, body: { ok: true } };
+      case 'open-url': {
+        const url = typeof msg.url === 'string' ? msg.url : '';
+        if (!s.openLinks) return { status: 403, body: { error: 'handoff-off' } };
+        if (!/^https?:\/\/[^\s]{1,4000}$/i.test(url) || !p.openUrl) return { status: 400, body: { error: 'bad-url' } };
+        await p.openUrl(url);
+        return { status: 200, body: { ok: true } };
+      }
+      default:
+        return { status: 404, body: { error: 'unknown-kind' } };
+    }
+  }
+
+  #ring(from?: string): void {
+    if (this.#ringing) clearTimeout(this.#ringing);
+    this.#platform.ring?.(true);
+    this.#platform.notify('Find my device', `${from ?? 'Your device'} is looking for this ${'PC'}.`);
+    this.#ringing = setTimeout(() => void this.ringStop(), RING_MAX_MS);
+    this.#changed();
+  }
+
+  async ringStop(): Promise<void> {
+    if (this.#ringing) clearTimeout(this.#ringing);
+    this.#ringing = null;
+    this.#platform.ring?.(false);
+    this.#changed();
+  }
+
+  async noteDismiss(key?: string): Promise<void> {
+    this.#phoneNotes = key === undefined ? [] : this.#phoneNotes.filter((n) => n.key !== key);
+    this.#changed();
+  }
+
+  /** Sends an app message to a paired device (the Remote page, Find my device, replies, handoff). */
+  async appSend(deviceId: string, msg: Record<string, unknown>): Promise<{ status: number; body: unknown }> {
+    if (typeof msg.kind !== 'string') throw new Error('bad message');
+    const r = await this.#e.appSend(deviceId, msg);
+    if (msg.kind === 'reply' && r.status === 200) this.#phoneNotes = this.#phoneNotes.filter((n) => !(n.from === deviceId && n.key === msg.key));
+    if (msg.kind === 'status' && r.status === 200 && r.body && typeof r.body === 'object') {
+      this.#deviceStatus = { ...this.#deviceStatus, [deviceId]: { ...(r.body as Omit<DeviceStatus, 'at'>), at: Date.now() } };
+      this.#changed();
+    }
+    return r;
+  }
+
+  /** Asks reachable phones for battery, storage and signal (Devices shows it). */
+  async #pollStatus(): Promise<void> {
+    const e = this.#engine;
+    if (!e || this.#stopped) return;
+    for (const d of e.devices()) {
+      if (!d.trusted || d.reach === 'offline' || d.deviceType !== 'mobile') continue;
+      await this.appSend(d.deviceId, { kind: 'status' }).catch(() => {});
+    }
   }
 
   // ---- internet guest links (made on the hub PC, or sealed here and served by the hub) ------------

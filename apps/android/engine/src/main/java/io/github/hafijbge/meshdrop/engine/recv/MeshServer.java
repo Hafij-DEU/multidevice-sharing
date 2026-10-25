@@ -59,7 +59,16 @@ public final class MeshServer {
         public java.util.function.Supplier<Map<String, Object>> membership = () -> null;
         /** Folder sync routes (sync/..., trusted peers, LAN only: never through the hub). Null: 404. */
         public SyncHandler sync;
+        /** App messages (POST app, M10): remote control, ring, status, notifications. Null: 404. */
+        public volatile AppHandler app;
     }
+
+    /** One app message {kind, ...} from a trusted device; returns {status, body}. */
+    public interface AppHandler {
+        Reply handle(String peer, Object msg) throws IOException;
+    }
+
+    public static final int MAX_APP_BODY = 256 * 1024;
 
     /** Folder sync routes (sync/SyncRoutes). `seg` is the path after sync/. */
     public interface SyncHandler {
@@ -379,6 +388,19 @@ public final class MeshServer {
             Map<String, Object> s = opts.membership.get();
             if (s == null) throw new HttpError(404, "not-found");
             return json(s);
+        }
+        if (m.equals("POST") && seg.length == 1 && seg[0].equals("app")) {
+            AppHandler a = opts.app;
+            if (a == null) throw new HttpError(404, "not-found");
+            Object msg;
+            try {
+                msg = Json.parse(new String(req.body(MAX_APP_BODY), StandardCharsets.UTF_8));
+            } catch (Json.JsonException e) {
+                throw new HttpError(400, "bad-json");
+            }
+            Reply r = a.handle(peer, msg);
+            status[0] = r.status;
+            return r.body;
         }
         if (m.equals("POST") && seg.length == 1 && seg[0].equals("offer")) {
             if (!opts.accepting.getAsBoolean()) throw new HttpError(503, "paused");

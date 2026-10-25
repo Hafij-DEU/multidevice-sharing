@@ -1424,7 +1424,30 @@ export class Engine extends EventEmitter {
       accepting: () => this.accepting,
       sync: syncRoutes({ store: this.syncStore, onPoke: (peer, folder) => this.scheduleSync(folder, peer, 300) }),
       links: (peer, method, seg, q, body) => this.memberLinkRoutes(peer, method, seg, q, body),
+      app: (peer, msg) => (this.appHandler ? this.appHandler(peer, msg) : Promise.resolve({ status: 404, body: { error: 'not-found' } })),
     };
+  }
+
+  /** The app's handler for app messages from trusted devices (M10). */
+  private appHandler: ((peer: string, msg: unknown) => Promise<{ status: number; body: unknown }>) | null = null;
+
+  setAppHandler(h: ((peer: string, msg: unknown) => Promise<{ status: number; body: unknown }>) | null): void {
+    this.appHandler = h;
+  }
+
+  /**
+   * Sends an app message (M10: remote input, ring, status...) to a trusted device, over the LAN when it
+   * is there, else through the hub. Throws when the device cannot be reached now.
+   */
+  async appSend(deviceId: string, msg: Record<string, unknown>, timeoutMs = 10_000): Promise<{ status: number; body: unknown }> {
+    const id = this.resolveDeviceId(deviceId);
+    const t = this.trustSource.get(id);
+    if (!t) throw new Error('That device is not paired.');
+    const route = await this.route(id);
+    if (route.kind !== 'lan' && route.kind !== 'relay') throw new Error('That device is not reachable now.');
+    const tr = this.transportFor(route, { deviceId: id, publicKey: createPublicKey(t.publicKeyPem) }, 0);
+    const r = await tr.request('POST', '/mesh/v1/app', Buffer.from(JSON.stringify(msg)), { 'content-type': 'application/json' }, { timeoutMs });
+    return { status: r.status, body: r.json ?? null };
   }
 
   /**
