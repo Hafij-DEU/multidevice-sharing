@@ -50,6 +50,10 @@ public final class Manifest {
     public boolean backup;
     /** Copied files or an image: the receiver puts them (saved in its inbox) on its clipboard. */
     public boolean clipboardFiles;
+    /** M11 burn after reading: the receiver deletes the files a few minutes after they are first opened. */
+    public boolean burn;
+    /** M11: the receiver prints the files (if it allows printing for the sender). */
+    public boolean print;
 
     public Map<String, Object> toMap() {
         Map<String, Object> m = new LinkedHashMap<>();
@@ -80,6 +84,8 @@ public final class Manifest {
         if (clipboard) m.put("clipboard", true);
         if (backup) m.put("backup", true);
         if (clipboardFiles) m.put("clipboardFiles", true);
+        if (burn) m.put("burn", true);
+        if (print) m.put("print", true);
         return m;
     }
 
@@ -148,6 +154,14 @@ public final class Manifest {
         if (o.containsKey("clipboardFiles")) {
             if (!Boolean.TRUE.equals(o.get("clipboardFiles")) || files.isEmpty()) throw bad("clipboardFiles");
             m.clipboardFiles = true;
+        }
+        if (o.containsKey("burn")) {
+            if (!Boolean.TRUE.equals(o.get("burn"))) throw bad("burn");
+            m.burn = true;
+        }
+        if (o.containsKey("print")) {
+            if (!Boolean.TRUE.equals(o.get("print")) || files.isEmpty()) throw bad("print");
+            m.print = true;
         }
         Set<Long> ids = new HashSet<>();
         for (Object fo : files) {

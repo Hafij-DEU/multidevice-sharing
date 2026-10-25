@@ -11,9 +11,12 @@ const SWITCHES: [keyof S, string][] = [
   ['closeToTray', 'Keep running in the tray when the window is closed'],
   ['autostart', 'Start MeshDrop when I log in'],
   ['startHidden', 'Start in the tray (no window)'],
+  ['sortInbox', 'Smart inbox: put received files in Images, Videos, Audio, Documents, Archives or Other'],
+  ['sendReceipts', 'Read receipts: tell the sender when I open what it sent'],
+  ['printFromDevices', 'Print files my devices send with "Print on PC"'],
 ];
 
-const DESKTOP_ONLY: (keyof S)[] = ['autostart', 'startHidden', 'closeToTray'];
+const DESKTOP_ONLY: (keyof S)[] = ['autostart', 'startHidden', 'closeToTray', 'printFromDevices', 'sortInbox'];
 
 function KeepAlive({ state, run }: { state: AppState; run: Run }) {
   const k = state.keepAlive;

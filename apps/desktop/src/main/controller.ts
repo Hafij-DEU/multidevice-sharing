@@ -14,7 +14,8 @@ import { Engine, liveListener, type EngineEvent, type EngineOptions, type SendIt
 import { loadOrCreateIdentity } from '@meshdrop/core/src/identity.ts';
 import { writeFileAtomic } from '@meshdrop/core/src/trust.ts';
 import { BUTTONS, KEYSYMS, charKeysym } from './keys.ts';
-import type { AppState, DeviceStatus, DeviceView, PhoneNote, RemoteEvent, GuestView, LinkCreateInput, LinkView, ReachInput, ReachView, SendItemInput, Settings, SyncView, TransferView } from '../shared/api.ts';
+import { ensureDir, land } from '@meshdrop/core/src/guest/uploads.ts';
+import type { AppState, DeviceStatus, DeviceView, PhoneNote, RemoteEvent, ScheduledView, SendOptions, GuestView, LinkCreateInput, LinkView, ReachInput, ReachView, SendItemInput, Settings, SyncView, TransferView } from '../shared/api.ts';
 import type { HistoryStore } from './history.ts';
 import { SettingsError, type SettingsStore } from './settings.ts';
 
@@ -32,6 +33,8 @@ export interface Platform {
   revealPath(p: string): void;
   /** A small preview of an image or video as a data: URL, or null when there is none. */
   thumbnail(p: string): Promise<string | null>;
+  /** M11: prints a file on the default printer. */
+  print?(p: string): Promise<void>;
   // ---- M10: remote control and friends (absent: not available on this platform) ----
   /** Low-level input (the RemoteDesktop portal); throws with a reason when there is none. */
   input?(events: InputPrim[]): Promise<void>;
@@ -66,6 +69,23 @@ export type InputPrim =
   | { t: 'key'; keysym: number; down: boolean };
 
 const MAX_PHONE_NOTES = 50;
+/** M11 burn after reading: deleted this long after the first open, or after a week unopened. */
+const BURN_AFTER_OPEN_MS = 5 * 60_000;
+const BURN_UNOPENED_MS = 7 * 86_400_000;
+const M11_TICK_MS = 15_000;
+
+/** M11 smart inbox: the folder a received file goes in. */
+export function inboxCategory(name: string): string {
+  const ext = /\.([^.]+)$/.exec(name)?.[1]?.toLowerCase() ?? '';
+  const of: [string, string[]][] = [
+    ['Images', ['jpg', 'jpeg', 'png', 'gif', 'webp', 'heic', 'heif', 'bmp', 'svg', 'tif', 'tiff', 'avif']],
+    ['Videos', ['mp4', 'mkv', 'mov', 'webm', 'avi', 'm4v', '3gp', 'mpg', 'mpeg']],
+    ['Audio', ['mp3', 'm4a', 'ogg', 'opus', 'wav', 'flac', 'aac', 'oga']],
+    ['Documents', ['pdf', 'doc', 'docx', 'odt', 'txt', 'md', 'xls', 'xlsx', 'ods', 'ppt', 'pptx', 'odp', 'csv', 'rtf', 'epub', 'html']],
+    ['Archives', ['zip', 'rar', '7z', 'tar', 'gz', 'xz', 'bz2', 'zst', 'deb', 'apk', 'iso']],
+  ];
+  return of.find(([, exts]) => exts.includes(ext))?.[0] ?? 'Other';
+}
 const STATUS_POLL_MS = 60_000;
 const RING_MAX_MS = 60_000;
 
@@ -117,6 +137,8 @@ export interface ControllerOptions {
   history: HistoryStore;
   platform: Platform;
   engineOptions?: Partial<EngineOptions>;
+  /** Tests: shorter M11 timings (burn after reading, the sweep, the time-capsule threshold). */
+  timing?: { burnAfterOpenMs?: number; tickMs?: number; scheduleMinMs?: number };
 }
 
 /** Minimum gap between two 'state' events (so at most 10 progress updates per second). */
@@ -238,6 +260,9 @@ export class AppController extends EventEmitter {
   #ringing: NodeJS.Timeout | null = null;
   #inputError: string | undefined;
   #statusTimer: NodeJS.Timeout | null = null;
+  /** M11: time capsule (sends waiting for their time) and the burn-after-reading sweep. */
+  #scheduled: (ScheduledView & { items: SendItemInput[] })[] = [];
+  #m11Timer: NodeJS.Timeout | null = null;
   /** M10b: live streams now (PC sound to a phone, a phone's camera or microphone here). */
   #streams = new Map<string, { kind: 'audio' | 'camera' | 'mic'; peer: string; alias?: string; stop: () => void }>();
   #linkTimer: NodeJS.Timeout | null = null;
@@ -249,7 +274,10 @@ export class AppController extends EventEmitter {
     this.#history = opts.history;
     this.#platform = opts.platform;
     this.#engineOptions = opts.engineOptions ?? {};
+    this.#timing = opts.timing ?? {};
   }
+
+  readonly #timing: NonNullable<ControllerOptions['timing']>;
 
   async start(): Promise<void> {
     this.#stopped = false;
@@ -264,6 +292,8 @@ export class AppController extends EventEmitter {
     this.#clipTimer = null;
     if (this.#statusTimer) clearInterval(this.#statusTimer);
     this.#statusTimer = null;
+    if (this.#m11Timer) clearInterval(this.#m11Timer);
+    this.#m11Timer = null;
     if (this.#ringing) void this.ringStop();
     for (const st of this.#streams.values()) st.stop();
     if (this.#timer) clearTimeout(this.#timer);
@@ -294,6 +324,12 @@ export class AppController extends EventEmitter {
     if (!this.#statusTimer) {
       this.#statusTimer = setInterval(() => void this.#pollStatus(), STATUS_POLL_MS);
       this.#statusTimer.unref();
+    }
+    if (!this.#m11Timer) {
+      this.#loadScheduled();
+      this.#m11Timer = setInterval(() => void this.#m11Tick(), this.#timing.tickMs ?? M11_TICK_MS);
+      this.#m11Timer.unref();
+      void this.#m11Tick();
     }
     try {
       await e.start();
@@ -418,6 +454,7 @@ export class AppController extends EventEmitter {
       deviceStatus: { ...this.#deviceStatus },
       ringing: this.#ringing !== null,
       ...(this.#inputError ? { inputError: this.#inputError } : {}),
+      scheduled: this.#scheduled.map(({ items: _i, ...v }) => ({ ...v, targets: [...v.targets], aliases: [...v.aliases], names: [...v.names] })),
       streams: [...this.#streams].map(([id, s]) => ({ id, kind: s.kind, peer: s.peer, ...(s.alias ? { alias: s.alias } : {}) })),
       platform: 'desktop',
       ...(this.#shared.length > 0 ? { sharedPending: this.#shared.length } : {}),
@@ -669,13 +706,45 @@ export class AppController extends EventEmitter {
   }
 
   #received(ev: Extract<EngineEvent, { source: 'receiver'; type: 'received' }>): void {
+    void this.#receivedAsync(ev);
+  }
+
+  async #receivedAsync(ev: Extract<EngineEvent, { source: 'receiver'; type: 'received' }>): Promise<void> {
     const s = this.#settings.get();
     const alias = this.#aliasOf(ev.from);
+    // M11 smart inbox: files go in a folder by kind (not clipboard, backups or burn-after-reading files).
+    if (s.sortInbox && !ev.clipboardFiles && !ev.backup && !ev.burn && ev.files.length > 0) {
+      const inbox = this.#settings.get().inbox;
+      const moved: string[] = [];
+      for (const f of ev.files) {
+        try {
+          if (relative(inbox, f).includes('/')) {
+            moved.push(f); // inside a received folder: the folder stays together
+            continue;
+          }
+          const dir = await ensureDir(inbox, [inboxCategory(f)]);
+          moved.push(await land(f, dir, f.slice(f.lastIndexOf('/') + 1)));
+        } catch {
+          moved.push(f);
+        }
+      }
+      ev = { ...ev, files: moved };
+    }
     this.#history.addReceived({
       at: Date.now(), from: ev.from, alias, files: [...ev.files],
       ...(ev.text !== undefined ? { text: ev.text } : {}),
       ...(ev.clipboard || ev.clipboardFiles ? { clipboard: true } : {}),
+      sessionId: ev.sessionId,
+      ...(ev.burn ? { burn: true } : {}),
     });
+    this.#changed();
+    // M11 print from another device (only files; a program or script is never "printed").
+    if (ev.print && ev.files.length > 0) {
+      if (s.printFromDevices && this.#platform.print) {
+        for (const f of ev.files) if (!runnable(f)) await this.#platform.print(f).catch(() => {});
+        if (s.notifications) this.#platform.notify('Printing', `${ev.files.length} file${ev.files.length === 1 ? '' : 's'} from ${alias}`);
+      } else if (s.notifications) this.#platform.notify('Not printed', `${alias} asked to print; printing from devices is off in Settings.`);
+    }
     // Clipboard text is only ever placed on the clipboard: never opened, run or interpreted.
     if (ev.clipboard && ev.text !== undefined && s.clipboardReceive) {
       this.#platform.writeClipboard(ev.text);
@@ -720,7 +789,22 @@ export class AppController extends EventEmitter {
     return ids;
   }
 
-  async send(targets: string[] | 'all', items: SendItemInput[]): Promise<void> {
+  async send(targets: string[] | 'all', items: SendItemInput[], opts: SendOptions = {}): Promise<void> {
+    if (opts.at !== undefined && opts.at > Date.now() + (this.#timing.scheduleMinMs ?? 30_000)) {
+      // M11 time capsule: kept here (paths, not copies) and sent at its time while the app runs.
+      const ids = targets === 'all' ? this.#allTargets() : [...new Set(targets.map((q) => this.#e.resolveDeviceId(q)))];
+      if (ids.length === 0) throw new Error('Pick a device.');
+      if (opts.at > Date.now() + 366 * 86_400_000) throw new Error('Pick a time within a year.');
+      this.#scheduled.push({
+        id: randomUUID(), at: opts.at, targets: ids, aliases: ids.map((i) => this.#aliasOf(i)), items: items.map((i) => ({ ...i })),
+        names: items.map((i) => (i.kind === 'text' ? 'Text' : i.path!.slice(i.path!.lastIndexOf('/') + 1))),
+        ...(opts.burn ? { burn: true } : {}), ...(opts.print ? { print: true } : {}),
+      });
+      this.#scheduled.sort((a, b) => a.at - b.at);
+      this.#saveScheduled();
+      this.#changed();
+      return;
+    }
     // LocalSend apps take their own protocol (no outbox, no resume): one send each, reported by a toast.
     if (targets !== 'all') {
       const ls = new Set(this.#e.devices().filter((d) => d.role === 'localsend').map((d) => d.deviceId));
@@ -742,7 +826,7 @@ export class AppController extends EventEmitter {
     const tag = randomUUID();
     const rows = this.#startRows(ids, tag, files, bytes);
     const coreItems: SendItem[] = items.map((it) => (it.kind === 'text' ? { kind: 'text', text: it.text! } : { kind: it.kind, srcPath: it.path! }));
-    this.#e.send(ids, coreItems, { tag }).catch((x: unknown) => this.#failRows(rows, x));
+    this.#e.send(ids, coreItems, { tag, ...(opts.burn ? { burn: true } : {}), ...(opts.print ? { print: true } : {}) }).catch((x: unknown) => this.#failRows(rows, x));
   }
 
   /** What is on the clipboard: copied files first, then an image, then text (null: nothing readable). */
@@ -1013,6 +1097,21 @@ export class AppController extends EventEmitter {
         this.#phoneNotes = [note, ...this.#phoneNotes.filter((n) => !(n.from === peer && n.key === note.key))].slice(0, MAX_PHONE_NOTES);
         if (s.notifications) p.notify(`${note.fromAlias ?? 'Phone'} · ${note.app || note.title}`, note.app ? `${note.title}: ${note.text}` : note.text);
         this.#changed();
+        return { status: 200, body: { ok: true } };
+      }
+      case 'opened': {
+        // M11 read receipt: the device opened what this one sent
+        let any = false;
+        for (const t of this.#transfers.values()) {
+          if (t.direction === 'out' && t.deviceId === peer && t.sessionId === msg.sessionId && t.openedAt === undefined) {
+            t.openedAt = Date.now();
+            any = true;
+          }
+        }
+        if (any) {
+          if (s.notifications) p.notify('Opened', `${alias() ?? 'The device'} opened what you sent.`);
+          this.#changed();
+        }
         return { status: 200, body: { ok: true } };
       }
       case 'notify-removed':
@@ -1309,8 +1408,69 @@ export class AppController extends EventEmitter {
    */
   async openFile(path: string): Promise<void> {
     const p = this.#inInbox(path);
+    this.#opened(p);
     if (runnable(p)) return this.#platform.revealPath(p);
     await this.#platform.openPath(p);
+  }
+
+  /** M11: the first open sends a read receipt and starts the burn-after-reading clock. */
+  #opened(p: string): void {
+    const now = Date.now();
+    const hit = this.#history.update(
+      (r) => r.files.includes(p) && r.openedAt === undefined,
+      (r) => ({ openedAt: now, ...(r.burn ? { burnAt: now + (this.#timing.burnAfterOpenMs ?? BURN_AFTER_OPEN_MS) } : {}) }),
+    );
+    for (const r of hit) {
+      if (this.#settings.get().sendReceipts && r.sessionId && /^[0-9a-f]{64}$/.test(r.from)) {
+        void this.#e.appSend(r.from, { kind: 'opened', sessionId: r.sessionId }).catch(() => {});
+      }
+    }
+    if (hit.length) this.#changed();
+  }
+
+  /** M11: deletes burned files whose time came, and sends scheduled sends whose time came. */
+  async #m11Tick(): Promise<void> {
+    const now = Date.now();
+    const isDue = (r: { burn?: boolean; burned?: boolean; burnAt?: number; at: number }) => r.burn === true && !r.burned && ((r.burnAt !== undefined && r.burnAt <= now) || r.at + BURN_UNOPENED_MS <= now);
+    const due = this.#history.received().filter(isDue);
+    for (const r of due) for (const f of r.files) rmSync(f, { force: true });
+    if (due.length) {
+      this.#history.update(isDue, () => ({ burned: true, files: [], text: undefined }));
+      this.#changed();
+    }
+    for (const job of this.#scheduled.filter((j) => j.at <= now)) {
+      this.#scheduled = this.#scheduled.filter((j) => j !== job);
+      this.#saveScheduled();
+      try {
+        await this.send(job.targets, job.items, { ...(job.burn ? { burn: true } : {}), ...(job.print ? { print: true } : {}) });
+      } catch (e) {
+        if (this.#settings.get().notifications) this.#platform.notify('Scheduled send failed', e instanceof Error ? e.message : String(e));
+      }
+      this.#changed();
+    }
+  }
+
+  #scheduledFile(): string {
+    return join(this.#home, 'scheduled.json');
+  }
+
+  #loadScheduled(): void {
+    try {
+      const j = JSON.parse(readFileSync(this.#scheduledFile(), 'utf8')) as unknown;
+      if (Array.isArray(j)) this.#scheduled = j.filter((x) => x && typeof x.id === 'string' && typeof x.at === 'number' && Array.isArray(x.items) && Array.isArray(x.targets));
+    } catch {
+      this.#scheduled = [];
+    }
+  }
+
+  #saveScheduled(): void {
+    writeFileAtomic(this.#scheduledFile(), JSON.stringify(this.#scheduled));
+  }
+
+  async scheduleCancel(id: string): Promise<void> {
+    this.#scheduled = this.#scheduled.filter((j) => j.id !== id);
+    this.#saveScheduled();
+    this.#changed();
   }
 
   async thumb(path: string): Promise<string | null> {

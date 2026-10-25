@@ -42,6 +42,12 @@ function Record({ r, run, android }: { r: ReceivedRecord; run: Run; android: boo
         <span>
           From <Peer text={r.alias} /> <span className="muted">· {fmtTime(r.at)}</span>
           {r.clipboard && <span className="badge">Clipboard</span>}
+          {r.burn && !r.burned && (
+            <span className="badge burn" title="Burn after reading">
+              🔥 {r.burnAt ? `deleted ${fmtTime(r.burnAt)}` : 'deleted 5 min after you open it'}
+            </span>
+          )}
+          {r.burned && <span className="badge">Deleted after reading</span>}
         </span>
         {r.files.length > 0 && <span className="muted">{r.files.length} file{r.files.length === 1 ? '' : 's'}</span>}
       </div>

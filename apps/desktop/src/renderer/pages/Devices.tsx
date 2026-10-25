@@ -22,6 +22,48 @@ function parseAddress(s: string): { host: string; port: number } | null {
   return { host, port: port ? Number(port) : DEFAULT_PORT };
 }
 
+/** M11 voice notes: record here, then it goes in the list like a file. */
+function VoiceNote({ run, onDone }: { run: Run; onDone: (path: string) => void }) {
+  const [rec, setRec] = useState<{ r: MediaRecorder; started: number } | null>(null);
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => {
+    if (!rec) return;
+    const t = setInterval(() => setNow(Date.now()), 500);
+    return () => clearInterval(t);
+  }, [rec]);
+  const start = () =>
+    void run(async () => {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const type = ['audio/webm;codecs=opus', 'audio/ogg;codecs=opus', 'audio/webm'].find((t) => MediaRecorder.isTypeSupported(t)) ?? '';
+      const r = new MediaRecorder(stream, type ? { mimeType: type } : {});
+      const parts: Blob[] = [];
+      r.ondataavailable = (e) => parts.push(e.data);
+      r.onstop = () => {
+        stream.getTracks().forEach((t) => t.stop());
+        void run(async () => {
+          const blob = new Blob(parts, { type: r.mimeType });
+          const buf = new Uint8Array(await blob.arrayBuffer());
+          let bin = '';
+          for (let i = 0; i < buf.length; i += 0x8000) bin += String.fromCharCode(...buf.subarray(i, i + 0x8000));
+          const ext = r.mimeType.includes('ogg') ? 'ogg' : 'webm';
+          const stamp = new Date().toISOString().slice(0, 19).replace(/[T:]/g, '-');
+          onDone(await window.meshdrop.saveBlob(`Voice note ${stamp}.${ext}`, btoa(bin)));
+        });
+      };
+      r.start();
+      setRec({ r, started: Date.now() });
+    });
+  if (rec) {
+    const s = Math.floor((now - rec.started) / 1000);
+    return (
+      <button className="danger" onClick={() => (rec.r.stop(), setRec(null))}>
+        ■ Stop recording {Math.floor(s / 60)}:{String(s % 60).padStart(2, '0')}
+      </button>
+    );
+  }
+  return <button onClick={start}>🎙 Voice note</button>;
+}
+
 /**
  * One QR for all your devices: the PC shows a group invite (making itself the hub first if there is
  * no mesh yet); a phone scans it. Every device that joins sees every other one, no pairing needed.
@@ -83,6 +125,10 @@ export function Devices({ state, run }: { state: AppState; run: Run }) {
   const [text, setText] = useState<string | null>(null);
   const [addr, setAddr] = useState('');
   const [name, setName] = useState('');
+  const [burn, setBurn] = useState(false);
+  const [print, setPrint] = useState(false);
+  const [later, setLater] = useState('');
+  const [showOpts, setShowOpts] = useState(false);
   const [pairing, setPairing] = useState<{ host: string; port: number; name: string; deviceId: string; alias: string; code: string } | null>(null);
   const [busy, setBusy] = useState(false);
   const [adding, setAdding] = useState(state.devices.every((d) => !d.trusted && d.role !== 'localsend'));
@@ -119,11 +165,14 @@ export function Devices({ state, run }: { state: AppState; run: Run }) {
 
   const send = async () => {
     setBusy(true);
-    const ok = await run(() => window.meshdrop.send(all ? 'all' : targets, payload), 'Sending…');
+    const at = later ? new Date(later).getTime() : undefined;
+    const opts = { ...(burn ? { burn: true } : {}), ...(print ? { print: true } : {}), ...(at && at > Date.now() ? { at } : {}) };
+    const ok = await run(() => window.meshdrop.send(all ? 'all' : targets, payload, opts), at && at > Date.now() ? `Scheduled for ${new Date(at).toLocaleString()}` : 'Sending…');
     setBusy(false);
     if (ok !== undefined) {
       setItems([]);
       setText(null);
+      setLater('');
     }
   };
 
@@ -195,7 +244,30 @@ export function Devices({ state, run }: { state: AppState; run: Run }) {
         <button onClick={() => void run(() => window.meshdrop.sendClipboard(all ? 'all' : targets), 'Clipboard sent')} disabled={targets.length === 0}>
           Clipboard
         </button>
+        <VoiceNote run={run} onDone={(path) => add([{ kind: 'file', path }])} />
       </div>
+      <button className="link" aria-expanded={showOpts} onClick={() => setShowOpts(!showOpts)}>
+        {showOpts ? '▾' : '▸'} Options{burn || print || later ? ' (on)' : ''}
+      </button>
+      {showOpts && (
+        <div className="send-options">
+          <label className="toggle">
+            <input type="checkbox" checked={burn} onChange={(e) => setBurn(e.target.checked)} /> 🔥 Burn after reading (deleted 5 minutes after it is opened)
+          </label>
+          <label className="toggle">
+            <input type="checkbox" checked={print} onChange={(e) => setPrint(e.target.checked)} /> 🖨 Print on the PC
+          </label>
+          <label className="row">
+            ⏰ Send later
+            <input aria-label="Send at" type="datetime-local" value={later} onChange={(e) => setLater(e.target.value)} />
+            {later && (
+              <button className="link" onClick={() => setLater('')}>
+                now
+              </button>
+            )}
+          </label>
+        </div>
+      )}
       {text !== null && <textarea aria-label="Text to send" value={text} onChange={(e) => setText(e.target.value)} rows={3} placeholder="Type a message or paste a link" />}
       {items.length > 0 && (
         <ul className="items">
@@ -228,6 +300,23 @@ export function Devices({ state, run }: { state: AppState; run: Run }) {
         </button>
       )}
       {targets.length === 0 && trusted.length > 0 && <p className="muted hint">Pick a device above. An offline one gets it when it is back.</p>}
+
+      {(state.scheduled ?? []).length > 0 && (
+        <>
+          <h2>Scheduled</h2>
+          <ul className="list">
+            {(state.scheduled ?? []).map((j) => (
+              <li key={j.id} className="row space">
+                <span>
+                  ⏰ {new Date(j.at).toLocaleString()} → {j.aliases.join(', ')} <span className="muted">· {j.names.join(', ')}</span>
+                </span>
+                <button onClick={() => void run(() => window.meshdrop.scheduleCancel(j.id), 'Cancelled')}>Cancel</button>
+              </li>
+            ))}
+          </ul>
+          {state.platform === 'android' && <p className="muted hint">Keep MeshDrop running: scheduled sends go out from this device.</p>}
+        </>
+      )}
 
       {recent.length > 0 && (
         <>

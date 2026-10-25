@@ -1043,7 +1043,7 @@ export class Engine extends EventEmitter {
    * error:'offline'} and the send waits in the outbox until the device shows up (auto-resume).
    * Results are in request order; duplicates are sent once.
    */
-  async send(deviceIds: string[] | 'all', items: SendItem[], opts: { tag?: string; backup?: boolean; clipboardFiles?: boolean } = {}): Promise<SendResult[]> {
+  async send(deviceIds: string[] | 'all', items: SendItem[], opts: { tag?: string; backup?: boolean; clipboardFiles?: boolean; burn?: boolean; print?: boolean } = {}): Promise<SendResult[]> {
     const tag = opts.tag !== undefined ? { tag: opts.tag } : {};
     const r = this.requireRunning();
     let ids: string[];
@@ -1077,6 +1077,8 @@ export class Engine extends EventEmitter {
               onProgress: progress,
               ...(opts.backup ? { backup: true } : {}),
               ...(opts.clipboardFiles ? { clipboardFiles: true } : {}),
+              ...(opts.burn ? { burn: true } : {}),
+              ...(opts.print ? { print: true } : {}),
               transport: (t) => {
                 const route = routes.get(t.deviceId)!;
                 if (route.kind === 'unreachable') throw new Error('offline');
@@ -1097,6 +1099,7 @@ export class Engine extends EventEmitter {
         const t = targets.find((x) => x.deviceId === res.deviceId)!;
         sent[i] = await sendTo(this.identity, t, items, {
           outbox: this.outbox, signal: r.abort.signal, ...(opts.backup ? { backup: true } : {}), ...(opts.clipboardFiles ? { clipboardFiles: true } : {}),
+          ...(opts.burn ? { burn: true } : {}), ...(opts.print ? { print: true } : {}),
           onProgress: (p) => progress({ deviceId: t.deviceId, ...p }),
           transport: (tt) => this.transportFor(route, tt, hb),
         });

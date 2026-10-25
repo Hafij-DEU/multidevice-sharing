@@ -32,6 +32,9 @@ public final class Prepared {
     public boolean backup;
     /** Copied files: set by the engine before sending (manifest clipboardFiles). */
     public boolean clipboardFiles;
+    /** M11: burn after reading / print on the receiver. */
+    public boolean burn;
+    public boolean print;
     public String itemsKey;
     final Map<Long, Source> sources = new HashMap<>();
     final Map<Long, long[]> stats = new HashMap<>(); // size, mtime
@@ -157,6 +160,8 @@ public final class Prepared {
         m.clipboard = clipboard;
         m.backup = backup;
         m.clipboardFiles = clipboardFiles && !files.isEmpty();
+        m.burn = burn;
+        m.print = print && !files.isEmpty();
         return m;
     }
 }

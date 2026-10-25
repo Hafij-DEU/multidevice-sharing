@@ -353,3 +353,20 @@ describe('live streams (M10b)', () => {
     expect((await get(C.e, '/mesh/v1/stream/echo')).status).toBe(403);
   });
 });
+
+describe('burn and print flags (M11)', () => {
+  it('reach the receiver with the received event', async () => {
+    const A = await make({ alias: 'ay' });
+    await A.e.start();
+    const B = await make({ alias: 'bee' });
+    await B.e.start();
+    await A.e.pairManual('127.0.0.1', B.e.port, 'bee');
+    await B.e.pairManual('127.0.0.1', A.e.port, 'ay');
+    const f = join(tmpDir(), 'secret.txt');
+    writeFileSync(f, 'read me once');
+    const [r] = await A.e.send([B.e.identity.deviceId], [{ kind: 'file', srcPath: f }], { burn: true, print: true });
+    expect(r).toMatchObject({ status: 'done' });
+    await until(() => B.events.some((x) => x.source === 'receiver' && x.type === 'received'));
+    expect(B.events.find((x) => x.source === 'receiver' && x.type === 'received')).toMatchObject({ burn: true, print: true });
+  });
+});

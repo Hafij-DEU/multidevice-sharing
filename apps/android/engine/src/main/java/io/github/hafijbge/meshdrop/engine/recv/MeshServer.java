@@ -583,6 +583,8 @@ public final class MeshServer {
             if (s.manifest.text != null) ev.put("text", s.manifest.text);
             if (s.manifest.clipboard) ev.put("clipboard", true);
             if (s.manifest.clipboardFiles) ev.put("clipboardFiles", true);
+            if (s.manifest.burn) ev.put("burn", true);
+            if (s.manifest.print) ev.put("print", true);
             emit(ev);
             live.remove(sid);
             try {

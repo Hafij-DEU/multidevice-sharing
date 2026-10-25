@@ -33,6 +33,10 @@ export interface Manifest {
   backup?: true;
   /** Copied files or an image: the receiver puts the files (saved in its inbox) on its clipboard. */
   clipboardFiles?: true;
+  /** M11 burn after reading: the receiver deletes the files a few minutes after they are first opened. */
+  burn?: true;
+  /** M11 print: the receiver prints the files (if it allows printing for the sender). */
+  print?: true;
 }
 export interface Offer { v: 1; sessionId: string; from: string; to: string; enc: string /*b64*/; sealedManifest: string /*b64*/ }
 export interface HaveMap { [fileId: number]: number[] } // chunk indices already verified by receiver
@@ -95,7 +99,7 @@ const isObj = (x: unknown): x is Record<string, unknown> => typeof x === 'object
 function normalizeManifest(x: unknown): Manifest {
   if (!isObj(x)) bad('not an object');
   if (x.v !== 1) bad('v must be 1');
-  const { sessionId, from, to, createdAt, files, dirs, text, clipboard, backup, clipboardFiles } = x;
+  const { sessionId, from, to, createdAt, files, dirs, text, clipboard, backup, clipboardFiles, burn, print } = x;
   if (typeof sessionId !== 'string' || !SESSION_ID_RE.test(sessionId)) bad('sessionId');
   if (typeof from !== 'string' || !DEVICE_ID_HEX.test(from)) bad('from');
   if (typeof to !== 'string' || !DEVICE_ID_HEX.test(to)) bad('to');
@@ -109,6 +113,8 @@ function normalizeManifest(x: unknown): Manifest {
   if (clipboard !== undefined && (clipboard !== true || text === undefined || files.length > 0 || dirs.length > 0)) bad('clipboard');
   if (backup !== undefined && backup !== true) bad('backup');
   if (clipboardFiles !== undefined && (clipboardFiles !== true || files.length === 0)) bad('clipboardFiles');
+  if (burn !== undefined && burn !== true) bad('burn');
+  if (print !== undefined && (print !== true || files.length === 0)) bad('print');
   const seenIds = new Set<number>();
   const outFiles: FileEntry[] = files.map((f: unknown) => {
     if (!isObj(f)) bad('file entry');
@@ -131,6 +137,8 @@ function normalizeManifest(x: unknown): Manifest {
   if (clipboard === true) m.clipboard = true;
   if (backup === true) m.backup = true;
   if (clipboardFiles === true) m.clipboardFiles = true;
+  if (burn === true) m.burn = true;
+  if (print === true) m.print = true;
   return m;
 }
 

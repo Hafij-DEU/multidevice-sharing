@@ -32,6 +32,9 @@ export function defaultSettings(over: Partial<Settings> = {}): Settings {
     remoteFrom: [],
     openLinks: true,
     phoneNotifications: true,
+    printFromDevices: true,
+    sortInbox: false,
+    sendReceipts: true,
     ...over,
   };
 }
@@ -71,7 +74,7 @@ function validate(s: Settings): void {
   if (!Array.isArray(s.remoteFrom) || s.remoteFrom.length > 64 || s.remoteFrom.some((d) => typeof d !== 'string' || !/^[0-9a-f]{64}$/.test(d))) {
     throw new SettingsError('Invalid list of devices that may control this PC.');
   }
-  for (const k of ['discovery', 'autostart', 'startHidden', 'closeToTray', 'clipboardReceive', 'clipboardSync', 'notifications', 'openLinks', 'phoneNotifications'] as const) {
+  for (const k of ['discovery', 'autostart', 'startHidden', 'closeToTray', 'clipboardReceive', 'clipboardSync', 'notifications', 'openLinks', 'phoneNotifications', 'printFromDevices', 'sortInbox', 'sendReceipts'] as const) {
     if (typeof s[k] !== 'boolean') throw new SettingsError(`Invalid value for ${k}.`);
   }
 }

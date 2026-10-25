@@ -39,7 +39,7 @@ export type ReceiverEvent =
   /** `path` / `files` are absolute local paths (the wire carries them relative to the inbox root). */
   | { type: 'file'; sessionId: string; from: string; fileId: number; path: string }
   /** backup: a photo backup, filed in the backup folder (set by the engine, never by the handler). */
-  | { type: 'received'; sessionId: string; from: string; files: string[]; text?: string; clipboard?: true; backup?: true; clipboardFiles?: true }
+  | { type: 'received'; sessionId: string; from: string; files: string[]; text?: string; clipboard?: true; backup?: true; clipboardFiles?: true; burn?: true; print?: true }
   | { type: 'error'; sessionId: string; from: string; code: string }
   | { type: 'cancelled'; sessionId: string; from: string };
 
@@ -389,6 +389,8 @@ export function createMeshHandler(opts: MeshServerOptions): MeshHandler {
       if (s.manifest.text !== undefined) ev.text = s.manifest.text;
       if (s.manifest.clipboard) ev.clipboard = true;
       if (s.manifest.clipboardFiles) ev.clipboardFiles = true;
+      if (s.manifest.burn) ev.burn = true;
+      if (s.manifest.print) ev.print = true;
       emit(ev);
       live.delete(sessionId);
       try {

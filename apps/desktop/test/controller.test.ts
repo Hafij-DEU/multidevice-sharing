@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer, type Server } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -44,6 +44,7 @@ interface FakePlatform extends Platform {
   rings: boolean[];
   urls: string[];
   camera: Buffer[];
+  printed: string[];
 }
 function fakePlatform(): FakePlatform {
   const p: FakePlatform = {
@@ -67,6 +68,8 @@ function fakePlatform(): FakePlatform {
     rings: [],
     urls: [],
     camera: [],
+    printed: [],
+    print: async (f) => void p.printed.push(f),
     captureAudio: (): MediaPipe => {
       const out = new PassThrough();
       out.write(Buffer.alloc(1920, 7));
@@ -99,6 +102,7 @@ async function make(alias: string, over: Partial<Settings> = {}, home = tmpDir()
     history: new HistoryStore(join(home, 'desktop-history.json')),
     platform: p,
     engineOptions: { hub: { ingressPort: 0 }, hubBackoffMs: [50, 100], allowLoopbackHubUrls: true, guest: { port: 0 } },
+    timing: { burnAfterOpenMs: 300, tickMs: 100, scheduleMinMs: 200 },
   });
   ctls.push(c);
   await c.start();
@@ -536,5 +540,39 @@ describe('AppController internet access', () => {
     const r = await lan().request('POST', '/mesh/v1/stream/camera', jpeg, { 'content-type': 'image/jpeg' }, { timeoutMs: 5000 });
     expect(r.status).toBe(200);
     expect(Buffer.concat(B.p.camera)).toEqual(jpeg);
+  });
+
+  it('M11: burn after reading, read receipts, print, smart inbox and send later', async () => {
+    const A = await make('ay');
+    const B = await make('bee', { sortInbox: true });
+    await pair(A.c, B.c);
+    const bId = B.c.state().self.deviceId;
+    const dir = tmpDir();
+    const photo = join(dir, 'photo.jpg');
+    writeFileSync(photo, 'jpeg');
+    await A.c.send([bId], [{ kind: 'file', path: photo }]);
+    await until(() => B.c.state().received.length === 1);
+    expect(B.c.state().received[0]!.files).toEqual([join(B.inbox, 'Images', 'photo.jpg')]);
+
+    const secret = join(dir, 'secret.txt');
+    writeFileSync(secret, 'read once');
+    await A.c.send([bId], [{ kind: 'file', path: secret }], { burn: true, print: true });
+    await until(() => B.c.state().received.length === 2);
+    const rec = B.c.state().received[0]!;
+    expect(rec).toMatchObject({ burn: true });
+    expect(rec.files[0]).toBe(join(B.inbox, 'secret.txt')); // burn files are not sorted
+    expect(B.p.printed).toEqual([rec.files[0]]);
+    await B.c.openFile(rec.files[0]!);
+    await until(() => A.c.state().transfers.some((t) => t.openedAt !== undefined));
+    await until(() => B.c.state().received[0]!.burned === true, 5000);
+    expect(existsSync(rec.files[0]!)).toBe(false);
+
+    const later = join(dir, 'later.txt');
+    writeFileSync(later, 'from the past');
+    await A.c.send([bId], [{ kind: 'file', path: later }], { at: Date.now() + 600 });
+    expect(A.c.state().scheduled).toEqual([expect.objectContaining({ targets: [bId], names: ['later.txt'] })]);
+    expect(B.c.state().received.length).toBe(2);
+    await until(() => B.c.state().received.length === 3, 8000);
+    expect(A.c.state().scheduled).toEqual([]);
   });
 });

@@ -41,6 +41,8 @@ export interface TransferView {
   bytesPerSec?: number;
   error?: string;
   startedAt: number;
+  /** M11 read receipt: when the receiver first opened what was sent. */
+  openedAt?: number;
 }
 
 export interface ReceivedRecord {
@@ -50,6 +52,36 @@ export interface ReceivedRecord {
   files: string[];
   text?: string;
   clipboard?: boolean;
+  /** M11: the session (for read receipts). */
+  sessionId?: string;
+  /** M11 burn after reading: the files go a few minutes after the first open (or after 7 days). */
+  burn?: boolean;
+  /** When the files will be deleted (set at the first open). */
+  burnAt?: number;
+  /** The files were deleted (burn after reading). */
+  burned?: boolean;
+  openedAt?: number;
+}
+
+/** M11: options of one send. */
+export interface SendOptions {
+  /** Burn after reading on the receiver. */
+  burn?: boolean;
+  /** Print on the receiver (a PC that allows it). */
+  print?: boolean;
+  /** Time capsule: send at this time (ms) instead of now; the app keeps it until then. */
+  at?: number;
+}
+
+/** M11: a send waiting for its time (time capsule). */
+export interface ScheduledView {
+  id: string;
+  at: number;
+  targets: string[];
+  aliases: string[];
+  names: string[];
+  burn?: boolean;
+  print?: boolean;
 }
 
 export interface Settings {
@@ -72,6 +104,12 @@ export interface Settings {
   openLinks: boolean;
   /** Show notifications forwarded from your phones. */
   phoneNotifications: boolean;
+  /** M11: print files your devices send with "Print". */
+  printFromDevices: boolean;
+  /** M11 smart inbox: received files go in Images, Videos, Audio, Documents, Archives or Other. */
+  sortInbox: boolean;
+  /** M11 read receipts: tell the sender when you open what it sent. */
+  sendReceipts: boolean;
   /** Android: the devices this phone forwards its notifications to. */
   notifyTo?: string[];
 }
@@ -214,6 +252,8 @@ export interface AppState {
   notifyAccess?: boolean;
   /** M10b: live streams (PC sound to a phone; a phone's camera or microphone used here). */
   streams?: { id: string; kind: 'audio' | 'camera' | 'mic'; peer: string; alias?: string }[];
+  /** M11: sends waiting for their time. */
+  scheduled?: ScheduledView[];
   /** M10b Android: what this phone streams now. */
   casting?: { audioFrom?: string; cameraTo?: string; micTo?: string };
 }
@@ -267,7 +307,11 @@ export interface DesktopApi {
   pickSavePath(defaultName: string): Promise<string | null>;
   pickOpenPath(): Promise<string | null>;
   pathForFile(file: File): string;
-  send(targets: string[] | 'all', items: SendItemInput[]): Promise<void>;
+  send(targets: string[] | 'all', items: SendItemInput[], opts?: SendOptions): Promise<void>;
+  /** M11: cancels a scheduled send. */
+  scheduleCancel(id: string): Promise<void>;
+  /** M11 voice notes: saves recorded bytes (base64) as a file to send; returns its path. */
+  saveBlob(name: string, base64: string): Promise<string>;
   sendClipboard(targets: string[] | 'all'): Promise<void>;
   resumeOutbox(): Promise<void>;
   removeOutbox(sessionId: string): Promise<void>;

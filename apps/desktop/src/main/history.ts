@@ -30,6 +30,19 @@ export class HistoryStore {
     writeFileAtomic(this.#file, JSON.stringify(this.#records));
   }
 
+  /** Changes the records `pick` matches (M11: receipts, burn after reading). */
+  update(pick: (r: ReceivedRecord) => boolean, patch: (r: ReceivedRecord) => Partial<ReceivedRecord>): ReceivedRecord[] {
+    const hit: ReceivedRecord[] = [];
+    this.#records = this.#records.map((r) => {
+      if (!pick(r)) return r;
+      const n = { ...r, ...patch(r) };
+      hit.push(n);
+      return n;
+    });
+    if (hit.length) writeFileAtomic(this.#file, JSON.stringify(this.#records));
+    return hit;
+  }
+
   received(): ReceivedRecord[] {
     return this.#records.map((r) => ({ ...r, files: [...r.files] }));
   }

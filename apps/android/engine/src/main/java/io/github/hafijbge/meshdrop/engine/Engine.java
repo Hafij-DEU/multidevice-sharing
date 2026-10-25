@@ -1717,7 +1717,16 @@ public final class Engine {
         return send(ids, items, tag, false, true);
     }
 
+    /** M11: with burn after reading and/or print on the receiver. */
+    public CompletableFuture<List<SendResult>> sendWith(List<String> ids, List<SendItem> items, String tag, boolean burn, boolean print) {
+        return send(ids, items, tag, false, false, burn, print);
+    }
+
     private CompletableFuture<List<SendResult>> send(List<String> ids, List<SendItem> items, String tag, boolean backup, boolean clipboardFiles) {
+        return send(ids, items, tag, backup, clipboardFiles, false, false);
+    }
+
+    private CompletableFuture<List<SendResult>> send(List<String> ids, List<SendItem> items, String tag, boolean backup, boolean clipboardFiles, boolean burn, boolean print) {
         Discovery d = requireRunning();
         List<String> targets = new ArrayList<>();
         if (ids == null) {
@@ -1745,6 +1754,8 @@ public final class Engine {
                         p = Prepared.of(items, control.pausedFlag());
                         p.backup = backup;
                         p.clipboardFiles = clipboardFiles;
+                        p.burn = burn;
+                        p.print = print;
                     } catch (IOException | RuntimeException x) {
                         for (String id : targets) out.add(new SendResult(id, control.paused() ? "cancelled" : "failed", "", control.paused() ? null : String.valueOf(x.getMessage())));
                         for (SendResult r : out) emitResult(r, tag);

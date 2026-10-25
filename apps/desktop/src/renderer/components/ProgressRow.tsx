@@ -37,6 +37,7 @@ export function ProgressRow({ t }: { t: TransferView }) {
         </span>
         {speed && <span className="speed">{speed}</span>}
         <span className="status">{STATUS[t.status]}</span>
+        {t.openedAt !== undefined && <span className="badge opened">Opened</span>}
       </div>
       <div className="bar" role="progressbar" aria-valuenow={pct} aria-valuemin={0} aria-valuemax={100}>
         <div style={{ width: `${pct}%` }} />

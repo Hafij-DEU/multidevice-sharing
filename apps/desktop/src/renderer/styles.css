@@ -248,3 +248,9 @@ code { font-size: 12.5px; padding: 1px 6px; border-radius: 6px; background: colo
 .notes li { border-bottom: 1px solid var(--border); padding: 8px 0; }
 .list.apps { max-height: 260px; overflow: auto; }
 .device-status { font-size: 12px; }
+
+/* M11 */
+.send-options { display: grid; gap: 6px; padding: 8px 0; }
+.send-options input[type='datetime-local'] { margin-left: 8px; }
+.badge.burn { background: color-mix(in srgb, #f97316 18%, transparent); }
+.badge.opened { background: color-mix(in srgb, var(--ok) 18%, transparent); margin-left: 6px; }

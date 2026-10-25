@@ -77,6 +77,9 @@ export interface SendOptions {
   backup?: boolean;
   /** Copied files/image: the receiver puts them on its clipboard (manifest `clipboardFiles`). */
   clipboardFiles?: boolean;
+  /** M11: burn after reading / print on the receiver (manifest `burn`, `print`). */
+  burn?: boolean;
+  print?: boolean;
 }
 
 export const DEFAULT_RETRY_DELAYS_MS: readonly number[] = Object.freeze([500, 1000, 2000]);
@@ -610,6 +613,8 @@ export async function sendPrepared(id: Identity, t: Target, p: PreparedItems, op
       const manifest = manifestFor(p, id.deviceId, t.deviceId);
       if (opts.backup) manifest.backup = true;
       if (opts.clipboardFiles && manifest.files.length > 0) manifest.clipboardFiles = true;
+      if (opts.burn) manifest.burn = true;
+      if (opts.print && manifest.files.length > 0) manifest.print = true;
       sessionId = manifest.sessionId;
       const { offer, ctx } = createOffer(id, t.publicKey, manifest);
       entry = {

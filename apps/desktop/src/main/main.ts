@@ -4,7 +4,7 @@
 import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeImage, Notification, shell, Tray, type IpcMainInvokeEvent } from 'electron';
 import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { existsSync, statSync } from 'node:fs';
+import { existsSync, mkdirSync, statSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -211,6 +211,11 @@ const platform: Platform = {
     openUrl: (u) => shell.openExternal(u),
   }),
   ...mediaPlatform(),
+  print: async (p) => {
+    // received files are absolute paths in the inbox (never an option to lp)
+    if (!p.startsWith('/')) throw new Error('bad path');
+    await promisify(execFile)('lp', [p], { timeout: 30_000 });
+  },
 };
 
 // ---- IPC: argument checks -------------------------------------------------------------------------
@@ -238,10 +243,18 @@ const items = (x: unknown): SendItemInput[] => {
     throw new ArgError('invalid argument');
   });
 };
+const sendOpts = (x: unknown): { burn?: boolean; print?: boolean; at?: number } => {
+  if (x === undefined || x === null) return {};
+  if (typeof x !== 'object' || Array.isArray(x)) throw new ArgError('invalid options');
+  const o = x as Record<string, unknown>;
+  if (o.at !== undefined && (typeof o.at !== 'number' || !Number.isFinite(o.at))) throw new ArgError('invalid time');
+  return { ...(o.burn === true ? { burn: true } : {}), ...(o.print === true ? { print: true } : {}), ...(typeof o.at === 'number' ? { at: o.at } : {}) };
+};
 const SETTING_TYPES: Record<keyof Settings, 'string' | 'number' | 'boolean' | 'string[]' | null> = {
   alias: 'string', inbox: 'string', port: 'number', discovery: 'boolean', autostart: 'boolean',
   startHidden: 'boolean', closeToTray: 'boolean', clipboardReceive: 'boolean', clipboardSync: 'boolean', notifications: 'boolean',
   guestMinutes: 'number', remoteFrom: 'string[]', openLinks: 'boolean', phoneNotifications: 'boolean', notifyTo: null,
+  printFromDevices: 'boolean', sortInbox: 'boolean', sendReceipts: 'boolean',
 };
 const settingsPatch = (x: unknown): Partial<Settings> => {
   if (typeof x !== 'object' || x === null || Array.isArray(x)) throw new ArgError('invalid argument');
@@ -324,7 +337,19 @@ function wireIpc(): void {
     const r = await dialog.showOpenDialog(owner(e), { properties: ['openFile'] });
     return r.canceled ? null : (r.filePaths[0] ?? null);
   });
-  handle('send', (_e, t, i) => ctl().send(targets(t), items(i)));
+  handle('send', (_e, t, i, o) => ctl().send(targets(t), items(i), sendOpts(o)));
+  handle('scheduleCancel', (_e, id) => ctl().scheduleCancel(str(id, 64)));
+  handle('saveBlob', (_e, name, b64) => {
+    // a voice note recorded in the window: saved under the config folder, then sent like any file
+    const n = str(name, 100).replace(/[^A-Za-z0-9._ -]/g, '_');
+    if (!/^[A-Za-z0-9][A-Za-z0-9._ -]*$/.test(n)) throw new ArgError('invalid name');
+    const data = Buffer.from(str(b64, 40 * 1024 * 1024), 'base64');
+    const dir = join(HOME, 'voice-notes');
+    mkdirSync(dir, { recursive: true, mode: 0o700 });
+    const p = join(dir, n);
+    writeFileSync(p, data, { mode: 0o600 });
+    return p;
+  });
   handle('sendClipboard', (_e, t) => ctl().sendClipboard(targets(t)));
   handle('resumeOutbox', (_e) => ctl().resumeOutbox());
   handle('removeOutbox', (_e, id) => ctl().removeOutbox(str(id, 128)));
