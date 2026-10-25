@@ -18,12 +18,13 @@ public final class NodeListen implements AutoCloseable {
     private final Process proc;
     private final StringBuffer out = new StringBuffer();
 
-    private NodeListen(File home, int port, boolean discovery) throws IOException, InterruptedException {
+    private NodeListen(File home, int port, boolean discovery, String... extra) throws IOException, InterruptedException {
         this.home = home;
         this.inbox = new File(home, "inbox");
         java.util.List<String> args = new java.util.ArrayList<>(java.util.List.of("listen", "--home", home.getPath(), "--inbox", inbox.getPath(), "--backup-dir", new File(home, "backup").getPath(), "--port", String.valueOf(port), "--alias", "pc"));
         if (!discovery) args.add("--no-discovery");
-        proc = new ProcessBuilder(Node.argv(args.toArray(new String[0]))).redirectErrorStream(true).start();
+        args.addAll(java.util.Arrays.asList(extra));
+        proc = Node.builder(Node.argv(args.toArray(new String[0]))).start();
         Thread t = new Thread(() -> {
             try (BufferedReader r = new BufferedReader(new InputStreamReader(proc.getInputStream(), StandardCharsets.UTF_8))) {
                 for (String line; (line = r.readLine()) != null; ) out.append(line).append('\n');
@@ -54,6 +55,11 @@ public final class NodeListen implements AutoCloseable {
 
     public static NodeListen start(File home, int port) throws IOException, InterruptedException {
         return new NodeListen(home, port, false);
+    }
+
+    /** With extra `listen` options (e.g. --ingress-port N). */
+    public static NodeListen startWith(File home, String... extra) throws IOException, InterruptedException {
+        return new NodeListen(home, 0, false, extra);
     }
 
     public static NodeListen startWithDiscovery(File home) throws IOException, InterruptedException {

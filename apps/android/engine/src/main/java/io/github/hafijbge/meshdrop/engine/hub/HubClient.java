@@ -22,6 +22,7 @@ import java.security.PublicKey;
 import java.security.SecureRandom;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
@@ -150,6 +151,9 @@ public final class HubClient {
 
         /** Verified proof that this device is out of the mesh. */
         default void onRevoked() {}
+
+        /** A hub sent a relay list (still to be verified against the mesh root). */
+        default void onRelays(Object signed) {}
     }
 
     public static final class Options {
@@ -167,6 +171,15 @@ public final class HubClient {
         public Listener listener = new Listener() {};
         /** Relayed requests addressed to this device (null: they are dropped). */
         public RequestHandler handler;
+        /**
+         * Relay hubs from the verified, root-signed relay list (M9a). While the main hub is unreachable the
+         * link goes to the first relay that answers; it moves back to the main hub once that answers again.
+         */
+        public Supplier<List<io.github.hafijbge.meshdrop.engine.mesh.Relays.Relay>> relays = Collections::emptyList;
+        /** How often a link on a relay tries the main hub again. */
+        public long failbackMs = 300_000;
+        /** How often, linked to the main hub, held files are fetched from each relay. */
+        public long drainMs = 600_000;
 
         public Options(Identity id, Supplier<MembershipStore> members) {
             this.id = id;
@@ -182,6 +195,8 @@ public final class HubClient {
         final String path;
         /** "pinned" (LAN, mutual TLS to the hub's id), "wss" (CA-validated), "ws" (loopback only). */
         final String kind;
+        /** A relay hub's device id (its hello must name it), or null for the main hub. */
+        String relay;
 
         Endpoint(String host, int port, String hostHeader, String path, String kind) {
             this.host = host;
@@ -262,6 +277,26 @@ public final class HubClient {
     final class Link implements WebSocket.Listener {
         volatile WebSocket ws;
         private boolean authed;
+        /** A drain link (to a relay, only for held deliveries): closes once quiet. */
+        volatile boolean drain;
+        private ScheduledFuture<?> idle;
+        private final long born = System.currentTimeMillis();
+
+        /** A drain link stays while traffic comes, at most two minutes. */
+        void touch() {
+            if (!drain) return;
+            synchronized (this) {
+                if (idle != null) idle.cancel(false);
+                long left = born + 120_000 - System.currentTimeMillis();
+                idle = exec.schedule(this::close, Math.max(0, Math.min(15_000, left)), TimeUnit.MILLISECONDS);
+            }
+        }
+
+        void close() {
+            WebSocket w = ws;
+            if (w == null) return;
+            w.close(1000, "");
+        }
         private final List<Object> pre = new ArrayList<>();
 
         @Override
@@ -285,7 +320,8 @@ public final class HubClient {
         }
 
         private void deliver(Object m) {
-            lastRx = System.currentTimeMillis();
+            if (drain) touch();
+            else lastRx = System.currentTimeMillis();
             synchronized (this) {
                 if (!authed) {
                     pre.add(m);
@@ -345,6 +381,12 @@ public final class HubClient {
     private ScheduledFuture<?> retry;
     private ScheduledFuture<?> ping;
     private ScheduledFuture<?> stable;
+    private ScheduledFuture<?> failback;
+    private ScheduledFuture<?> drain;
+    /** The hub the link is on: the main hub's id, or a relay's. */
+    private volatile String linkedTo;
+    /** Short links to relays that only fetch held files. */
+    private final Set<Link> drains = ConcurrentHashMap.newKeySet();
     volatile long lastRx;
     private volatile List<DirectoryEntry> directory = Collections.emptyList();
     private final Map<String, CompletableFuture<Envelope>> pending = new ConcurrentHashMap<>();
@@ -373,6 +415,11 @@ public final class HubClient {
 
     public List<DirectoryEntry> directory() {
         return directory;
+    }
+
+    /** The hub this device is linked to now (the main hub, or a relay while the main one is away); null offline. */
+    public String linkedHub() {
+        return state == State.ONLINE ? linkedTo : null;
     }
 
     /** The hub's device id per the current membership list (null without a mesh). */
@@ -481,6 +528,8 @@ public final class HubClient {
         }
         if (l != null) l.abort();
         if (t != null) t.abort();
+        for (Link d : drains) d.abort();
+        drains.clear();
         closeQuietly(ts);
         failPending();
         if (state != State.REVOKED) setState(State.IDLE);
@@ -546,6 +595,23 @@ public final class HubClient {
         return out;
     }
 
+    private List<Endpoint> relayTargets() {
+        List<Endpoint> out = new ArrayList<>();
+        MembershipStore ms = members();
+        if (ms == null) return out;
+        String me = me().deviceId();
+        for (io.github.hafijbge.meshdrop.engine.mesh.Relays.Relay r : o.relays.get()) {
+            if (r.deviceId.equals(me) || !ms.isTrusted(r.deviceId)) continue;
+            for (String u : r.urls) {
+                Endpoint e = Endpoint.url(u);
+                if (e == null) continue;
+                e.relay = r.deviceId;
+                out.add(e);
+            }
+        }
+        return out;
+    }
+
     private void connect() {
         synchronized (this) {
             if (stopped || state == State.REVOKED || link != null || connecting) return;
@@ -553,7 +619,10 @@ public final class HubClient {
         }
         try {
             setState(State.CONNECTING);
-            for (Endpoint t : targets()) {
+            // The main hub first; only when none of its addresses answers, a relay hub.
+            List<Endpoint> all = targets();
+            all.addAll(relayTargets());
+            for (Endpoint t : all) {
                 synchronized (this) {
                     if (stopped) return;
                 }
@@ -615,9 +684,46 @@ public final class HubClient {
         return (Map<String, Object>) j;
     }
 
-    /** True once the link is online; false if this target failed before that. */
-    @SuppressWarnings("unchecked")
+    /** On a relay: try the main hub; once it answers the link moves there. */
+    private void tryFailback() {
+        String main = hubDeviceId();
+        synchronized (this) {
+            if (stopped || state != State.ONLINE || main == null || main.equals(linkedTo)) return;
+        }
+        for (Endpoint t : targets()) {
+            synchronized (this) {
+                if (stopped || main.equals(linkedTo)) return;
+            }
+            if (tryTarget(t, false)) return;
+        }
+    }
+
+    /** Linked to the main hub: open a short link to each relay so it hands over what it held for us. */
+    private void drainRelays() {
+        String main = hubDeviceId();
+        synchronized (this) {
+            if (stopped || state != State.ONLINE || main == null || !main.equals(linkedTo)) return;
+        }
+        Set<String> done = new HashSet<>();
+        for (Endpoint t : relayTargets()) {
+            synchronized (this) {
+                if (stopped) return;
+            }
+            if (done.contains(t.relay)) continue;
+            if (tryTarget(t, true)) done.add(t.relay);
+        }
+    }
+
     private boolean tryTarget(Endpoint t) {
+        return tryTarget(t, false);
+    }
+
+    /**
+     * True once the link is online; false if this target failed before that. A `drainOnly` link only
+     * takes held deliveries: it never becomes the device's link and closes when it goes quiet.
+     */
+    @SuppressWarnings("unchecked")
+    private boolean tryTarget(Endpoint t, boolean drainOnly) {
         Link l = new Link();
         MembershipStore ms = members();
         if (ms == null) return false;
@@ -655,6 +761,10 @@ public final class HubClient {
                 l.abort();
                 return false;
             }
+            if (t.relay != null && !helloHub.equals(t.relay)) {
+                l.abort();
+                return false;
+            }
             byte[] nonce = new byte[32];
             RANDOM.nextBytes(nonce);
             String myNonce = B64.std(nonce);
@@ -683,7 +793,7 @@ public final class HubClient {
                 l.abort();
                 return false;
             }
-            if (!helloHub.equals(hubId)) {
+            if (!helloHub.equals(hubId) && t.relay == null) {
                 if (!(w.get("membership") instanceof Map)) {
                     l.abort();
                     return false;
@@ -707,6 +817,19 @@ public final class HubClient {
                 l.abort();
                 return false;
             }
+            if (drainOnly) {
+                l.drain = true;
+                drains.add(l);
+                l.touch();
+                synchronized (this) {
+                    if (trying == l) {
+                        trying = null;
+                        tryingSocket = null;
+                    }
+                }
+                for (Object m : l.authed()) onMessage(l, m);
+                return true;
+            }
             List<Object> early = l.authed();
             synchronized (this) {
                 trying = null;
@@ -717,8 +840,9 @@ public final class HubClient {
                 }
             }
             if (w.get("membership") instanceof Map) applyMembership(w.get("membership"));
+            if (w.get("relays") != null) o.listener.onRelays(w.get("relays"));
             if (w.get("directory") instanceof List) directory = parseDirectory((List<Object>) w.get("directory"));
-            online(l);
+            online(l, helloHub);
             for (Object m : early) onMessage(l, m);
             // The hub pushes the directory to everyone but the device that just linked: hand ours over
             // too, so sends that this link's drop interrupted resume now.
@@ -743,9 +867,20 @@ public final class HubClient {
         }
     }
 
-    private void online(Link l) {
+    private void online(Link l, String hub) {
+        Link old;
         synchronized (this) {
+            old = link;
+            if (old != null && old != l) clearTimers();
             link = l;
+            linkedTo = hub;
+            for (ScheduledFuture<?> f : new ScheduledFuture<?>[] {failback, drain}) if (f != null) f.cancel(false);
+            failback = drain = null;
+            if (!hub.equals(hubDeviceId())) {
+                failback = exec.scheduleAtFixedRate(() -> workers.execute(this::tryFailback), o.failbackMs, o.failbackMs, TimeUnit.MILLISECONDS);
+            } else if (!o.relays.get().isEmpty()) {
+                drain = exec.scheduleAtFixedRate(() -> workers.execute(this::drainRelays), 2000, o.drainMs, TimeUnit.MILLISECONDS);
+            }
             lastRx = System.currentTimeMillis();
             ping = exec.scheduleAtFixedRate(() -> pingTick(l), o.pingMs, o.pingMs, TimeUnit.MILLISECONDS);
             stable = exec.schedule(() -> {
@@ -753,6 +888,12 @@ public final class HubClient {
                     attempt = 0;
                 }
             }, STABLE_LINK_MS, TimeUnit.MILLISECONDS);
+        }
+        if (old != null && old != l) {
+            // Moving between the main hub and a relay: what was in flight on the old link fails now
+            // and is retried by its senders; its close is ignored (it is no longer the link).
+            failPending();
+            old.abort();
         }
         setState(State.ONLINE);
     }
@@ -787,8 +928,8 @@ public final class HubClient {
     }
 
     private void clearTimers() {
-        for (ScheduledFuture<?> f : new ScheduledFuture<?>[] {retry, ping, stable}) if (f != null) f.cancel(false);
-        retry = ping = stable = null;
+        for (ScheduledFuture<?> f : new ScheduledFuture<?>[] {retry, ping, stable, failback, drain}) if (f != null) f.cancel(false);
+        retry = ping = stable = failback = drain = null;
     }
 
     private void endLink(State s) {
@@ -849,6 +990,14 @@ public final class HubClient {
 
     @SuppressWarnings("unchecked")
     void onMessage(Link l, Object m) {
+        if (l.drain) {
+            if (m instanceof Closed) {
+                drains.remove(l);
+                return;
+            }
+            if (m instanceof byte[]) onFrame(l, (byte[]) m);
+            return;
+        }
         if (m instanceof Closed) {
             int code = ((Closed) m).code;
             o.listener.onLinkClosed(code);
@@ -878,6 +1027,8 @@ public final class HubClient {
             }
         } else if ("revoked".equals(t)) {
             onRevokedNotice(c.get("s"));
+        } else if ("relays".equals(t)) {
+            o.listener.onRelays(c.get("s"));
         } else if ("held-delivered".equals(t) || "held-failed".equals(t)) {
             o.listener.onHeld((String) t, c);
         } else if (!"pong".equals(t)) {
@@ -908,7 +1059,7 @@ public final class HubClient {
             if (h.to.equals(me) && pubOf(h.from) == null) {
                 Envelope.Header r = Envelope.Header.res(h.id, me, h.from, 403);
                 r.contentType = "application/json";
-                sendFrame(Envelope.seal(r, "{\"error\":\"untrusted\"}".getBytes(StandardCharsets.UTF_8), me().keyPair().getPrivate()).encode());
+                reply(l, Envelope.seal(r, "{\"error\":\"untrusted\"}".getBytes(StandardCharsets.UTF_8), me().keyPair().getPrivate()).encode());
             }
             return;
         }
@@ -921,20 +1072,35 @@ public final class HubClient {
             if (inflight.contains(key)) return;
             byte[] cached = replay.cached(key);
             if (cached != null) {
-                sendFrame(cached);
+                reply(l, cached);
                 return;
             }
         }
         RequestHandler handler = o.handler;
         if (handler == null || !inflight.add(key)) return;
         try {
-            workers.execute(() -> serve(handler, key, e));
+            workers.execute(() -> serve(handler, key, e, l));
         } catch (java.util.concurrent.RejectedExecutionException x) {
             inflight.remove(key);
         }
     }
 
-    private void serve(RequestHandler handler, String key, Envelope e) {
+    /** An answer goes back on a drain link if it came from one; otherwise on the device's link. */
+    private void reply(Link from, byte[] frame) {
+        if (from != null && from.drain) {
+            WebSocket w = from.ws;
+            if (w == null) return;
+            try {
+                w.sendBinary(frame);
+            } catch (IOException x) {
+                w.abort();
+            }
+            return;
+        }
+        sendFrame(frame);
+    }
+
+    private void serve(RequestHandler handler, String key, Envelope e, Link from) {
         Envelope.Header h = e.header;
         try {
             MeshServer.Reply r;
@@ -948,7 +1114,7 @@ public final class HubClient {
             if (r.body != null) res.contentType = "application/json";
             byte[] frame = Envelope.seal(res, r.body == null ? new byte[0] : r.body, me().keyPair().getPrivate()).encode();
             replay.answer(key, frame);
-            sendFrame(frame);
+            reply(from, frame);
         } finally {
             inflight.remove(key);
         }

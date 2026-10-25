@@ -1615,10 +1615,15 @@ export class Engine extends EventEmitter {
       const file = join(dir, n);
       let result: Record<string, unknown>;
       try {
-        const req = JSON.parse(readFileSync(file, 'utf8')) as { op?: unknown; prefix?: unknown };
-        if (req.op !== 'revoke' || typeof req.prefix !== 'string') throw new Error('bad request');
-        const sm = await this.revoke(req.prefix);
-        result = { ok: true, version: sm.list.version };
+        const req = JSON.parse(readFileSync(file, 'utf8')) as { op?: unknown; prefix?: unknown; relays?: unknown };
+        if (req.op === 'relays' && Array.isArray(req.relays)) {
+          const rs = await this.relaysSet(this.resolveRelays(req.relays));
+          result = { ok: true, relays: rs.length };
+        } else {
+          if (req.op !== 'revoke' || typeof req.prefix !== 'string') throw new Error('bad request');
+          const sm = await this.revoke(req.prefix);
+          result = { ok: true, version: sm.list.version };
+        }
       } catch (e) {
         result = { ok: false, error: e instanceof Error ? e.message : String(e) };
       }
@@ -2215,6 +2220,7 @@ export class Engine extends EventEmitter {
       if (r.deviceId === this.identity.deviceId) throw new Error('The main hub cannot also be a relay hub.');
       if (!m.list().members.some((x) => x.deviceId === r.deviceId)) throw new Error('A relay hub must be a member of the mesh.');
       if (r.urls.length === 0) throw new Error('Enter the relay hub\'s public wss:// address.');
+      this.checkHubUrls(r.urls);
     }
     const cur = this.relayList();
     const s = signRelays({ v: 1, mesh: m.list().mesh, version: (cur?.version ?? 0) + 1, issuedAt: Date.now(), relays }, this.rootKey);
@@ -2222,6 +2228,19 @@ export class Engine extends EventEmitter {
     this.running?.hub?.pushRelays(s);
     this.emitEvent({ source: 'mesh', type: 'relays' });
     return this.relays();
+  }
+
+  /** [{prefix, url}] from the CLI: each prefix must name exactly one member. */
+  resolveRelays(raw: unknown[]): Relay[] {
+    const members = this.mesh?.list().members ?? [];
+    const out = new Map<string, string[]>();
+    for (const r of raw as { prefix?: unknown; url?: unknown }[]) {
+      if (typeof r?.prefix !== 'string' || typeof r.url !== 'string') throw new Error('bad relay');
+      const ids = members.map((m) => m.deviceId).filter((id) => id.startsWith(r.prefix as string));
+      if (ids.length !== 1) throw new Error(`relay: "${r.prefix}" names ${ids.length} members`);
+      out.set(ids[0]!, [...(out.get(ids[0]!) ?? []), r.url]);
+    }
+    return [...out].map(([deviceId, urls]) => ({ deviceId, urls }));
   }
 
   hubStatus(): HubStatus {

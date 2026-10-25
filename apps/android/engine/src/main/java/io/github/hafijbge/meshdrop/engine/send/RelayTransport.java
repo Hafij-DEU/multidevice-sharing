@@ -74,7 +74,8 @@ public final class RelayTransport implements Transport {
     }
 
     private Http.Response check(Envelope res, String id, boolean isOffer) throws IOException {
-        String hubId = hub.hubDeviceId();
+        // The hub this link is on: the main hub, or a relay hub (M9) while the main one is away.
+        String hubId = hub.linkedHub() != null ? hub.linkedHub() : hub.hubDeviceId();
         try {
             Envelope.open(res, pubOf);
         } catch (Envelope.EnvelopeError e) {

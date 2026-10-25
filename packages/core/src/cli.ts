@@ -44,6 +44,8 @@ commands:
   hub init [--url wss://...]...         make this device the hub of a new mesh
   hub status                            this device's role, list version, members and hub URLs
   hub revoke <deviceId-prefix>          remove a device from the mesh for good (hub only)
+  hub relays [<id-prefix>=<wss://url>]...
+                                        main hub: members that stand in as relay hubs while it is off
   hub reach [status|detect|off|tailscale|cloudflare <host>|port-forward <name> --token-file F [--manual]]
                                         how this hub is reached from the internet (applied by listen)
   hub recovery-export <file>            save the mesh root key + device list, passphrase-encrypted
@@ -66,6 +68,7 @@ options:
   --alias NAME          name shown to peers (default: host name)
   --device-type T       desktop | mobile | headless (default desktop)
   --no-discovery        listen: no multicast announce/discovery
+  --ingress-port N      hub / relay hub: loopback ingress port for a tunnel (default 53319)
   --url URL             hub init: public wss:// URL of the hub (repeatable)
   --passphrase-file F   hub recovery-*: read the passphrase from F instead of the terminal
   --share PATH          guest: a file the guest may download (repeatable)
@@ -152,6 +155,7 @@ async function main(argv: string[]): Promise<number> {
       'max-downloads': { type: 'string' },
       'allow-uploads': { type: 'boolean' },
       'token-file': { type: 'string' },
+      'ingress-port': { type: 'string' },
       manual: { type: 'boolean' },
       help: { type: 'boolean', short: 'h' },
     },
@@ -176,6 +180,13 @@ async function main(argv: string[]): Promise<number> {
   if (values['backup-dir'] !== undefined) base.backupDir = values['backup-dir'];
   if (values.alias !== undefined) base.alias = values.alias;
   if (values['no-discovery']) base.discovery = false;
+  // Tests only: hub and relay addresses on ws://127.0.0.1 (a real hub is reached over wss://).
+  if (process.env.MESHDROP_ALLOW_LOOPBACK_HUB_URLS === '1') base.allowLoopbackHubUrls = true;
+  if (values['ingress-port'] !== undefined) {
+    const ip = Number(values['ingress-port']);
+    if (!Number.isInteger(ip) || ip < 0 || ip > 65535) throw new UsageError(`invalid --ingress-port "${values['ingress-port']}"`);
+    base.hub = { ...(base.hub ?? {}), ingressPort: ip };
+  }
 
   switch (cmd) {
     case 'id':
@@ -278,6 +289,7 @@ async function cmdListen(base: EngineOptions, args: string[]): Promise<number> {
         case 'membership': out(`mesh   device list v${ev.version ?? '?'}`); break;
         case 'joined': out(`mesh   joined (list v${ev.version ?? '?'})`); break;
         case 'revoked': out('mesh   this device was removed from the mesh'); break;
+        case 'relays': out('mesh   relay hubs updated'); break;
         case 'held-delivered': out(`held   delivered to ${nameOf(e, ev.to ?? '')} [${printable(ev.sessionId)}]`); break;
         case 'held-failed': out(`held   delivery to ${nameOf(e, ev.to ?? '')} failed: ${printable(ev.error)} [${printable(ev.sessionId)}]`); break;
       }
@@ -573,6 +585,35 @@ async function cmdHub(base: EngineOptions, args: string[], urls: string[], passF
       out(`urls:     ${st.urls.length ? st.urls.map(printable).join(' ') : '(none: LAN only)'}`);
       out(`listener: ${listenerRunning(home) ? 'running' : 'not running'}`);
       return 0;
+    }
+    case 'relays': {
+      // meshdrop hub relays <id-prefix>=<wss-url>...   (none: no relay hubs)
+      const relays = rest.map((a) => {
+        const i = a.indexOf('=');
+        if (i < 1) throw new UsageError('hub relays: expected <deviceId-prefix>=<wss://url>');
+        return { prefix: a.slice(0, i), url: a.slice(i + 1) };
+      });
+      if (listenerRunning(home)) {
+        const id = randomBytes(9).toString('base64url');
+        const dir = join(home, 'hub', 'requests');
+        writeFileAtomic(join(dir, `${id}.json`), JSON.stringify({ op: 'relays', relays }));
+        const done = join(dir, `${id}.done.json`);
+        for (let i = 0; i < 100 && !existsSync(done); i++) await new Promise((r) => setTimeout(r, 100));
+        if (!existsSync(done)) throw new Error('hub relays: the running listener did not answer');
+        const r = JSON.parse(readFileSync(done, 'utf8')) as { ok: boolean; relays?: number; error?: string };
+        rmSync(done, { force: true });
+        if (!r.ok) throw new Error(`hub relays: ${r.error ?? 'failed'}`);
+        out(`relay hubs: ${r.relays}`);
+        return 0;
+      }
+      const e = await Engine.create({ ...base, serve: true, port: 0, discovery: false, hub: { ingressPort: 0 } });
+      await e.start();
+      try {
+        out(`relay hubs: ${(await e.relaysSet(e.resolveRelays(relays))).length} (devices get the list when they next reach the hub)`);
+        return 0;
+      } finally {
+        await e.stop();
+      }
     }
     case 'revoke': {
       if (rest.length !== 1) throw new UsageError('hub revoke: expected <deviceId-prefix>');

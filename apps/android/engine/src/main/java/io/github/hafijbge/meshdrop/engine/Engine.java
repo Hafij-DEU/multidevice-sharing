@@ -102,6 +102,8 @@ public final class Engine {
     private final Inbox inbox;
     private final Outbox outbox;
     private final File manualFile;
+    /** The root-signed list of relay hubs (M9). */
+    private final io.github.hafijbge.meshdrop.engine.mesh.Relays.Store relayStore;
     /** Mesh members first, then manually paired devices; never a revoked one. */
     private final CompositeTrust trustSource;
     private volatile MembershipStore mesh;
@@ -132,6 +134,7 @@ public final class Engine {
 
     private Engine(EngineConfig cfg, Identity identity) throws IOException {
         this.cfg = cfg;
+        this.relayStore = new io.github.hafijbge.meshdrop.engine.mesh.Relays.Store(cfg.home);
         this.identity = identity;
         this.trust = new TrustStore(new File(cfg.home, "trust.json"));
         this.inbox = new Inbox(new File(cfg.home, "inbox-state"), cfg.sink);
@@ -171,6 +174,21 @@ public final class Engine {
     public HubClient.State hubState() {
         HubClient h = hub;
         return h == null ? HubClient.State.IDLE : h.state();
+    }
+
+    /** The verified relay list for this mesh (null: none). */
+    public io.github.hafijbge.meshdrop.engine.mesh.Relays.ListView relayList() {
+        MembershipStore m = mesh;
+        return m == null ? null : relayStore.list(m.anchor, m.list().mesh);
+    }
+
+    /** "main", "relay" (linked to a relay hub while the main one is away), or null when offline. */
+    public String linkedTo() {
+        HubClient h = hub;
+        MembershipStore m = mesh;
+        String id = h == null ? null : h.linkedHub();
+        if (id == null || m == null) return null;
+        return id.equals(m.list().hubId) ? "main" : "relay";
     }
 
     /** The hub's device directory (who is online, last-known LAN addresses); empty without a link. */
@@ -290,6 +308,12 @@ public final class Engine {
         ho.lanAddrs = cfg.lanAddrs != null ? cfg.lanAddrs : this::defaultLanAddrs;
         ho.hubLan = this::hubLan;
         ho.backoffMs = cfg.hubBackoffMs;
+        ho.failbackMs = cfg.hubFailbackMs;
+        ho.drainMs = cfg.hubDrainMs;
+        ho.relays = () -> {
+            io.github.hafijbge.meshdrop.engine.mesh.Relays.ListView l = relayList();
+            return l == null ? java.util.Collections.emptyList() : l.relays;
+        };
         ho.handler = (peer, method, path, contentType, body) -> {
             MeshServer s = server;
             if (s == null) return null;
@@ -321,6 +345,17 @@ public final class Engine {
             @Override
             public void onRevoked() {
                 execute(Engine.this::leaveMesh);
+            }
+
+            @Override
+            public void onRelays(Object signed) {
+                MembershipStore m = mesh;
+                if (m == null) return;
+                try {
+                    if ("updated".equals(relayStore.accept(signed, m.anchor, m.list().mesh))) emit("mesh", "relays", new LinkedHashMap<>());
+                } catch (IOException | RuntimeException ignored) {
+                    // not signed by this mesh's root
+                }
             }
 
             @Override

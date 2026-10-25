@@ -254,6 +254,21 @@ public final class AppController {
             hub.put("version", l.version);
             hub.put("members", (long) l.members.size());
             hub.put("urls", new ArrayList<Object>(l.urls));
+            hub.put("linkedTo", x.linkedTo());
+            hub.put("relayHub", false);
+            List<Object> relays = new ArrayList<>();
+            io.github.hafijbge.meshdrop.engine.mesh.Relays.ListView rl = x.relayList();
+            if (rl != null) {
+                for (io.github.hafijbge.meshdrop.engine.mesh.Relays.Relay r : rl.relays) {
+                    Map<String, Object> ro = new LinkedHashMap<>();
+                    Membership.Member rm = l.member(r.deviceId);
+                    ro.put("deviceId", r.deviceId);
+                    ro.put("alias", rm == null ? r.deviceId.substring(0, 8) : rm.alias);
+                    ro.put("urls", new ArrayList<Object>(r.urls));
+                    relays.add(ro);
+                }
+            }
+            m.put("relays", relays);
             for (Membership.Member mm : l.members) {
                 Map<String, Object> o = new LinkedHashMap<>();
                 o.put("deviceId", mm.deviceId);

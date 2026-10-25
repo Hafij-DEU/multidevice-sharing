@@ -24,6 +24,13 @@ public final class Node {
 
     private Node() {}
 
+    /** A node process for tests: output merged, ws:// loopback hub addresses allowed. */
+    public static ProcessBuilder builder(List<String> argv) {
+        ProcessBuilder pb = new ProcessBuilder(argv).redirectErrorStream(true);
+        pb.environment().put("MESHDROP_ALLOW_LOOPBACK_HUB_URLS", "1");
+        return pb;
+    }
+
     public static List<String> argv(String... args) {
         List<String> cmd = new ArrayList<>();
         cmd.add("node");
@@ -34,7 +41,7 @@ public final class Node {
 
     /** Runs a one-shot CLI command (stdout + stderr merged), with a timeout. */
     public static Result run(long timeoutSec, String... args) throws IOException, InterruptedException {
-        Process p = new ProcessBuilder(argv(args)).redirectErrorStream(true).start();
+        Process p = builder(argv(args)).start();
         if (!p.waitFor(timeoutSec, TimeUnit.SECONDS)) {
             p.destroyForcibly();
             throw new IOException("node " + String.join(" ", args) + " timed out");
