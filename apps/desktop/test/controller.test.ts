@@ -1,4 +1,6 @@
 import { spawnSync } from 'node:child_process';
+import { randomBytes } from 'node:crypto';
+import { OFFER_FILE, sealChunk, uploadKey } from '@meshdrop/core/src/links/crypto.ts';
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer, type Server } from 'node:net';
 import { tmpdir } from 'node:os';
@@ -424,6 +426,21 @@ describe('AppController guests', () => {
 });
 
 describe('AppController internet links', () => {
+  it('a send through an internet link asks the owner to accept, with no guest QR open (it waited forever)', async () => {
+    const H = await make('hub');
+    await H.c.hubInit([]);
+    const l = await H.c.linkCreate({ files: [], text: 'Send your files here.', days: 1, allowUploads: true });
+    const key = Buffer.from(l.url.split('#k=')[1]!, 'base64url');
+    const api = `${l.url.slice(0, l.url.indexOf('/l/'))}/l/${l.id}/api`;
+    const { session } = (await (await fetch(`${api}/open`, { method: 'POST', headers: { 'x-link-key': key.toString('base64url') } })).json()) as { session: string };
+    const salt = randomBytes(16);
+    const offer = sealChunk(uploadKey(key, l.id, salt), l.id, OFFER_FILE, 0, true, Buffer.from(JSON.stringify({ files: [{ name: 'back.txt', size: 4 }] })));
+    const { id } = (await (await fetch(`${api}/offers`, { method: 'POST', headers: { 'x-link-session': session, 'x-upload-salt': salt.toString('base64url') }, body: new Uint8Array(offer) })).json()) as { id: string };
+    expect(H.c.state().guest?.active).toBe(false);
+    await until(() => (H.c.state().guest?.offers.length ?? 0) === 1);
+    expect(H.c.state().guest?.offers[0]).toMatchObject({ id, via: 'link' });
+  });
+
   it('the hub creates, lists and removes links; other devices cannot', async () => {
     const H = await make('hub');
     await H.c.hubInit([]);

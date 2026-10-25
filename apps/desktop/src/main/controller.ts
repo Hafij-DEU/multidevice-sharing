@@ -482,7 +482,8 @@ export class AppController extends EventEmitter {
 
   #guestView(e: Engine): GuestView {
     const g = e.guestState();
-    if (!g.active) return { active: false, available: g.available && this.#mode === 'serving', shared: [], offers: [] };
+    // offers through internet links and LocalSend come in with no guest QR open: keep them, or nobody can accept
+    if (!g.active) return { active: false, available: g.available && this.#mode === 'serving', shared: [], offers: g.offers };
     return { ...g, ...(this.#guestQr !== undefined ? { qrSvg: this.#guestQr } : {}) };
   }
 
