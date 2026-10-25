@@ -13,10 +13,10 @@ import { X509Certificate, createPublicKey, randomBytes, type KeyObject } from 'n
 import { EventEmitter } from 'node:events';
 import { createServer as createHttpServer, type IncomingMessage, type Server as HttpServer, type ServerResponse } from 'node:http';
 import type { Server as HttpsServer } from 'node:https';
-import type { Duplex } from 'node:stream';
+import { Readable, type Duplex } from 'node:stream';
 import type { TLSSocket } from 'node:tls';
 import { WebSocketServer, type RawData, type WebSocket } from 'ws';
-import { MAX_OFFER_BODY } from '../api/handler.ts';
+import { MAX_OFFER_BODY, type MeshRequest, type MeshResponse } from '../api/handler.ts';
 import { deviceIdOf, type Identity } from '../identity.ts';
 import { canonicalJson, signDomain, verifyDomain } from '../mesh/canonical.ts';
 import { decodeFrame, encodeFrame, openEnvelope, sealEnvelope, type Envelope } from '../mesh/envelope.ts';
@@ -67,6 +67,11 @@ export interface HubServerOptions {
   rootKey?: KeyObject;
   /** The current root-signed relay list, sent on welcome (devices fail over to these hubs). */
   relays?: () => SignedRelays | null;
+  /**
+   * Requests addressed to this hub's own device while it has no link of its own here (a relay hub:
+   * its link goes to the main hub). The main hub links to itself and does not need it.
+   */
+  local?: (r: MeshRequest) => Promise<MeshResponse>;
   /** The hub's own view of the mesh; every list change goes through accept(). */
   members: MembershipStore;
   /** A link with no traffic for this long is dropped (default 510 000 ms). */
@@ -286,6 +291,10 @@ export class HubServer extends EventEmitter {
     if (h.from !== sender || h.to === sender || !this.#opts.members.isTrusted(h.to)) {
       return this.#hubReply(sender, h.id, 400, 'bad-envelope');
     }
+    if (h.to === this.#opts.id.deviceId && this.#opts.local && !this.#online.has(h.to)) {
+      void this.#serveLocal(e).catch(() => this.#hubReply(sender, h.id, 500, 'internal'));
+      return;
+    }
     const held = this.#opts.held;
     if (held) {
       // A held session in progress keeps being stored even if the target came online meanwhile.
@@ -299,6 +308,18 @@ export class HubServer extends EventEmitter {
     }
     if (!this.#online.has(h.to)) return this.#hubReply(sender, h.id, 503, 'offline');
     this.#forward(e, buf);
+  }
+
+  /** A request to this hub's own device, answered here and signed by it (it is the target). */
+  async #serveLocal(e: Envelope): Promise<void> {
+    const h = e.header;
+    const headers: Record<string, string> = { 'content-length': String(e.body.length) };
+    if (h.contentType) headers['content-type'] = h.contentType;
+    const r = await this.#opts.local!({ peer: h.from, method: h.method!, path: h.path!, headers, body: Readable.from([e.body]) });
+    if (r.noReply) return;
+    const res: Parameters<typeof sealEnvelope>[0] = { v: 1, kind: 'res', id: h.id, from: this.#opts.id.deviceId, to: h.from, status: r.status };
+    if (r.headers['content-type']) res.contentType = r.headers['content-type'];
+    this.sendTo(h.from, encodeFrame(sealEnvelope(res, r.body, this.#opts.id.privateKey)));
   }
 
   /** Relays a req to its (online) target; the target's res goes back to the sender. */

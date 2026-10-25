@@ -18,7 +18,7 @@
 import { X509Certificate, createPublicKey, randomBytes, type KeyObject } from 'node:crypto';
 import { EventEmitter } from 'node:events';
 import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, statSync, unlinkSync, watch, writeSync, type FSWatcher } from 'node:fs';
-import { lstat, readdir } from 'node:fs/promises';
+import { lstat, open, readdir } from 'node:fs/promises';
 import type { Server as HttpServer } from 'node:http';
 import { createServer as createHttpsServer, type Server } from 'node:https';
 import { homedir, hostname, networkInterfaces } from 'node:os';
@@ -38,7 +38,7 @@ import { LS_PORT, LocalSendDiscovery, type LsPeerInfo } from './localsend/discov
 import { LocalSendReceiver, type LsEvent, type LsInfo } from './localsend/server.ts';
 import { ReachManager, type ReachConfig, type ReachEnv, type ReachStatus } from './reach/manager.ts';
 import { createLinkHandler } from './links/server.ts';
-import { LinkStore, type LinkInfo } from './links/store.ts';
+import { LinkError, LinkStore, type LinkInfo } from './links/store.ts';
 import { HubClient } from './hub/client.ts';
 import { HeldStore } from './hub/held.ts';
 import { DEFAULT_INGRESS_PORT, HubServer, type DirectoryEntry, type LanAddr } from './hub/server.ts';
@@ -502,6 +502,9 @@ interface Running {
   timers: NodeJS.Timeout[];
 }
 
+/** Sealed bytes per upload request of a link made on this member (M9b). */
+const MEMBER_LINK_SLICE = 1024 * 1024;
+
 type Route = { kind: 'lan'; host: string; port: number } | { kind: 'relay' } | { kind: 'held' } | { kind: 'unreachable' };
 
 /** Bytes a held session may store on the hub: ciphertext (plaintext + 16 per chunk) plus framing. */
@@ -700,6 +703,11 @@ export class Engine extends EventEmitter {
 
     let hub: HubServer | null = null;
     let ingressPort = 0;
+    // Requests the hub gets for this very device while it has no link of its own there (a relay
+    // hub's link goes to the main hub; the main hub's self-link may not be up yet).
+    const { sync: _noSync, ...localOpts } = this.receiverOptions();
+    const localHandler = createMeshHandler(localOpts);
+    const local = (q: Parameters<typeof localHandler.handle>[0]) => localHandler.handle(q);
     if (server && this.rootKey && this.mesh) {
       const hopts = this.opts.hub ?? {};
       const heldOpts: { quotaBytes?: number; ttlMs?: number } = {};
@@ -707,7 +715,7 @@ export class Engine extends EventEmitter {
       if (hopts.heldTtlMs !== undefined) heldOpts.ttlMs = hopts.heldTtlMs;
       hub = new HubServer({
         id: this.identity, home: this.home, rootKey: this.rootKey, members: this.mesh,
-        relays: () => this.relayStore.current(),
+        relays: () => this.relayStore.current(), local,
         held: new HeldStore(join(this.home, 'hub', 'held'), heldOpts), invites: this.invites,
         hubLan: () => this.lanAddrs(port),
         ingressHttp: createLinkHandler({ store: this.links(), uploads: (id) => this.linkUploads(id), page: LINK_PAGE }),
@@ -729,7 +737,7 @@ export class Engine extends EventEmitter {
       if (hopts.heldTtlMs !== undefined) heldOpts.ttlMs = hopts.heldTtlMs;
       relayHub = new HubServer({
         id: this.identity, home: this.home, members: this.mesh,
-        relays: () => this.relayStore.current(),
+        relays: () => this.relayStore.current(), local,
         held: new HeldStore(join(this.home, 'hub', 'held'), heldOpts), invites: this.invites,
         hubLan: () => this.lanAddrs(port),
         ingressHttp: createLinkHandler({ store: this.links(), uploads: (id) => this.linkUploads(id), page: LINK_PAGE }),
@@ -1415,7 +1423,72 @@ export class Engine extends EventEmitter {
       membership: () => this.mesh?.current() ?? null,
       accepting: () => this.accepting,
       sync: syncRoutes({ store: this.syncStore, onPoke: (peer, folder) => this.scheduleSync(folder, peer, 300) }),
+      links: (peer, method, seg, q, body) => this.memberLinkRoutes(peer, method, seg, q, body),
     };
+  }
+
+  /**
+   * Internet links made on members (M9b), served by a hub (main or relay): the member seals the link
+   * on its own device and uploads only ciphertext; the key stays in the member's URL fragment.
+   *   POST   links                      {id, keyHash, label, expiresInMs, files:[{size}], manifest(b64), password?, maxDownloads?}
+   *   PUT    links/<id>/<i>/<offset>    sealed bytes of file i               -> {have}
+   *   POST   links/<id>/done                                                 -> {base}
+   *   GET    links                      this member's links
+   *   POST   links/<id>/revoke
+   * (Relay envelopes carry only GET/POST/PUT and plain paths, so no query and no DELETE.)
+   */
+  private async memberLinkRoutes(peer: string, method: string, seg: string[], _q: URLSearchParams, body: (cap: number) => Promise<Buffer>): Promise<{ status: number; headers: Record<string, string>; body: Buffer }> {
+    const json = (status: number, v: unknown) => ({ status, headers: { 'content-type': 'application/json' }, body: Buffer.from(JSON.stringify(v)) });
+    const r = this.running;
+    if (!r || (!r.hub && !r.relayHub)) return json(404, { error: 'not-a-hub' });
+    if (!this.mesh?.isTrusted(peer)) return json(403, { error: 'not-a-member' });
+    const store = this.links();
+    const root = seg.length === 0 || (seg.length === 1 && seg[0] === '');
+    try {
+      if (method === 'GET' && root) return json(200, await store.listOwned(peer));
+      if (method === 'POST' && root) {
+        const x = JSON.parse((await body(2 * 1024 * 1024)).toString('utf8')) as Record<string, unknown>;
+        if (typeof x.id !== 'string' || typeof x.keyHash !== 'string' || typeof x.label !== 'string' || typeof x.expiresInMs !== 'number' || !Array.isArray(x.files) || typeof x.manifest !== 'string') return json(400, { error: 'bad-request' });
+        await store.importBegin(peer, {
+          id: x.id, keyHash: x.keyHash, label: x.label, expiresInMs: x.expiresInMs,
+          files: (x.files as { size?: unknown }[]).map((f) => ({ size: Number(f?.size) })),
+          manifest: Buffer.from(x.manifest, 'base64'),
+          ...(x.password && typeof x.password === 'object' ? { password: x.password as { salt: string; hash: string } } : {}),
+          ...(typeof x.maxDownloads === 'number' ? { maxDownloads: x.maxDownloads } : {}),
+        });
+        return json(201, { id: x.id });
+      }
+      const id = seg[0] ?? '';
+      if (method === 'PUT' && seg.length === 3 && /^\d{1,4}$/.test(seg[1]!) && /^\d{1,15}$/.test(seg[2]!)) {
+        const have = await store.importPut(peer, id, Number(seg[1]), Number(seg[2]), await body(MEMBER_LINK_SLICE + 1024));
+        return json(200, { have });
+      }
+      if (method === 'POST' && seg.length === 2 && seg[1] === 'done') {
+        await store.importDone(peer, id);
+        return json(200, { base: this.servedLinkBase() });
+      }
+      if (method === 'POST' && seg.length === 2 && seg[1] === 'revoke') {
+        await store.revokeOwned(peer, id);
+        return json(200, { ok: true });
+      }
+      return json(404, { error: 'not-found' });
+    } catch (e) {
+      if (e instanceof LinkError) return json(e.status, { error: e.code });
+      if (e instanceof SyntaxError) return json(400, { error: 'bad-json' });
+      throw e;
+    }
+  }
+
+  /** The public base links on this hub are served at: the main hub's, or this relay hub's own address. */
+  private servedLinkBase(): string {
+    if (this.running?.relayHub) {
+      const u = this.relayList()?.relays.find((x) => x.deviceId === this.identity.deviceId)?.urls[0];
+      if (u) {
+        const p = new URL(u);
+        return `${p.protocol === 'wss:' ? 'https:' : 'http:'}//${p.host}`;
+      }
+    }
+    return this.linkBase();
   }
 
   /** Sessions that are photo backups (manifest `backup`), by session id → sender. */
@@ -2094,7 +2167,7 @@ export class Engine extends EventEmitter {
 
   /** Hub only: seals files (and/or a message) into a new internet guest link and returns its full URL. */
   async linkCreate(c: { files: string[]; text?: string; days?: number; hours?: number; password?: string; maxDownloads?: number; allowUploads?: boolean }): Promise<{ id: string; url: string; qrSvg: string; expiresAt: number }> {
-    if (!this.rootKey) throw new Error('internet guest links are made on the hub PC');
+    if (!this.rootKey) return this.memberLinkCreate(c);
     const expiresInMs = c.hours !== undefined ? c.hours * 3_600_000 : (c.days ?? 7) * 24 * 3_600_000;
     const { id, key, expiresAt } = await this.links().create({
       files: c.files, expiresInMs, allowUploads: c.allowUploads === true,
@@ -2106,7 +2179,86 @@ export class Engine extends EventEmitter {
     return { id, url, qrSvg: await QRCode.toString(url, { type: 'svg', margin: 1 }), expiresAt };
   }
 
+  // ---- internet links made on a member (M9b) ----
+
+  /** A request to the hub this device is linked to (the main hub, or a relay hub while it is away). */
+  private async hubCall(method: string, path: string, body?: Buffer, contentType?: string): Promise<{ status: number; json?: unknown }> {
+    const client = this.running?.client;
+    const hubId = client?.linkedHub;
+    if (!client || !hubId) throw new Error('Not connected to a hub: internet links need the hub PC or a relay hub.');
+    const pubOf = (id: string): KeyObject | undefined => {
+      const t = this.mesh?.get(id);
+      return t ? createPublicKey(t.publicKeyPem) : undefined;
+    };
+    const t = new RelayTransport(this.identity, client, hubId, pubOf, 'relay');
+    const r = await t.request(method, path, body, contentType ? { 'content-type': contentType } : {}, { timeoutMs: 120_000 });
+    return { status: r.status, ...(r.json !== undefined ? { json: r.json } : {}) };
+  }
+
+  private memberLinksFile(): string {
+    return join(this.home, 'member-links.json');
+  }
+
+  private memberLinkUrls(): Record<string, string> {
+    try {
+      return JSON.parse(readFileSync(this.memberLinksFile(), 'utf8')) as Record<string, string>;
+    } catch {
+      return {};
+    }
+  }
+
+  /** A member seals the link here (the key never leaves this device) and uploads only ciphertext to its hub. */
+  private async memberLinkCreate(c: { files: string[]; text?: string; days?: number; hours?: number; password?: string; maxDownloads?: number }): Promise<{ id: string; url: string; qrSvg: string; expiresAt: number }> {
+    if (!this.mesh) throw new Error('Internet links need a mesh with a hub.');
+    const expiresInMs = c.hours !== undefined ? c.hours * 3_600_000 : (c.days ?? 7) * 24 * 3_600_000;
+    const dir = join(this.home, 'link-outbox');
+    rmSync(dir, { recursive: true, force: true });
+    const local = new LinkStore(dir, { quotaBytes: Number.MAX_SAFE_INTEGER });
+    try {
+      const { id, key } = await local.create({
+        files: c.files, expiresInMs, ...(c.text ? { text: c.text } : {}), ...(c.password ? { password: c.password } : {}),
+        ...(c.maxDownloads !== undefined ? { maxDownloads: c.maxDownloads } : {}),
+      });
+      const m = await local.rawMeta(id);
+      const begin = await this.hubCall('POST', '/mesh/v1/links', Buffer.from(JSON.stringify({
+        id, keyHash: m.keyHash, label: m.label, expiresInMs, files: m.files, manifest: m.manifest.toString('base64'),
+        ...(m.password ? { password: m.password } : {}), ...(m.maxDownloads !== undefined ? { maxDownloads: m.maxDownloads } : {}),
+      })), 'application/json');
+      if (begin.status !== 201) throw new Error(`The hub refused the link (${(begin.json as { error?: string })?.error ?? begin.status}).`);
+      for (let i = 0; i < m.files.length; i++) {
+        const fh = await open(local.sealedPath(id, i), 'r');
+        try {
+          const size = (await fh.stat()).size;
+          let off = 0;
+          while (off < size) {
+            const buf = Buffer.alloc(Math.min(MEMBER_LINK_SLICE, size - off));
+            await fh.read(buf, 0, buf.length, off);
+            const r = await this.hubCall('PUT', `/mesh/v1/links/${id}/${i}/${off}`, buf, 'application/octet-stream');
+            if (r.status !== 200) throw new Error(`Upload to the hub failed (${(r.json as { error?: string })?.error ?? r.status}).`);
+            off += buf.length;
+          }
+        } finally {
+          await fh.close();
+        }
+      }
+      const done = await this.hubCall('POST', `/mesh/v1/links/${id}/done`);
+      const base = (done.json as { base?: unknown })?.base;
+      if (done.status !== 200 || typeof base !== 'string') throw new Error('The hub did not finish the link.');
+      const url = `${base}/l/${id}#k=${key.toString('base64url')}`;
+      writeFileAtomic(this.memberLinksFile(), JSON.stringify({ ...this.memberLinkUrls(), [id]: url }));
+      return { id, url, qrSvg: await QRCode.toString(url, { type: 'svg', margin: 1 }), expiresAt: Date.now() + expiresInMs };
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+
   async linkList(): Promise<LinkView[]> {
+    if (!this.rootKey) {
+      if (!this.running?.client?.linkedHub) return [];
+      const r = await this.hubCall('GET', '/mesh/v1/links');
+      const urls = this.memberLinkUrls();
+      return r.status === 200 && Array.isArray(r.json) ? (r.json as LinkInfo[]).map((l) => (urls[l.id] ? { ...l, url: urls[l.id] } : l)) : [];
+    }
     await this.links().prune();
     const out: LinkView[] = [];
     for (const l of await this.links().list()) {
@@ -2122,6 +2274,15 @@ export class Engine extends EventEmitter {
   }
 
   async linkRevoke(id: string): Promise<void> {
+    if (!this.rootKey) {
+      if (!/^[A-Za-z0-9_-]{22}$/.test(id)) throw new Error('No such link.');
+      const r = await this.hubCall('POST', `/mesh/v1/links/${id}/revoke`);
+      if (r.status !== 200 && r.status !== 404) throw new Error('The hub did not remove the link.');
+      const urls = this.memberLinkUrls();
+      delete urls[id];
+      writeFileAtomic(this.memberLinksFile(), JSON.stringify(urls));
+      return;
+    }
     await this.links().revoke(id);
     const u = this.linkUploadMap.get(id);
     this.linkUploadMap.delete(id);

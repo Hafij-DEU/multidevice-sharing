@@ -63,6 +63,8 @@ export interface MeshServerOptions {
   accepting?: () => boolean;
   /** Folder sync routes (`sync/...`, trusted peers; LAN server only, never the relay). Without it: 404. */
   sync?: (peer: string, method: string, seg: string[], query: URLSearchParams) => Promise<MeshResponse>;
+  /** Internet links made on members (M9b, `links/...`; a hub only). Without it: 404. */
+  links?: (peer: string, method: string, seg: string[], query: URLSearchParams, body: (cap: number) => Promise<Buffer>) => Promise<MeshResponse>;
 }
 
 /** Max body of a join request (device id, alias, certificate, proof). */
@@ -434,6 +436,10 @@ export function createMeshHandler(opts: MeshServerOptions): MeshHandler {
     if (seg[0] === 'sync') {
       if (!opts.sync) throw new HttpError(404, 'not-found');
       return opts.sync(peer, method, seg.slice(1), url.searchParams);
+    }
+    if (seg[0] === 'links') {
+      if (!opts.links) throw new HttpError(404, 'not-found');
+      return opts.links(peer, method, seg.slice(1), url.searchParams, (cap) => readBody(req, cap));
     }
     if (method === 'GET' && seg.length === 1 && seg[0] === 'membership') {
       const s = opts.membership?.() ?? null;

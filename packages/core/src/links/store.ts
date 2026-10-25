@@ -46,6 +46,22 @@ interface LinkMeta {
   maxDownloads?: number;
   downloads: number;
   allowUploads: boolean;
+  /** A member that made this link on its own device and uploaded it sealed (M9b); absent: the hub's own. */
+  owner?: string;
+}
+
+/** What a member sends to start uploading a link it sealed itself (M9b). */
+export interface LinkImport {
+  id: string;
+  keyHash: string;
+  label: string;
+  expiresInMs: number;
+  files: { size: number }[];
+  /** The sealed manifest. */
+  manifest: Buffer;
+  /** scrypt record made on the member: the password itself never leaves it. */
+  password?: { salt: string; hash: string };
+  maxDownloads?: number;
 }
 
 export interface LinkInfo {
@@ -59,6 +75,7 @@ export interface LinkInfo {
   maxDownloads?: number;
   hasPassword: boolean;
   allowUploads: boolean;
+  owner?: string;
 }
 
 export interface LinkCreate {
@@ -113,6 +130,15 @@ export class LinkStore {
   async #used(): Promise<number> {
     let n = 0;
     for (const l of await this.list()) n += l.bytes;
+    // uploads from members still in progress hold their space too
+    for (const d of await fsp.readdir(this.#dir).catch(() => [] as string[])) {
+      if (!d.startsWith('.up-')) continue;
+      try {
+        n += (JSON.parse(await fsp.readFile(join(this.#dir, d, 'link.json'), 'utf8')) as LinkMeta).bytes;
+      } catch {
+        /* half-made: prune() removes it */
+      }
+    }
     return n;
   }
 
@@ -192,12 +218,103 @@ export class LinkStore {
           id: m.id, label: m.label, createdAt: m.createdAt, expiresAt: m.expiresAt, files: m.files.length, bytes: m.bytes,
           downloads: m.downloads, hasPassword: !!m.password, allowUploads: m.allowUploads,
           ...(m.maxDownloads !== undefined ? { maxDownloads: m.maxDownloads } : {}),
+          ...(m.owner !== undefined ? { owner: m.owner } : {}),
         });
       } catch {
         /* half-created: prune() removes it */
       }
     }
     return out.sort((a, b) => b.createdAt - a.createdAt);
+  }
+
+  /** The link's meta as stored (a member's own sealed link reads it to upload it). */
+  async rawMeta(id: string): Promise<LinkMeta & { manifest: Buffer }> {
+    const m = await this.#meta(id);
+    return { ...m, manifest: await fsp.readFile(this.#path(id, 'manifest')) };
+  }
+
+  /** A sealed file of a link as stored: `f<i>`. */
+  sealedPath(id: string, i: number): string {
+    return this.#path(id, `f${i}`);
+  }
+
+  // ---- links made on members (M9b): uploaded sealed, stored here under the member as owner ----
+
+  #upDir(id: string): string {
+    if (!ID_RE.test(id)) throw new LinkError(404, 'not-found');
+    return join(this.#dir, `.up-${id}`);
+  }
+
+  async #upMeta(owner: string, id: string): Promise<LinkMeta> {
+    let m: LinkMeta;
+    try {
+      m = JSON.parse(await fsp.readFile(join(this.#upDir(id), 'link.json'), 'utf8')) as LinkMeta;
+    } catch {
+      throw new LinkError(404, 'not-found');
+    }
+    if (m.owner !== owner) throw new LinkError(404, 'not-found');
+    return m;
+  }
+
+  /** Starts a member's upload of a link it sealed: checks the quota and keeps the meta and manifest. */
+  async importBegin(owner: string, x: LinkImport): Promise<void> {
+    if (!ID_RE.test(x.id) || !/^[0-9a-f]{64}$/.test(x.keyHash)) throw new LinkError(400, 'bad-request');
+    if (!Number.isFinite(x.expiresInMs) || x.expiresInMs < MIN_LINK_TTL_MS || x.expiresInMs > MAX_LINK_TTL_MS) throw new LinkError(400, 'bad-expiry');
+    if (x.maxDownloads !== undefined && (!Number.isInteger(x.maxDownloads) || x.maxDownloads < 1 || x.maxDownloads > 1000)) throw new LinkError(400, 'bad-max-downloads');
+    if (x.files.length > 1000 || x.files.some((f) => !Number.isSafeInteger(f.size) || f.size < 0) || x.manifest.length > 1024 * 1024) throw new LinkError(400, 'bad-request');
+    if (x.password && (typeof x.password.salt !== 'string' || typeof x.password.hash !== 'string' || x.password.salt.length > 64 || x.password.hash.length > 128)) throw new LinkError(400, 'bad-request');
+    const bytes = x.files.reduce((n, f) => n + sealedSize(f.size), 0);
+    if (bytes > this.#quota - (await this.#used())) throw new LinkError(507, 'quota');
+    if ((await fsp.stat(join(this.#dir, x.id)).catch(() => null)) !== null) throw new LinkError(409, 'exists');
+    const dir = this.#upDir(x.id);
+    await fsp.rm(dir, { recursive: true, force: true });
+    await fsp.mkdir(dir, { recursive: true, mode: 0o700 });
+    const now = this.#now();
+    const meta: LinkMeta = {
+      v: 1, id: x.id, label: x.label.slice(0, 200), createdAt: now, expiresAt: now + x.expiresInMs, keyHash: x.keyHash,
+      files: x.files.map((f) => ({ size: f.size })), bytes, downloads: 0, allowUploads: false, owner,
+      ...(x.password ? { password: { salt: x.password.salt, hash: x.password.hash } } : {}),
+      ...(x.maxDownloads !== undefined ? { maxDownloads: x.maxDownloads } : {}),
+    };
+    await fsp.writeFile(join(dir, 'manifest'), x.manifest, { mode: 0o600 });
+    for (let i = 0; i < x.files.length; i++) await fsp.writeFile(join(dir, `f${i}`), Buffer.alloc(0), { mode: 0o600 });
+    await this.#write(meta, dir);
+  }
+
+  /** Appends sealed bytes of file `i` at `offset` (which must be what is there); returns the new length. */
+  async importPut(owner: string, id: string, i: number, offset: number, data: Buffer): Promise<number> {
+    const m = await this.#upMeta(owner, id);
+    const f = m.files[i];
+    if (!f || !Number.isSafeInteger(offset)) throw new LinkError(400, 'bad-request');
+    const p = join(this.#upDir(id), `f${i}`);
+    const have = (await fsp.stat(p)).size;
+    if (offset !== have) throw new LinkError(409, `have-${have}`);
+    if (have + data.length > sealedSize(f.size)) throw new LinkError(400, 'too-long');
+    await fsp.appendFile(p, data);
+    return have + data.length;
+  }
+
+  /** Every file is complete: the link goes live. */
+  async importDone(owner: string, id: string): Promise<void> {
+    const m = await this.#upMeta(owner, id);
+    const dir = this.#upDir(id);
+    for (const [i, f] of m.files.entries()) {
+      if ((await fsp.stat(join(dir, `f${i}`))).size !== sealedSize(f.size)) throw new LinkError(409, 'incomplete');
+    }
+    await fsp.rename(dir, join(this.#dir, id));
+  }
+
+  /** A member's links on this hub. */
+  async listOwned(owner: string): Promise<LinkInfo[]> {
+    return (await this.list()).filter((l) => l.owner === owner);
+  }
+
+  /** A member removes one of its links (an upload in progress too). */
+  async revokeOwned(owner: string, id: string): Promise<void> {
+    const up = await this.#upMeta(owner, id).catch(() => null);
+    if (up) return void (await fsp.rm(this.#upDir(id), { recursive: true, force: true }));
+    if (!(await this.listOwned(owner)).some((l) => l.id === id)) throw new LinkError(404, 'not-found');
+    await this.revoke(id);
   }
 
   async revoke(id: string): Promise<void> {
@@ -217,7 +334,9 @@ export class LinkStore {
       const p = join(this.#dir, n);
       try {
         const m = JSON.parse(await fsp.readFile(join(p, 'link.json'), 'utf8')) as LinkMeta;
-        if (this.#now() >= m.expiresAt) await fsp.rm(p, { recursive: true, force: true });
+        // an upload from a member not finished within a day is dropped
+        const stale = n.startsWith('.up-') && this.#now() - m.createdAt > 86_400_000;
+        if (stale || this.#now() >= m.expiresAt) await fsp.rm(p, { recursive: true, force: true });
       } catch {
         await fsp.rm(p, { recursive: true, force: true });
       }
