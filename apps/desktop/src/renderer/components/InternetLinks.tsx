@@ -26,10 +26,13 @@ export function InternetLinks({ state, run }: { state: AppState; run: Run }) {
       </p>
     );
   }
+  const dropBox = isHub && uploads && files.length === 0;
   const create = () =>
     run(async () => {
       const r = await window.meshdrop.linkCreate({
-        files, days, allowUploads: isHub && uploads,
+        files, days, allowUploads: dropBox || (isHub && uploads),
+        // no files: a drop box, where they only send to you
+        ...(files.length === 0 ? { text: 'Send your files here.' } : {}),
         ...(password ? { password } : {}),
         ...(max ? { maxDownloads: Number(max) } : {}),
       });
@@ -60,11 +63,11 @@ export function InternetLinks({ state, run }: { state: AppState; run: Run }) {
       </div>
       {isHub && (
         <label className="row">
-          <input type="checkbox" checked={uploads} onChange={(e) => setUploads(e.target.checked)} /> Let them send files back (you accept each send)
+          <input type="checkbox" checked={uploads} onChange={(e) => setUploads(e.target.checked)} /> Let them send files to you (you accept each send; with no files chosen, the link is only for that)
         </label>
       )}
-      <button className="primary" disabled={files.length === 0} onClick={() => void create()}>
-        Create link
+      <button className="primary" disabled={files.length === 0 && !dropBox} onClick={() => void create()}>
+        {dropBox ? 'Create a link they send files to' : 'Create link'}
       </button>
       {made && (
         <div className="invite">
