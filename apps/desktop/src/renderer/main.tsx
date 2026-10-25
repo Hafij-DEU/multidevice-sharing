@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client';
 import { App } from './App.tsx';
 import { ClipboardPicker } from './components/ClipboardPicker.tsx';
 import './styles.css';
+import './theme.ts';
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>

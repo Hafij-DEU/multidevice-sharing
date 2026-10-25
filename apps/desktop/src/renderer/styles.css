@@ -17,16 +17,16 @@
   font-family: Cantarell, 'Ubuntu', system-ui, sans-serif;
   font-size: 14px;
 }
-@media (prefers-color-scheme: dark) {
-  :root {
-    --accent: #a78bfa;
-    --bg: #0f0d1a;
-    --panel: #1a1729;
-    --text: #ece9f8;
-    --muted: #a19cb8;
-    --border: #2d2842;
-    --shadow: 0 1px 2px rgb(0 0 0 / 0.3), 0 8px 24px rgb(0 0 0 / 0.35);
-  }
+:root[data-theme='light'] { color-scheme: light; }
+:root[data-theme='dark'] {
+  color-scheme: dark;
+  --accent: #a78bfa;
+  --bg: #0f0d1a;
+  --panel: #1a1729;
+  --text: #ece9f8;
+  --muted: #a19cb8;
+  --border: #2d2842;
+  --shadow: 0 1px 2px rgb(0 0 0 / 0.3), 0 8px 24px rgb(0 0 0 / 0.35);
 }
 * { box-sizing: border-box; }
 html, body, #root { height: 100%; margin: 0; }
@@ -98,7 +98,8 @@ textarea { width: 100%; resize: vertical; }
 .toast { display: flex; gap: 8px; align-items: center; padding: 10px 12px; border-radius: var(--radius); background: var(--panel); border: 1px solid var(--border); box-shadow: 0 4px 16px rgb(0 0 0 / 0.15); }
 .toast.error { border-color: var(--bad); }
 .toast span { flex: 1; }
-.toggle { display: flex; gap: 6px; align-items: center; }
+.toggle { display: flex; gap: 8px; align-items: center; margin: 8px 0; }
+.toggle input { flex: none; margin: 0; width: 18px; height: 18px; accent-color: var(--accent); }
 .lead { font-size: 16px; font-weight: 600; margin: 0 0 4px; }
 .grow { flex: 1; min-width: 200px; }
 .ok-text { color: var(--ok); }
@@ -182,6 +183,9 @@ input:focus, textarea:focus, select:focus { outline: 2px solid color-mix(in srgb
 .icon-Mesh { background: linear-gradient(135deg, #06b6d4, #6366f1); }
 .icon-Transfers { background: linear-gradient(135deg, #10b981, #06b6d4); }
 .icon-Settings { background: linear-gradient(135deg, #8b5cf6, #d946ef); }
+.icon-Remote { background: linear-gradient(135deg, #f43f5e, #f97316); }
+.icon-Continue { background: linear-gradient(135deg, #0ea5e9, #8b5cf6); }
+.icon-Watch-party { background: linear-gradient(135deg, #ef4444, #db2777); }
 .add-device summary { color: var(--accent); list-style: none; display: inline-flex; align-items: center; gap: 6px; padding: 8px 14px; border-radius: 999px; background: color-mix(in srgb, var(--accent) 10%, var(--panel)); }
 .add-device summary::-webkit-details-marker { display: none; }
 .add-device summary::before { content: '+'; font-weight: 700; }
@@ -270,9 +274,7 @@ code { font-size: 12.5px; padding: 1px 6px; border-radius: 6px; background: colo
 .tile-icon svg { width: 22px; height: 22px; }
 .tile-title { font-weight: 650; }
 .tile-hint { font-size: 12px; color: var(--muted); }
-@media (prefers-color-scheme: dark) {
-  .tile-icon { color: hsl(var(--h) 85% 72%); background: hsl(var(--h) 45% 20%); }
-}
+:root[data-theme='dark'] .tile-icon { color: hsl(var(--h) 85% 72%); background: hsl(var(--h) 45% 20%); }
 @media (max-width: 480px) {
   .tiles { grid-template-columns: repeat(2, 1fr); }
 }

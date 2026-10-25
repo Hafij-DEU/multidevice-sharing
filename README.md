@@ -1,252 +1,351 @@
+<div align="center">
+
+<img src="docs/media/icon.webp" width="96" height="96" alt="MeshDrop">
+
 # MeshDrop
 
-Send files, folders, text and your clipboard between your own devices: an Ubuntu PC and Android phones,
-end-to-end encrypted. Devices on the same Wi-Fi talk directly. Away from home, they go through a hub that
-runs on your own PC (reachable through Tailscale Funnel, a Cloudflare tunnel or a forwarded port). No
-account and no third-party server.
+**Your devices, one private mesh.** Send files, text and your clipboard between your Ubuntu PC and Android
+phones, control the PC from the phone, watch videos together, and pick up a page on another device where you
+left off. End-to-end encrypted, no account, no third-party server.
 
-Status: the core engine (M1), the hub (M2), the Ubuntu desktop app (M3) and the Android app (M4: the local
-network, then joining the mesh by QR and sending through the hub) are done. The wire protocol is in
-[docs/protocol.md](docs/protocol.md).
+[![Latest release](https://img.shields.io/github/v/release/Hafij-DEU/multidevice-sharing?label=release&color=7c3aed)](https://github.com/Hafij-DEU/multidevice-sharing/releases/latest)
+[![CI](https://github.com/Hafij-DEU/multidevice-sharing/actions/workflows/ci.yml/badge.svg)](https://github.com/Hafij-DEU/multidevice-sharing/actions/workflows/ci.yml)
+[![CodeQL](https://github.com/Hafij-DEU/multidevice-sharing/actions/workflows/codeql.yml/badge.svg)](https://github.com/Hafij-DEU/multidevice-sharing/actions/workflows/codeql.yml)
+![Ubuntu](https://img.shields.io/badge/Ubuntu-.deb-E95420?logo=ubuntu&logoColor=white)
+![Android](https://img.shields.io/badge/Android-10%2B-3DDC84?logo=android&logoColor=white)
+![License](https://img.shields.io/badge/license-GPL--3.0-blue)
 
-## Install (Ubuntu)
+[**Download for Ubuntu**](https://github.com/Hafij-DEU/multidevice-sharing/releases/latest) ·
+[**Download for Android**](https://github.com/Hafij-DEU/multidevice-sharing/releases/latest) ·
+[Features](#features) · [Screenshots](#screenshots) · [Guide](#guide)
 
-Build the package (Node 24 and pnpm 10):
+<img src="docs/media/demo.gif" width="800" alt="MeshDrop on the PC: Home, Send, Watch party, Remote, Continue, then switching to the light theme">
 
-```bash
-pnpm install
-pnpm --filter @meshdrop/desktop dist
-```
+<sub>12-second tour ([MP4](docs/media/demo.mp4)): Home → Send → Watch party → Remote → Continue → Settings → light theme.</sub>
 
-Then install it:
+</div>
 
-```bash
-sudo apt install ./apps/desktop/dist-deb/meshdrop_0.1.0_amd64.deb
-```
+---
 
-The package installs the app (MeshDrop in the app grid, `/opt/MeshDrop`) and the `meshdrop` command line
-in `/usr/bin`.
+## Features
 
-## First run
+<table>
+<tr>
+<td width="33%" valign="top">
 
-1. Open MeshDrop. Your PC appears under its host name (change it in Settings).
-2. To link your devices through this PC: Mesh → **Create a mesh on this PC**, then **Invite a device** and
-   scan the QR code with the phone app (or paste the link into another PC's Mesh page).
-3. Devices on the same network also show up under Nearby. You can add one by address
-   (`192.168.1.20:53318`) on both sides to pair it without a mesh. Both screens then show the same
-   6-digit pairing code: pair only if they match (a different code means another device is in between).
-4. Devices: tick one or more devices (or **All devices**), drop files or folders, press **Send**. Received
-   files land in `~/Downloads/MeshDrop`.
+### 📤 Send anything
+Files, whole folders, text and the clipboard to one device or all of them. Big files resume where they
+stopped. Drag and drop, the Files right-click menu, Android's Share menu, a keyboard shortcut.
 
-Closing the window keeps MeshDrop running in the tray, so it keeps receiving. Settings has autostart at
-login and a GNOME keyboard shortcut (default Ctrl+Alt+C) that sends your clipboard. The shared clipboard
-carries text, copied images and copied files.
+</td>
+<td width="33%" valign="top">
 
-## Android
+### 🔐 Private by design
+End-to-end encrypted, with keys only on your devices. On the same Wi-Fi devices talk directly; away from
+home they go through a **hub on your own PC**. No cloud, no account.
 
-Android 10 or newer. Build the signed APK (needs the Android SDK in `~/Android/Sdk` and Gradle 8.11.1):
+</td>
+<td width="33%" valign="top">
 
-```bash
-bash apps/android/scripts/release.sh
-```
+### 🖱️ Phone as remote
+Touchpad, keyboard, media keys, a slide **presenter with a laser dot**, lock/sleep the PC. Find a phone
+by making it ring, even on silent. Phone notifications show on the PC, and you can reply from there.
 
-It writes `apps/android/dist-apk/MeshDrop-0.1.0.apk` (the signing key is created once in `~/.android`;
-keep it, every update must be signed with it). Install it from the phone's file manager (MIUI blocks
-`adb install`).
+</td>
+</tr>
+<tr>
+<td valign="top">
+
+### 🎬 Watch party
+Share a **6-character code** and watch YouTube, Google Drive, Dropbox or your own videos **in step**:
+play, pause and jumps follow along for everyone. Friends join from any browser.
+
+</td>
+<td valign="top">
+
+### 🔁 Continue on another device
+Reading in the PC browser? Open the same page on the phone **at the same scroll position**. YouTube
+continues at the same second. Works the other way too: Share → *Continue on PC*.
+
+</td>
+<td valign="top">
+
+### 🗂️ Sync & photo backup
+Keep folders the same on your devices, with conflict copies and a `Deleted` safety net. New phone
+photos go to the PC by themselves.
+
+</td>
+</tr>
+<tr>
+<td valign="top">
+
+### 👋 Guests & internet links
+Let a friend send or get files from a browser with a QR code, no app needed. Share **encrypted
+internet links** with a password, a download limit and an expiry.
+
+</td>
+<td valign="top">
+
+### 📷 Phone as webcam & mic
+The phone's camera and microphone show up on the PC as normal devices (PipeWire). The PC's sound can
+play on the phone.
+
+</td>
+<td valign="top">
+
+### ✨ Little extras
+Voice notes, burn after reading, read receipts, send later, print on the PC, scan a page to PDF, shake to
+grab the PC clipboard, a party drop board, LocalSend compatible, light & dark themes.
+
+</td>
+</tr>
+</table>
+
+## Screenshots
+
+<table>
+<tr>
+<td colspan="2" align="center">
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/media/desktop-home-dark.webp">
+  <img src="docs/media/desktop-home-light.webp" alt="MeshDrop Home on the PC" width="820">
+</picture>
+<br><sub>Home on the PC: every feature one click away (light or dark follows your GitHub theme)</sub>
+</td>
+</tr>
+<tr>
+<td align="center" width="50%"><img src="docs/media/desktop-watch-dark.webp" alt="Watch party" width="400"><br><sub>Watch party</sub></td>
+<td align="center" width="50%"><img src="docs/media/desktop-send-dark.webp" alt="Send" width="400"><br><sub>Send to one or all devices</sub></td>
+</tr>
+</table>
+
+<table>
+<tr>
+<td align="center"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/media/phone-home-dark.webp"><img src="docs/media/phone-home-light.webp" alt="Home, phone size" width="200"></picture><br><sub>Home</sub></td>
+<td align="center"><img src="docs/media/phone-send-light.webp" alt="Send, phone size" width="200"><br><sub>Send</sub></td>
+<td align="center"><img src="docs/media/phone-remote-dark.webp" alt="Remote touchpad" width="200"><br><sub>Remote</sub></td>
+<td align="center"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/media/phone-more-dark.webp"><img src="docs/media/phone-more-light.webp" alt="All features" width="200"></picture><br><sub>Everything else</sub></td>
+</tr>
+</table>
+
+## Get started
+
+| | |
+|---|---|
+| **Ubuntu** | Download `meshdrop_<version>_amd64.deb` from [Releases](https://github.com/Hafij-DEU/multidevice-sharing/releases/latest), then `sudo apt install ./meshdrop_*_amd64.deb`. Or install and update it with **App Hub**. |
+| **Android 10+** | Download `MeshDrop-<version>.apk` from [Releases](https://github.com/Hafij-DEU/multidevice-sharing/releases/latest) and open it on the phone. |
+| **Browser extension** | `meshdrop-extension-<version>.zip` (for *Continue*). App Hub installs it too: MeshDrop card → **Extension**. |
+
+1. **Open MeshDrop** on the PC and the phone. On the same Wi-Fi they appear under *Nearby*.
+2. **Pair:** tap the device's card (or *Add by address*). Both screens show the same 6-digit code. Pair only if
+   they match.
+3. **Send:** tick devices, add files, press **Send**. Files land in `~/Downloads/MeshDrop` on the PC and
+   `Download/MeshDrop` on the phone.
+4. **Away from home?** Make the PC your hub (More → Mesh → *Create a mesh*, then *Invite a device* and scan the
+   QR code on the phone), and give it an internet address. See [Reach your PC from anywhere](#reach-your-pc-from-anywhere).
+
+> [!TIP]
+> Settings → **Theme** switches between System, Light and Dark on each device.
+
+## Guide
+
+<details>
+<summary><b>🖥️ The PC app</b></summary>
+
+The package installs the app (MeshDrop in the app grid, `/opt/MeshDrop`) and the `meshdrop` command line in
+`/usr/bin`.
+
+- Closing the window keeps MeshDrop running in the tray, so it keeps receiving.
+- Settings has autostart at login and a GNOME keyboard shortcut (default Ctrl+Alt+C) that sends your
+  clipboard. The shared clipboard carries text, copied images and copied files.
+- After an update MeshDrop restarts itself as the new version.
+
+</details>
+
+<details>
+<summary><b>📱 The Android app</b></summary>
 
 1. Open MeshDrop. It starts a background service with a small notification, so it keeps receiving.
-2. Settings → "Keep MeshDrop alive": allow the battery exemption and notifications; on Xiaomi and Tecno
-   phones also the Autostart steps.
-3. Pair with the PC: on Devices, "Add by address" with the PC's address (shown in MeshDrop on the PC),
-   and on the PC add the phone the same way. Check that both show the same pairing code.
-4. Send from Devices (Add files / Add folder / Text), from any app's Share menu, or send the clipboard
-   with the notification's "Send clipboard" button or the quick-settings tile. Received files land in
-   `Download/MeshDrop`.
-5. Away from home: join the mesh. On the PC, Mesh → "Invite a device" shows a QR code. Scan it with the
-   phone's camera (or Google Lens): it opens MeshDrop's Mesh page with the invite filled in; tap Join.
-   You can also paste the invite there. The phone then keeps a link to the hub and reaches your other
-   devices through it when they are not on the same Wi-Fi; files for a device that is off wait on the
-   hub until it comes back. Creating the mesh, inviting, revoking and recovery stay on the PC.
+2. Settings → "Keep MeshDrop alive": allow the battery exemption and notifications. On Xiaomi and Tecno
+   phones, also follow the Autostart steps.
+3. Send from Send (Add files / Add folder / Text), from any app's Share menu, or send the clipboard with the
+   notification's "Send clipboard" button or the quick-settings tile.
+4. Join the mesh to reach your devices away from home. On the PC, Mesh → "Invite a device" shows a QR code.
+   Scan it with the phone's camera: it opens MeshDrop with the invite filled in. Tap Join. Files for a device
+   that is off wait on the hub until it comes back.
 
-Some phones (Xiaomi/HyperOS above all) still stop apps in the background. With the phone on USB and
-USB debugging on, the PC app lifts every limit at once (no root): More → Devices → **Set up a phone (USB)**
-(the same as `bash apps/android/scripts/keep-alive-adb.sh`).
+Some phones (Xiaomi/HyperOS above all) still stop apps in the background. With the phone on USB and USB
+debugging on, the PC app lifts every limit at once, without root: More → Devices → **Set up a phone (USB)**.
+It does the same as `bash apps/android/scripts/keep-alive-adb.sh`.
 
-## Remote, find my device, notifications
+</details>
+
+<details>
+<summary><b>🖱️ Remote, find my device, notifications</b></summary>
 
 More → Remote, on the phone and on the PC:
 
-- **Control a PC** from the phone: touchpad (tap to click, two fingers to scroll), keyboard (typing
-  appears on the PC), media and volume keys, a **presenter** with next/previous slide and a laser dot
-  that follows your finger on the PC screen, and PC actions (lock, sleep, shut down, restart, open an
-  app). On the PC, tick the devices that may control it first. The first time, GNOME asks once to allow
-  remote interaction (the XDG RemoteDesktop portal; it works on Wayland).
-- **Find my device**: Ring makes the phone ring at full volume even on silent (or the PC play an alarm)
+- **Control a PC** from the phone: touchpad (tap to click, two fingers to scroll), keyboard, media and volume
+  keys, a **presenter** with next/previous slide and a laser dot, and PC actions (lock, sleep, shut down,
+  restart, open an app). On the PC, first tick the devices that may control it. The first time, GNOME asks
+  once to allow remote interaction (the XDG RemoteDesktop portal, which works on Wayland).
+- **Find my device:** Ring makes the phone ring at full volume even on silent (or the PC play an alarm)
   until Stop. Battery, free space and signal of your phones show on the PC.
-- **Phone notifications on the PC**: on the phone, tick the PCs to show them on and allow notification
-  access once. Messages with a reply action (SMS in Google Messages, chat apps) can be answered from
-  the PC.
-- **Link handoff**: type or paste a link in Send → Text and press "Open link on device"; sharing a link
-  to MeshDrop on the phone works the same way. The other device opens it in its browser.
-- **PC sound on the phone, phone as webcam and microphone** (same Wi-Fi): on the phone's Remote page,
-  "Play PC sound here" plays what the PC plays (only for devices ticked on the PC); "Use as webcam" and
-  "Use as microphone" make the phone's front camera and microphone show up on the PC as
-  "<phone> camera (MeshDrop)" and "<phone> microphone (MeshDrop)" (PipeWire devices, no driver or root
-  needed; apps that use PipeWire cameras, such as Firefox and Chrome, see the camera). Keep MeshDrop
-  open on the phone to start them.
-- **Second screen**: the phone's Remote page opens Extendo.
+- **Phone notifications on the PC:** on the phone, tick the PCs to show them on and allow notification
+  access once. Messages with a reply action can be answered from the PC.
+- **Link handoff:** Send → Text → "Open link on device" opens a link in the other device's browser.
+- **PC sound on the phone, phone as webcam and microphone** (same Wi-Fi): the phone's Remote page has
+  "Play PC sound here", "Use as webcam" and "Use as microphone". The camera and microphone appear on the
+  PC as "<phone> camera (MeshDrop)" and "<phone> microphone (MeshDrop)" (PipeWire, no driver or root).
+- **Second screen:** the phone's Remote page opens Extendo.
 
-## Continue on another device
+</details>
 
-Carry on with what you were doing, at the same spot:
+<details>
+<summary><b>🔁 Continue on another device</b></summary>
 
-- **PC browser → phone:** add the MeshDrop extension to your browser once: Home → Continue on phone →
-  "Get the extension folder", then in `brave://extensions` (or `chrome://extensions`,
-  `opera://extensions`) turn on Developer mode and *Load unpacked* the **MeshDrop Browser Extension**
-  folder in Documents (App Hub puts it there too: MeshDrop card → Extension, and keeps it updated). Then on the phone, Home → **Continue from PC** opens the page your PC
-  browser shows: the same scroll position (scroll-to-text) and, for YouTube, the same second. The
-  extension's button (or the PC's Continue page) sends a page to a phone too. The extension talks only
+- **PC browser → phone:** add the **MeshDrop Handoff** browser extension once (App Hub → MeshDrop →
+  *Extension*, or Home → Continue on phone → "Get the extension folder"). Then in `brave://extensions`,
+  `chrome://extensions` or `opera://extensions`, turn on Developer mode and *Load unpacked* the
+  **MeshDrop Browser Extension** folder in Documents. On the phone, Home → **Continue from PC** opens the page
+  your PC browser shows: the same scroll position, and for YouTube the same second. The extension talks only
   to MeshDrop on this PC (127.0.0.1).
-- **Phone → PC:** in Chrome, YouTube or any app, Share → **Continue on PC**. The page opens in the PC
-  browser (through the extension: same scroll; without it, in the default browser); a video playing on
-  the phone continues at the same second (needs MeshDrop's notification access).
+- **Phone → PC:** in Chrome, YouTube or any app, Share → **Continue on PC**. A video playing on the phone
+  continues at the same second (this needs MeshDrop's notification access).
 
-## Watch party
+</details>
 
-Home → **Watch party**: watch together, in step. Start a room and share its **6-character code** (or
-the link or QR code). Everyone sees the same moment: play, pause, jumps and speed follow along for
-everybody; one tick lets only the host control playback. There is a chat and a list of who is watching.
+<details>
+<summary><b>🎬 Watch party</b></summary>
 
-- **What plays:** YouTube links (the official YouTube player); Google Drive links (the file must be shared
-  "anyone with the link", and the room PC relays it); Dropbox links; any link to a video file; and your
-  own videos (on the PC: "Play a video from this PC…", read where it is; in the player: "Your video…"
-  uploads it to the room).
-- **Where rooms live:** on your MeshDrop PC (the hub, or a phone's PC), never in an outside cloud. On
-  your Wi-Fi the room works at once; friends elsewhere need the hub's internet address
-  (Mesh → Internet access). Friends without MeshDrop open the link in any browser.
-- **Joining:** type the code in Watch party (it looks on your hub and your network), or open the link.
-- A room ends when you press End, or after 6 hours with nobody in it; uploaded videos go with it.
+Home → **Watch party**. Start a room and share its **6-character code** (or the link or QR code). Play, pause,
+jumps and speed follow along for everybody; one tick lets only the host control playback. There is a chat
+and a list of who is watching.
 
-## Extras
+- **What plays:** YouTube links; Google Drive links (shared "anyone with the link"; the room PC relays them);
+  Dropbox links; links to video files; your own videos ("Play a video from this PC…" on the PC, "Your video…"
+  in the player).
+- **Where rooms live:** on your MeshDrop PC, never in an outside cloud. On your Wi-Fi the room works at once;
+  friends elsewhere need the hub's internet address. Friends without MeshDrop open the link in any browser.
+- A room ends when you press End, or after 6 hours with nobody in it.
 
-- **Voice notes**: Send → Voice note records a message in the app; it goes like a file.
-- **Send options** (Send → Options): 🔥 *burn after reading* (the receiver's copy is deleted 5 minutes
-  after it is first opened, or after a week unopened), 🖨 *print on the PC* (the PC prints it with `lp`;
-  Settings → "Print files my devices send"), ⏰ *send later* (a time capsule: the app keeps the send and
-  sends it at its time while it runs; Scheduled lists them).
-- **Read receipts**: when the other device opens what you sent, your Sent row shows *Opened*
-  (Settings → "Read receipts" to turn off telling others).
-- **Smart inbox** (PC Settings): received files go into Images, Videos, Audio, Documents, Archives or
-  Other, and optionally files older than N days are deleted.
-- **Room mode** (PC: Guests → Room): one QR for everyone on the Wi-Fi at a party or in a class; anyone can
-  post photos and files on a shared board and download everyone's. Ending the room deletes it all
-  (Save keeps a copy in your inbox).
-- **Phone as scanner**: Send → Scan to PDF takes a photo of a page and sends it as a one-page PDF.
-- **Gestures** (phone): flick the list of files up to send it; shake the phone with MeshDrop open to
-  grab what is copied on the PC (the PC must have the shared clipboard on, or allow the phone on its
-  Remote page).
+</details>
 
-## LocalSend
+<details>
+<summary><b>✨ Extras</b></summary>
 
-People using the LocalSend app on the same Wi-Fi show up on Devices as "LocalSend". You can send them
-files and text; their app asks them first. When they send to this PC, MeshDrop asks you (Accept or
-Decline) before saving anything. MeshDrop speaks LocalSend protocol v2 on port 53317 (HTTPS, multicast
-224.0.0.167). If the LocalSend app itself runs on this PC, it keeps that port and MeshDrop leaves
-LocalSend to it. Android support for LocalSend comes later.
+- **Voice notes:** Send → Voice note records a message; it goes like a file.
+- **Send options:** 🔥 *burn after reading* (the receiver's copy is deleted 5 minutes after it is first
+  opened), 🖨 *print on the PC* (`lp`), ⏰ *send later* (sent at its time while the app runs).
+- **Read receipts:** your Sent row shows *Opened* when the other device opens it.
+- **Smart inbox** (PC Settings): files sorted into Images, Videos, Audio, Documents, Archives or Other;
+  optional clean-up after N days.
+- **Room mode** (Guests → Room): one QR for everyone on the Wi-Fi; a shared board for photos and files that
+  disappears when the room ends.
+- **Phone as scanner:** Send → Scan to PDF.
+- **Gestures** (phone): flick the file list up to send; shake to grab what is copied on the PC.
+- **LocalSend:** LocalSend users on the same Wi-Fi show up as "LocalSend". Both sides ask before anything
+  is saved (protocol v2, port 53317).
+
+</details>
+
+<details>
+<summary><b>🗂️ Folder sync and photo backup</b></summary>
+
+**More → Sync** keeps folders the same on your devices whenever they are on the same Wi-Fi. Folders match by
+name; tick the devices to sync each folder with, on both devices.
+
+- Adds, edits and deletes travel both ways. A file that changed on both sides keeps both versions.
+- A file deleted or replaced on another device is kept in the synced folder's `Deleted` folder.
+- Sync never goes through the hub, only over the LAN.
+
+**Photo backup** (Android): new camera photos and videos go to the PC by themselves on the same Wi-Fi, into
+`~/Pictures/MeshDrop Backup/<phone name>/`.
+
+</details>
+
+<details>
+<summary><b>👋 Guests and internet links</b></summary>
+
+**Guests** (same Wi-Fi): Guests → "Show a guest QR code". The friend's browser can send you files and a
+message, and download files you offer. Every send asks you first, with names, sizes and thumbnails. The link
+works for one browser only, for 1 hour by default. The page is plain HTTP on your network, so use it on
+Wi-Fi you trust.
+
+**Internet links:** Guests → Internet links → choose files, how long (1 hour to 30 days), an optional password
+and download limit, and whether they may send files back. Files are encrypted on your device. The key is
+the part of the link after `#`, which browsers never send to a server, so the hub and any tunnel only see
+ciphertext.
+
+</details>
 
 ## Reach your PC from anywhere
 
-On the hub PC: Mesh → Internet access. "Check my connection" tells you whether your provider gives you a
-public address or shares it (CGNAT), and suggests a way in:
+> [!IMPORTANT]
+> Being online is not enough. Your hub PC sits behind your home router, and many providers share one
+> public address between many homes (**CGNAT**). Nothing on the internet can open a connection to your PC
+> until you give it a way in. Until then, your devices reach each other only on the same Wi-Fi.
 
-- **Tailscale Funnel**: free account, no domain. Install Tailscale, run `sudo tailscale up`, allow Funnel
-  for this PC in the Tailscale admin console, then pick it here.
-- **Cloudflare tunnel**: needs a domain in your Cloudflare account. Install `cloudflared`, run
-  `cloudflared tunnel login` once, then enter a hostname such as `drop.example.com`.
-- **Port forwarding**: only with a public IP (not behind CGNAT). Make a free name at duckdns.org and
-  enter it with its token. MeshDrop gets a Let's Encrypt certificate (DNS check through DuckDNS, so
-  no port 80 needed), and asks your router to forward port 443 (UPnP or NAT-PMP). Or tick "I forwarded
-  the port myself" and forward TCP 443 to the port it shows.
+On the hub PC: More → Mesh → **Internet access** → *Check my connection*. It tells you whether you are behind
+CGNAT and suggests a way in:
 
-The address it gets becomes the hub's internet address: your devices use it when they are away, and
-internet links point at it. From a terminal: `meshdrop hub reach detect`, `meshdrop hub reach tailscale`,
-`meshdrop hub reach cloudflare HOST`, `meshdrop hub reach port-forward NAME --token-file F [--manual]`,
-`meshdrop hub reach off` (applied by the running `meshdrop listen`).
+| Way in | Needs | Works behind CGNAT |
+|---|---|---|
+| **Tailscale Funnel** | free Tailscale account; `sudo tailscale up`; allow Funnel for this PC | ✅ |
+| **Cloudflare tunnel** | a domain in your Cloudflare account; `cloudflared tunnel login` | ✅ |
+| **Port forwarding** | a public IP; a free duckdns.org name (MeshDrop gets a Let's Encrypt certificate and asks the router via UPnP/NAT-PMP) | ❌ |
 
-### A hub that is always on (relay hubs)
+The address becomes the hub's internet address: your devices use it when they are away, and watch parties and
+internet links point at it. From a terminal: `meshdrop hub reach detect | tailscale | cloudflare HOST |
+port-forward NAME --token-file F [--manual] | off`.
 
-When the hub PC is off, a **relay hub** keeps things going: sends over the internet, files waiting for an
-offline device, and internet links. A relay hub is one of your mesh devices that is always on, such as a
-cheap VPS or a second PC, reachable at a public `wss://` address.
+<details>
+<summary><b>A hub that is always on (relay hubs)</b></summary>
 
-1. On the always-on machine: `meshdrop join <invite>` (an invite from the hub PC), then run
-   `meshdrop listen` as a service. Put a TLS proxy or tunnel in front of its loopback port 53319
-   (`--ingress-port N` to change it), for example Caddy with `reverse_proxy 127.0.0.1:53319`.
-2. On the hub PC: Mesh → Relay hubs, enter that device's address (`wss://relay.example.com/mesh/v1/hub`),
-   Save. Or `meshdrop hub relays <device-id-prefix>=wss://relay.example.com/mesh/v1/hub`.
+When the hub PC is off, a **relay hub** keeps sends, waiting files and internet links going. It is one of
+your mesh devices that is always on (a cheap VPS or a second PC) at a public `wss://` address.
 
-Every device gets the list (signed by the hub PC). While the hub PC is away they link to the relay; they
-move back to the hub PC within 5 minutes after it returns, and fetch anything the relay held for them.
-A relay never holds the mesh key: adding or removing devices still needs the hub PC.
+1. On that machine: `meshdrop join <invite>`, then run `meshdrop listen` as a service, with a TLS proxy or
+   tunnel in front of its loopback port 53319 (for example Caddy: `reverse_proxy 127.0.0.1:53319`).
+2. On the hub PC: Mesh → Relay hubs → enter `wss://relay.example.com/mesh/v1/hub` → Save.
 
-## Folder sync and photo backup
+Devices move to the relay while the hub PC is away, and back within 5 minutes after it returns. A relay
+never holds the mesh key.
 
-**More → Sync** keeps folders the same on your devices whenever they are on the same Wi-Fi. Add as many folders as you like (the PC suggests `~/MeshDrop Sync`; on the phone you pick them), not your working folders. Folders match by name: give a folder the same name on each device (it starts as the folder's own name). Tick the devices to sync each folder with, on both devices.
-
-- Adds, edits and deletes travel both ways. A file that changed on both sides keeps both versions: the newer one keeps the name, the other becomes "name (conflict from <device> <time>)".
-- A file deleted or replaced on another device is kept in that synced folder's `Deleted` folder (same path), so an accidental deletion loses nothing. `Deleted` is not synced; empty it yourself.
-- Sync never goes through the hub: only on the LAN.
-
-**Photo backup** (Android, on the same page): new camera photos and videos go to your PC by themselves while both are on the same Wi-Fi. They land in `~/Pictures/MeshDrop Backup/<phone name>/` on the PC.
-
-## Guests
-
-Let a friend send you files from their phone's browser, no app needed. On the PC, open Guests →
-"Show a guest QR code" and let them scan it on the same Wi-Fi. Their browser gets a page where they can
-send you files and a message, and download files you offer ("Offer files…"). They see nothing else.
-
-- Every send asks you first: you see the names, sizes and photo thumbnails, then Accept or Decline.
-  Nothing is saved before you accept; accepted files land in your inbox.
-- The link works for one browser only, for 1 hour by default (Settings → "A guest link works for",
-  5 minutes to 24 hours). "End" stops it at once.
-- The page is plain HTTP on your network (browsers reject self-signed certificates), so use it on Wi-Fi
-  you trust.
-
-**Internet links**: Guests → Internet links → choose files, how long the link works
-(1 hour to 30 days), an optional password and download limit, and whether they may send files back.
-The files are encrypted on your PC; the key is the part of the link after `#`, which browsers never
-send to a server, so the hub's disk and any tunnel only see ciphertext. "Remove" ends a link at once.
-The link uses the hub's internet address (see "Reach your PC from anywhere"). Phones and other member
-devices make links too: the files are encrypted on that device and the hub PC (or a relay hub, while
-the PC is off) keeps only the ciphertext. Links made on a member cannot take files back.
-From a terminal: `meshdrop link create FILE... [--days N] [--passphrase-file F] [--max-downloads N]
-[--allow-uploads]`, `meshdrop link list`, `meshdrop link revoke ID`.
-
-From a terminal: `meshdrop guest [--share FILE]... [--minutes N] [--accept-all]`.
+</details>
 
 ## Command line
 
 ```text
 meshdrop id                         this device's id
-meshdrop listen                     receive until Ctrl-C (or run it as a service, see docs/protocol.md)
+meshdrop listen                     receive until Ctrl-C (or run it as a service)
 meshdrop pair <host[:port]> <name>  trust a device by address (both sides)
 meshdrop send <device|all> <path…>  send files or folders (--text "..." for text)
 meshdrop outbox / resume            unfinished sends
 meshdrop guest                      a guest QR link for a browser on this network
-meshdrop hub init / invite / join / members / hub revoke / hub relays / hub recovery-export
+meshdrop link create|list|revoke    encrypted internet links
+meshdrop hub init / invite / join / members / hub revoke / hub relays / hub reach / hub recovery-export
 ```
 
 Every command takes `--home DIR` to use another config folder. `meshdrop --help` lists all options.
 
 ## Development
 
+Node 24, pnpm 10, the Android SDK in `~/Android/Sdk` and Gradle 8.11.1.
+
 ```bash
-pnpm test               # core + desktop unit tests
+pnpm install
+pnpm test                                    # core + desktop unit tests
 pnpm typecheck
-pnpm desktop:e2e        # builds the app and runs the Playwright Electron tests
-pnpm desktop:dev        # build and start the app
+pnpm desktop:e2e                             # Playwright tests of the Electron app
+pnpm desktop:dev                             # build and start the app
+bash apps/desktop/scripts/build-deb.sh       # the .deb in apps/desktop/dist-deb
+bash apps/android/scripts/release.sh         # the signed APK in apps/android/dist-apk
+bash apps/desktop/scripts/build-extension-zip.sh   # the browser extension .zip in dist/
 cd apps/android && ~/.local/opt/gradle-8.11.1/bin/gradle --offline :engine:test   # Java engine + Node interop
-bash apps/android/scripts/emulator-e2e.sh   # the APK on the emulator against the Node engine
 ```
 
-License: GPL-3.0-only.
+The wire protocol is in [docs/protocol.md](docs/protocol.md). The APK signing key is created once in
+`~/.android`; keep it, because every update must be signed with it.
+
+<div align="center"><sub>GPL-3.0-only · made by Hafij-BGE</sub></div>

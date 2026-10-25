@@ -186,7 +186,7 @@ export function App() {
             {subs.map((p) => (
               <li key={p}>
                 <button className="menu-item" onClick={() => setSub(p)}>
-                  <span className={`menu-icon icon-${p}`} aria-hidden="true">
+                  <span className={`menu-icon icon-${p.replace(/ /g, '-')}`} aria-hidden="true">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                       <path d={ICON[p]} />
                     </svg>

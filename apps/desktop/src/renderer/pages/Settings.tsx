@@ -1,8 +1,41 @@
 import { useState } from 'react';
 import type { AppState, Settings as S } from '../../shared/api.ts';
 import type { Run } from '../App.tsx';
+import { setThemeChoice, themeChoice, type ThemeChoice } from '../theme.ts';
 
 const DEFAULT_BINDING = '<Primary><Alt>c';
+const THEMES: [ThemeChoice, string][] = [
+  ['system', 'System'],
+  ['light', 'Light'],
+  ['dark', 'Dark'],
+];
+
+/** Appearance: kept on this device, applied at once. */
+function Theme() {
+  const [choice, setChoice] = useState(themeChoice);
+  return (
+    <div className="field">
+      <span>Theme</span>
+      <div className="segmented" role="radiogroup" aria-label="Theme">
+        {THEMES.map(([v, label]) => (
+          <button
+            key={v}
+            role="radio"
+            aria-checked={choice === v}
+            className={choice === v ? 'active' : ''}
+            onClick={() => {
+              setThemeChoice(v);
+              setChoice(v);
+            }}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 const SWITCHES: [keyof S, string][] = [
   ['discovery', 'Find devices on this network automatically'],
   ['clipboardReceive', 'Put received clipboard text on my clipboard'],
@@ -62,6 +95,7 @@ export function Settings({ state, run }: { state: AppState; run: Run }) {
         <span>Device name</span>
         <input aria-label="Device name" value={draft.alias} maxLength={64} onChange={(e) => set('alias', e.target.value)} />
       </label>
+      <Theme />
       {android ? (
         <p className="field">
           <span>Received files are saved in</span> <code>Download/MeshDrop</code>
@@ -111,7 +145,7 @@ export function Settings({ state, run }: { state: AppState; run: Run }) {
         </label>
       )}
       {SWITCHES.filter(([k]) => !(android && DESKTOP_ONLY.includes(k))).map(([k, label]) => (
-        <label key={k} className="row">
+        <label key={k} className="toggle">
           <input type="checkbox" checked={draft[k] as boolean} onChange={(e) => set(k, e.target.checked as never)} /> {label}
         </label>
       ))}
