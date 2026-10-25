@@ -35,6 +35,7 @@ export function defaultSettings(over: Partial<Settings> = {}): Settings {
     printFromDevices: true,
     sortInbox: false,
     sendReceipts: true,
+    cleanupDays: 0,
     ...over,
   };
 }
@@ -70,6 +71,9 @@ function validate(s: Settings): void {
   }
   if (!Number.isInteger(s.guestMinutes) || s.guestMinutes < 5 || s.guestMinutes > 1440) {
     throw new SettingsError('A guest link must last between 5 minutes and 24 hours (1440 minutes).');
+  }
+  if (!Number.isInteger(s.cleanupDays) || s.cleanupDays < 0 || s.cleanupDays > 3650) {
+    throw new SettingsError('Clean-up must be 0 (never) or a number of days up to 3650.');
   }
   if (!Array.isArray(s.remoteFrom) || s.remoteFrom.length > 64 || s.remoteFrom.some((d) => typeof d !== 'string' || !/^[0-9a-f]{64}$/.test(d))) {
     throw new SettingsError('Invalid list of devices that may control this PC.');

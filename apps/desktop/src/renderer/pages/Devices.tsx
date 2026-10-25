@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { AppState, SendItemInput } from '../../shared/api.ts';
 import { DeviceCard } from '../components/DeviceCard.tsx';
 import { DropZone } from '../components/DropZone.tsx';
@@ -125,6 +125,7 @@ export function Devices({ state, run }: { state: AppState; run: Run }) {
   const [text, setText] = useState<string | null>(null);
   const [addr, setAddr] = useState('');
   const [name, setName] = useState('');
+  const flick = useRef<{ y: number; t: number } | null>(null);
   const [burn, setBurn] = useState(false);
   const [print, setPrint] = useState(false);
   const [later, setLater] = useState('');
@@ -245,6 +246,18 @@ export function Devices({ state, run }: { state: AppState; run: Run }) {
           Clipboard
         </button>
         <VoiceNote run={run} onDone={(path) => add([{ kind: 'file', path }])} />
+        {window.meshdrop.scanDocument && (
+          <button
+            onClick={() =>
+              void run(async () => {
+                const it = await window.meshdrop.scanDocument!();
+                if (it) add([it]);
+              })
+            }
+          >
+            📄 Scan to PDF
+          </button>
+        )}
       </div>
       <button className="link" aria-expanded={showOpts} onClick={() => setShowOpts(!showOpts)}>
         {showOpts ? '▾' : '▸'} Options{burn || print || later ? ' (on)' : ''}
@@ -270,7 +283,17 @@ export function Devices({ state, run }: { state: AppState; run: Run }) {
       )}
       {text !== null && <textarea aria-label="Text to send" value={text} onChange={(e) => setText(e.target.value)} rows={3} placeholder="Type a message or paste a link" />}
       {items.length > 0 && (
-        <ul className="items">
+        <ul
+          className="items"
+          title="Flick up to send"
+          onPointerDown={(e) => (flick.current = { y: e.clientY, t: Date.now() })}
+          onPointerUp={(e) => {
+            // M11: a quick flick up on the list sends it (like throwing it to the device)
+            const f = flick.current;
+            flick.current = null;
+            if (f && f.y - e.clientY > 100 && Date.now() - f.t < 400 && canSend) void send();
+          }}
+        >
           {items.map((it) => (
             <li key={`${it.kind}:${it.path}`}>
               <span className="muted">{it.kind === 'dir' ? 'Folder' : 'File'}</span> {it.name ?? baseName(it.path ?? '')}

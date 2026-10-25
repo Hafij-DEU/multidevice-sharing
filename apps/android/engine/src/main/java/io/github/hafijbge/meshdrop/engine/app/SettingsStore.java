@@ -114,6 +114,13 @@ public final class SettingsStore {
                 else if (k.equals("printFromDevices")) s.printFromDevices = (Boolean) v;
                 else s.sortInbox = (Boolean) v;
                 break;
+            case "cleanupDays": {
+                if (!(v instanceof Long) && !(v instanceof Integer)) throw new SettingsError("Invalid value for cleanupDays.");
+                long d = ((Number) v).longValue();
+                if (d < 0 || d > 3650) throw new SettingsError("Clean-up must be 0 (never) or up to 3650 days.");
+                s.cleanupDays = (int) d;
+                break;
+            }
             case "guestMinutes":
                 if (!(v instanceof Long) && !(v instanceof Integer)) throw new SettingsError("Invalid value for guestMinutes.");
                 long gm = ((Number) v).longValue();

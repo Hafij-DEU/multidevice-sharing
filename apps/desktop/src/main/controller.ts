@@ -15,7 +15,7 @@ import { loadOrCreateIdentity } from '@meshdrop/core/src/identity.ts';
 import { writeFileAtomic } from '@meshdrop/core/src/trust.ts';
 import { BUTTONS, KEYSYMS, charKeysym } from './keys.ts';
 import { ensureDir, land } from '@meshdrop/core/src/guest/uploads.ts';
-import type { AppState, DeviceStatus, DeviceView, PhoneNote, RemoteEvent, ScheduledView, SendOptions, GuestView, LinkCreateInput, LinkView, ReachInput, ReachView, SendItemInput, Settings, SyncView, TransferView } from '../shared/api.ts';
+import type { AppState, DeviceStatus, ReceivedRecord, DeviceView, PhoneNote, RemoteEvent, ScheduledView, SendOptions, GuestView, LinkCreateInput, LinkView, ReachInput, ReachView, SendItemInput, Settings, SyncView, TransferView } from '../shared/api.ts';
 import type { HistoryStore } from './history.ts';
 import { SettingsError, type SettingsStore } from './settings.ts';
 
@@ -1118,6 +1118,17 @@ export class AppController extends EventEmitter {
         }
         return { status: 200, body: { ok: true } };
       }
+      case 'clipboard-get': {
+        // M11 shake to grab: what is copied here goes to the asking device (devices allowed to control
+        // this PC, or any of my devices while the shared clipboard is on)
+        if (!may && !s.clipboardSync) return { status: 403, body: { error: 'clipboard-off' } };
+        const img = p.readClipboardImage?.();
+        if (img) {
+          const png = img.png();
+          if (png.length <= 4 * 1024 * 1024) return { status: 200, body: { image: png.toString('base64') } };
+        }
+        return { status: 200, body: { text: p.readClipboard().slice(0, MAX_CLIP_SYNC) } };
+      }
       case 'notify-removed':
         this.#phoneNotes = this.#phoneNotes.filter((n) => !(n.from === peer && n.key === msg.key));
         this.#changed();
@@ -1435,6 +1446,17 @@ export class AppController extends EventEmitter {
   /** M11: deletes burned files whose time came, and sends scheduled sends whose time came. */
   async #m11Tick(): Promise<void> {
     const now = Date.now();
+    // smart inbox clean-up (Settings): files received more than N days ago go (the record stays, marked)
+    const days = this.#settings.get().cleanupDays;
+    if (days > 0) {
+      const old = (r: ReceivedRecord) => !r.burned && !r.cleaned && r.files.length > 0 && r.at + days * 86_400_000 <= now;
+      const gone = this.#history.received().filter(old);
+      for (const r of gone) for (const f of r.files) rmSync(f, { recursive: true, force: true });
+      if (gone.length) {
+        this.#history.update(old, () => ({ cleaned: true, files: [] }));
+        this.#changed();
+      }
+    }
     const isDue = (r: { burn?: boolean; burned?: boolean; burnAt?: number; at: number }) => r.burn === true && !r.burned && ((r.burnAt !== undefined && r.burnAt <= now) || r.at + BURN_UNOPENED_MS <= now);
     const due = this.#history.received().filter(isDue);
     for (const r of due) for (const f of r.files) rmSync(f, { force: true });

@@ -60,6 +60,8 @@ export interface ReceivedRecord {
   burnAt?: number;
   /** The files were deleted (burn after reading). */
   burned?: boolean;
+  /** The files were deleted by the smart inbox clean-up. */
+  cleaned?: boolean;
   openedAt?: number;
 }
 
@@ -110,6 +112,8 @@ export interface Settings {
   sortInbox: boolean;
   /** M11 read receipts: tell the sender when you open what it sent. */
   sendReceipts: boolean;
+  /** M11 smart inbox clean-up: received files older than this many days are deleted (0: never). */
+  cleanupDays: number;
   /** Android: the devices this phone forwards its notifications to. */
   notifyTo?: string[];
 }
@@ -310,6 +314,8 @@ export interface DesktopApi {
   pickOpenPath(): Promise<string | null>;
   pathForFile(file: File): string;
   send(targets: string[] | 'all', items: SendItemInput[], opts?: SendOptions): Promise<void>;
+  /** M11 phone as scanner (Android): a photo of a page, as a one-page PDF to send (null: cancelled). */
+  scanDocument?(): Promise<SendItemInput | null>;
   /** M11 room mode. */
   roomStart?(minutes: number, title: string): Promise<void>;
   roomEnd?(): Promise<void>;

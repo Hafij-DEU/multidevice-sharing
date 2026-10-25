@@ -254,7 +254,7 @@ const SETTING_TYPES: Record<keyof Settings, 'string' | 'number' | 'boolean' | 's
   alias: 'string', inbox: 'string', port: 'number', discovery: 'boolean', autostart: 'boolean',
   startHidden: 'boolean', closeToTray: 'boolean', clipboardReceive: 'boolean', clipboardSync: 'boolean', notifications: 'boolean',
   guestMinutes: 'number', remoteFrom: 'string[]', openLinks: 'boolean', phoneNotifications: 'boolean', notifyTo: null,
-  printFromDevices: 'boolean', sortInbox: 'boolean', sendReceipts: 'boolean',
+  printFromDevices: 'boolean', sortInbox: 'boolean', sendReceipts: 'boolean', cleanupDays: 'number',
 };
 const settingsPatch = (x: unknown): Partial<Settings> => {
   if (typeof x !== 'object' || x === null || Array.isArray(x)) throw new ArgError('invalid argument');

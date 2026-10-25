@@ -34,6 +34,7 @@ public final class Settings implements Cloneable {
     public boolean sendReceipts = true;
     public boolean printFromDevices = true;
     public boolean sortInbox = false;
+    public int cleanupDays = 0;
 
     public static Settings defaults(String alias) {
         Settings s = new Settings();
@@ -71,6 +72,7 @@ public final class Settings implements Cloneable {
         m.put("sendReceipts", sendReceipts);
         m.put("printFromDevices", printFromDevices);
         m.put("sortInbox", sortInbox);
+        m.put("cleanupDays", (long) cleanupDays);
         return m;
     }
 }

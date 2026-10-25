@@ -98,6 +98,18 @@ export function Settings({ state, run }: { state: AppState; run: Run }) {
           ))}
         </select>
       </label>
+      {!android && (
+        <label className="row">
+          Delete received files after{' '}
+          <select aria-label="Clean-up" value={draft.cleanupDays} onChange={(e) => set('cleanupDays', Number(e.target.value))}>
+            {[...new Set([0, 7, 30, 90, 365, draft.cleanupDays])].sort((a, b) => a - b).map((d) => (
+              <option key={d} value={d}>
+                {d === 0 ? 'never' : `${d} days`}
+              </option>
+            ))}
+          </select>
+        </label>
+      )}
       {SWITCHES.filter(([k]) => !(android && DESKTOP_ONLY.includes(k))).map(([k, label]) => (
         <label key={k} className="row">
           <input type="checkbox" checked={draft[k] as boolean} onChange={(e) => set(k, e.target.checked as never)} /> {label}

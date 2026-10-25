@@ -95,6 +95,25 @@ More → Remote, on the phone and on the PC:
   open on the phone to start them.
 - **Second screen**: the phone's Remote page opens Extendo.
 
+## Extras
+
+- **Voice notes**: Send → Voice note records a message in the app; it goes like a file.
+- **Send options** (Send → Options): 🔥 *burn after reading* (the receiver's copy is deleted 5 minutes
+  after it is first opened, or after a week unopened), 🖨 *print on the PC* (the PC prints it with `lp`;
+  Settings → "Print files my devices send"), ⏰ *send later* (a time capsule: the app keeps the send and
+  sends it at its time while it runs; Scheduled lists them).
+- **Read receipts**: when the other device opens what you sent, your Sent row shows *Opened*
+  (Settings → "Read receipts" to turn off telling others).
+- **Smart inbox** (PC Settings): received files go into Images, Videos, Audio, Documents, Archives or
+  Other, and optionally files older than N days are deleted.
+- **Room mode** (PC: Guests → Room): one QR for everyone on the Wi-Fi at a party or in a class; anyone can
+  post photos and files on a shared board and download everyone's. Ending the room deletes it all
+  (Save keeps a copy in your inbox).
+- **Phone as scanner**: Send → Scan to PDF takes a photo of a page and sends it as a one-page PDF.
+- **Gestures** (phone): flick the list of files up to send it; shake the phone with MeshDrop open to
+  grab what is copied on the PC (the PC must have the shared clipboard on, or allow the phone on its
+  Remote page).
+
 ## LocalSend
 
 People using the LocalSend app on the same Wi-Fi show up on Devices as "LocalSend". You can send them

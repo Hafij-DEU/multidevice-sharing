@@ -1373,6 +1373,47 @@ public final class AppController {
         }
     }
 
+    /**
+     * M11 shake to grab: puts what is copied on a PC (the first reachable one) on this phone's clipboard;
+     * returns what happened, for a short message.
+     */
+    @SuppressWarnings("unchecked")
+    public String grabClipboard() {
+        String pc = null;
+        for (io.github.hafijbge.meshdrop.engine.EngineDevice d : e().devices()) {
+            if (d.trusted && !"offline".equals(d.reach) && !"mobile".equals(d.deviceType) && !"localsend".equals(d.role)) {
+                pc = d.deviceId;
+                break;
+            }
+        }
+        if (pc == null) return "No PC is reachable.";
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("kind", "clipboard-get");
+        try {
+            Map<String, Object> r = e().appSend(pc, m, 10_000);
+            if (!Long.valueOf(200).equals(r.get("status")) || !(r.get("body") instanceof Map)) {
+                return Long.valueOf(403).equals(r.get("status")) ? "Turn on the shared clipboard on " + aliasOf(pc) + " (or allow this phone on its Remote page)." : "Could not get the PC's clipboard.";
+            }
+            Map<String, Object> b = (Map<String, Object>) r.get("body");
+            if (b.get("image") instanceof String) {
+                File dir = new File(history.dir(), "grabbed");
+                if (!dir.isDirectory() && !dir.mkdirs()) return "Could not save the image.";
+                File f = new File(dir, "Clipboard " + System.currentTimeMillis() + ".png");
+                java.nio.file.Files.write(f.toPath(), java.util.Base64.getDecoder().decode((String) b.get("image")));
+                platform.writeClipboardFiles(java.util.Collections.singletonList(f.getPath()));
+                lastClip = "u:" + String.join("\n", platform.clipboardUris());
+                return "Copied the image from " + aliasOf(pc) + ".";
+            }
+            String text = b.get("text") instanceof String ? (String) b.get("text") : "";
+            if (text.isEmpty()) return aliasOf(pc) + " has nothing copied.";
+            lastClip = text; // shared clipboard: not sent straight back
+            platform.writeClipboard(text);
+            return "Copied from " + aliasOf(pc) + ".";
+        } catch (IOException | RuntimeException x) {
+            return "Could not reach " + aliasOf(pc) + ".";
+        }
+    }
+
     /** Fetches this device's links from its hub off the caller's thread, then redraws. */
     private void refreshLinks() {
         if (!linksRefreshing.compareAndSet(false, true)) return;

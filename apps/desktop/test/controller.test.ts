@@ -575,4 +575,26 @@ describe('AppController internet access', () => {
     await until(() => B.c.state().received.length === 3, 8000);
     expect(A.c.state().scheduled).toEqual([]);
   });
+
+  it('M11: shake to grab answers only allowed devices; old received files are cleaned up', async () => {
+    const A = await make('ay');
+    const B = await make('bee');
+    await pair(A.c, B.c);
+    const aId = A.c.state().self.deviceId;
+    const bId = B.c.state().self.deviceId;
+    B.p.clipboardText = 'copied on the PC';
+    expect(await A.c.appSend(bId, { kind: 'clipboard-get' })).toMatchObject({ status: 403 });
+    await B.c.setSettings({ remoteFrom: [aId] });
+    expect(await A.c.appSend(bId, { kind: 'clipboard-get' })).toEqual({ status: 200, body: { text: 'copied on the PC' } });
+
+    const home = tmpDir();
+    const inbox = join(home, 'inbox');
+    mkdirSync(inbox, { recursive: true });
+    const old = join(inbox, 'old.txt');
+    writeFileSync(old, 'x');
+    writeFileSync(join(home, 'desktop-history.json'), JSON.stringify([{ at: Date.now() - 3 * 86_400_000, from: 'guest', alias: 'Guest', files: [old] }]));
+    const C = await make('sea', { cleanupDays: 1 }, home);
+    await until(() => C.c.state().received[0]?.cleaned === true, 5000);
+    expect(existsSync(old)).toBe(false);
+  });
 });

@@ -83,10 +83,43 @@ public final class MainActivity extends Activity {
         AppController c = ((MeshApp) getApplication()).core().controller;
         c.refresh(); // a keep-alive step may have changed
         c.setForeground(true);
+        android.hardware.SensorManager sm = getSystemService(android.hardware.SensorManager.class);
+        android.hardware.Sensor acc = sm == null ? null : sm.getDefaultSensor(android.hardware.Sensor.TYPE_ACCELEROMETER);
+        if (acc != null) sm.registerListener(shake, acc, android.hardware.SensorManager.SENSOR_DELAY_UI);
     }
+
+    /** M11: shake the phone (while MeshDrop is open) to grab what is copied on the PC. */
+    private final android.hardware.SensorEventListener shake = new android.hardware.SensorEventListener() {
+        private long firstAt;
+        private long lastGrab;
+
+        @Override
+        public void onSensorChanged(android.hardware.SensorEvent e) {
+            float x = e.values[0], y = e.values[1], z = e.values[2];
+            double g = Math.sqrt(x * x + y * y + z * z) / android.hardware.SensorManager.GRAVITY_EARTH;
+            if (g < 2.7) return;
+            long now = System.currentTimeMillis();
+            if (now - firstAt > 700) {
+                firstAt = now; // the first jolt; a second one soon after is a shake
+                return;
+            }
+            if (now - lastGrab < 3000) return;
+            lastGrab = now;
+            AppController c = ((MeshApp) getApplication()).core().controller;
+            new Thread(() -> {
+                String msg = c.grabClipboard();
+                runOnUiThread(() -> android.widget.Toast.makeText(MainActivity.this, msg, android.widget.Toast.LENGTH_SHORT).show());
+            }, "shake-grab").start();
+        }
+
+        @Override
+        public void onAccuracyChanged(android.hardware.Sensor s, int accuracy) {}
+    };
 
     @Override
     protected void onPause() {
+        android.hardware.SensorManager sm = getSystemService(android.hardware.SensorManager.class);
+        if (sm != null) sm.unregisterListener(shake);
         resumed = false;
         if (current == this) current = null;
         ((MeshApp) getApplication()).core().controller.setForeground(false);

@@ -106,6 +106,8 @@ public final class Bridge {
                 return null;
             case "scanQr":
                 return pickers.scanQr();
+            case "scanDocument":
+                return pickers.scanDocument();
             case "backupPermission": {
                 String[] perms = android.os.Build.VERSION.SDK_INT >= 33
                         ? new String[] {android.Manifest.permission.READ_MEDIA_IMAGES, android.Manifest.permission.READ_MEDIA_VIDEO}
