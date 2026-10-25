@@ -5,7 +5,10 @@ import { baseName, fmtBytes, fmtTime } from '../format.ts';
 
 const LENGTHS: [number, string][] = [[1 / 24, '1 hour'], [1, '1 day'], [7, '7 days'], [30, '30 days']];
 
-/** Hub PC: encrypted links for people outside this network (the key lives only in the link). */
+/**
+ * Encrypted links for people outside this network (the key lives only in the link). The hub PC makes
+ * them itself; a member device seals them here and its hub (or a relay hub) serves the ciphertext.
+ */
 export function InternetLinks({ state, run }: { state: AppState; run: Run }) {
   const [files, setFiles] = useState<string[]>([]);
   const [days, setDays] = useState(7);
@@ -13,13 +16,20 @@ export function InternetLinks({ state, run }: { state: AppState; run: Run }) {
   const [max, setMax] = useState('');
   const [uploads, setUploads] = useState(false);
   const [made, setMade] = useState<{ url: string; qrSvg: string } | null>(null);
-  if (state.hub.role !== 'hub' || !state.links) {
-    return <p className="muted">Internet links are made on the hub PC (Mesh → Create a mesh). They need a hub address on the internet.</p>;
+  const isHub = state.hub.role === 'hub';
+  if (!state.links || (!isHub && !state.hub.online)) {
+    return (
+      <p className="muted">
+        {state.hub.role === 'member'
+          ? 'Internet links need a link to the hub PC or a relay hub: not connected right now.'
+          : 'Internet links need a mesh (Mesh → Create a mesh on the PC). They need a hub address on the internet.'}
+      </p>
+    );
   }
   const create = () =>
     run(async () => {
       const r = await window.meshdrop.linkCreate({
-        files, days, allowUploads: uploads,
+        files, days, allowUploads: isHub && uploads,
         ...(password ? { password } : {}),
         ...(max ? { maxDownloads: Number(max) } : {}),
       });
@@ -30,7 +40,8 @@ export function InternetLinks({ state, run }: { state: AppState; run: Run }) {
     });
   return (
     <div className="links">
-      {state.hub.urls.length === 0 && <p className="muted">This hub has no internet address yet (Mesh → Hub address): a link works only on this PC until it has one.</p>}
+      {isHub && state.hub.urls.length === 0 && <p className="muted">This hub has no internet address yet (Mesh → Hub address): a link works only on this PC until it has one.</p>}
+      {!isHub && <p className="muted">Sealed on this device; the {state.hub.linkedTo === 'relay' ? 'relay hub' : 'hub PC'} keeps only the encrypted files.</p>}
       <div className="row">
         <button onClick={() => void run(async () => setFiles([...files, ...(await window.meshdrop.pickFiles())]))}>Choose files…</button>
         <span className="muted">{files.length ? files.map(baseName).join(', ') : 'No files chosen'}</span>
@@ -47,9 +58,11 @@ export function InternetLinks({ state, run }: { state: AppState; run: Run }) {
         <input aria-label="Link password" type="password" placeholder="Password (optional)" value={password} onChange={(e) => setPassword(e.target.value)} />
         <input aria-label="Download limit" type="number" min={1} max={1000} placeholder="Downloads (any)" value={max} onChange={(e) => setMax(e.target.value)} />
       </div>
-      <label className="row">
-        <input type="checkbox" checked={uploads} onChange={(e) => setUploads(e.target.checked)} /> Let them send files back (you accept each send)
-      </label>
+      {isHub && (
+        <label className="row">
+          <input type="checkbox" checked={uploads} onChange={(e) => setUploads(e.target.checked)} /> Let them send files back (you accept each send)
+        </label>
+      )}
       <button className="primary" disabled={files.length === 0} onClick={() => void create()}>
         Create link
       </button>

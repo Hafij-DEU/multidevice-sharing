@@ -326,7 +326,7 @@ export class AppController extends EventEmitter {
       members: e.members().map((m) => ({ deviceId: m.deviceId, alias: m.alias, role: m.role, self: m.deviceId === me })),
       guest: this.#guestView(e),
       sync: this.#syncView(e),
-      ...(st.role === 'hub' ? { links: this.#links.map((l) => ({ ...l })) } : {}),
+      ...(st.role === 'hub' || st.role === 'member' ? { links: this.#links.map((l) => ({ ...l })) } : {}),
       ...(this.#reachView(e) ? { reach: this.#reachView(e)! } : {}),
     };
   }
@@ -851,11 +851,13 @@ export class AppController extends EventEmitter {
     if (st && (st.state === 'error' || st.state === 'missing' || st.state === 'logged-out')) throw new Error([st.error, st.fix].filter(Boolean).join(' — ') || st.state);
   }
 
-  // ---- internet guest links (hub PC) -------------------------------------------------------------
+  // ---- internet guest links (made on the hub PC, or sealed here and served by the hub) ------------
 
   async #refreshLinks(): Promise<void> {
     const e = this.#engine;
-    if (!e || e.hubStatus().role !== 'hub') return;
+    if (!e) return;
+    const st = e.hubStatus();
+    if (st.role !== 'hub' && !(st.role === 'member' && st.online)) return;
     try {
       this.#links = await e.linkList();
     } catch {
