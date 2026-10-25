@@ -1,6 +1,6 @@
 import { spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-import { OFFER_FILE, sealChunk, uploadKey } from '@meshdrop/core/src/links/crypto.ts';
+import { OFFER_FILE, UPLOAD_BASE, sealChunk, uploadKey } from '@meshdrop/core/src/links/crypto.ts';
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer, type Server } from 'node:net';
 import { tmpdir } from 'node:os';
@@ -439,6 +439,12 @@ describe('AppController internet links', () => {
     expect(H.c.state().guest?.active).toBe(false);
     await until(() => (H.c.state().guest?.offers.length ?? 0) === 1);
     expect(H.c.state().guest?.offers[0]).toMatchObject({ id, via: 'link' });
+    await H.c.guestAccept(id);
+    expect(((await (await fetch(`${api}/offers/${id}`, { headers: { 'x-link-session': session } })).json()) as { status: string }).status).toBe('accepted');
+    const up = sealChunk(uploadKey(key, l.id, salt), l.id, UPLOAD_BASE, 0, true, Buffer.from('back'));
+    expect((await fetch(`${api}/offers/${id}/0?offset=0`, { method: 'PUT', headers: { 'x-link-session': session }, body: new Uint8Array(up) })).status).toBeLessThan(300);
+    await until(() => existsSync(join(H.inbox, 'back.txt')));
+    expect(readFileSync(join(H.inbox, 'back.txt'), 'utf8')).toBe('back');
   });
 
   it('the hub creates, lists and removes links; other devices cannot', async () => {

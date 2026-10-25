@@ -161,7 +161,7 @@ const platform: Platform = {
   notify(title, body, onClick) {
     if (!Notification.isSupported()) return;
     const n = new Notification({ title, body, icon: join(ICONS, 'icon.png') });
-    if (onClick) n.on('click', onClick);
+    n.on('click', onClick ?? showMain); // a plain notification opens MeshDrop ("open MeshDrop to accept")
     n.show();
   },
   writeClipboard: (text) => clipboard.writeText(text),
