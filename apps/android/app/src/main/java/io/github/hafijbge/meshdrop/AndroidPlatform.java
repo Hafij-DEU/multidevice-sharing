@@ -639,4 +639,30 @@ public class AndroidPlatform implements Platform {
     public void captureMic(java.io.OutputStream out, java.util.function.BooleanSupplier stop) throws java.io.IOException {
         cast().mic(out, stop);
     }
+
+    // ---- M11 ----
+
+    @Override
+    public String displayName(String ref) {
+        if (!ref.startsWith("content://")) return Platform.super.displayName(ref);
+        try (android.database.Cursor c = ctx.getContentResolver().query(Uri.parse(ref), new String[] {android.provider.OpenableColumns.DISPLAY_NAME}, null, null, null)) {
+            if (c != null && c.moveToFirst()) return c.getString(0);
+        } catch (RuntimeException ignored) {
+            // no name
+        }
+        return "file";
+    }
+
+    @Override
+    public void deleteReceived(String ref) {
+        if (!ref.startsWith("content://")) {
+            Platform.super.deleteReceived(ref);
+            return;
+        }
+        try {
+            ctx.getContentResolver().delete(Uri.parse(ref), null, null); // our own MediaStore entry
+        } catch (RuntimeException ignored) {
+            // gone already, or no longer ours
+        }
+    }
 }

@@ -30,6 +30,10 @@ public final class Settings implements Cloneable {
     /** M10 (desktop meaning; kept for the shared settings shape). */
     public java.util.List<String> remoteFrom = java.util.Collections.emptyList();
     public boolean phoneNotifications = true;
+    /** M11 read receipts; printing and the smart inbox are PC settings (kept for the shared shape). */
+    public boolean sendReceipts = true;
+    public boolean printFromDevices = true;
+    public boolean sortInbox = false;
 
     public static Settings defaults(String alias) {
         Settings s = new Settings();
@@ -64,6 +68,9 @@ public final class Settings implements Cloneable {
         m.put("openLinks", openLinks);
         m.put("remoteFrom", new java.util.ArrayList<Object>(remoteFrom));
         m.put("phoneNotifications", phoneNotifications);
+        m.put("sendReceipts", sendReceipts);
+        m.put("printFromDevices", printFromDevices);
+        m.put("sortInbox", sortInbox);
         return m;
     }
 }

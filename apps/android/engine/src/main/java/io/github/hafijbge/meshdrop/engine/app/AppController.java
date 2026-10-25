@@ -13,6 +13,7 @@ import io.github.hafijbge.meshdrop.engine.send.SendItem;
 import io.github.hafijbge.meshdrop.engine.send.SendResult;
 import io.github.hafijbge.meshdrop.engine.send.Source;
 import io.github.hafijbge.meshdrop.engine.util.Json;
+import java.io.File;
 import java.io.IOException;
 import java.net.BindException;
 import java.net.ServerSocket;
@@ -61,6 +62,8 @@ public final class AppController {
         long startedAt;
         String tagKey;
         String sessionId;
+        /** M11 read receipt: when the receiver opened it (0: not yet). */
+        long openedAt;
         long rateAt;
         long rateSent;
         double bytesPerSec = -1;
@@ -80,6 +83,7 @@ public final class AppController {
             if (error != null) m.put("error", error);
             if (bytesPerSec >= 0) m.put("bytesPerSec", (long) bytesPerSec);
             m.put("startedAt", startedAt);
+            if (openedAt > 0) m.put("openedAt", openedAt);
             return m;
         }
 
@@ -171,7 +175,16 @@ public final class AppController {
             lastIdleBackup = System.currentTimeMillis();
             backupSoon();
         }, 5, 60, TimeUnit.SECONDS);
+        if (m11Timer == null) m11Timer = timer.scheduleWithFixedDelay(() -> {
+            try {
+                m11Tick();
+            } catch (RuntimeException ignored) {
+                // next tick
+            }
+        }, 2, 15, TimeUnit.SECONDS);
     }
+
+    private java.util.concurrent.ScheduledFuture<?> m11Timer;
 
     public synchronized void stop() {
         stopped = true;
@@ -328,6 +341,8 @@ public final class AppController {
         if (guestQr != null && Boolean.TRUE.equals(guest.get("active"))) guest.put("qrSvg", guestQr);
         m.put("guest", guest);
         m.put("ringing", ringing);
+        loadScheduled();
+        m.put("scheduled", scheduledView());
         Map<String, Object> casting = new LinkedHashMap<>();
         for (Map.Entry<String, String> c : castTo.entrySet()) casting.put(c.getKey().equals("audio") ? "audioFrom" : c.getKey().equals("camera") ? "cameraTo" : "micTo", c.getValue());
         m.put("casting", casting);
@@ -579,7 +594,8 @@ public final class AppController {
                     r.sent = r.bytes;
                 }
             }
-            received(from, (List<Object>) d.get("files"), (String) d.get("text"), Boolean.TRUE.equals(d.get("clipboard")), Boolean.TRUE.equals(d.get("clipboardFiles")));
+            received(from, (List<Object>) d.get("files"), (String) d.get("text"), Boolean.TRUE.equals(d.get("clipboard")), Boolean.TRUE.equals(d.get("clipboardFiles")),
+                    (String) d.get("sessionId"), Boolean.TRUE.equals(d.get("burn")));
             return;
         }
         if (r == null) return;
@@ -610,13 +626,13 @@ public final class AppController {
         }
     }
 
-    private void received(String from, List<Object> files, String text, boolean clipboard, boolean clipboardFiles) {
+    private void received(String from, List<Object> files, String text, boolean clipboard, boolean clipboardFiles, String sessionId, boolean burn) {
         Settings s = settings.get();
         String alias = aliasOf(from);
         List<String> fs = new ArrayList<>();
         for (Object f : files) fs.add((String) f);
         try {
-            history.addReceived(System.currentTimeMillis(), from, alias, fs, text, clipboard || clipboardFiles);
+            history.addReceived(System.currentTimeMillis(), from, alias, fs, text, clipboard || clipboardFiles, sessionId, burn);
         } catch (IOException ignored) {
             // the files arrived; only the history entry is lost
         }
@@ -700,7 +716,44 @@ public final class AppController {
 
     /** `targets`: "all" or a list of device ids; `items`: [{kind: file|dir|text, path?, text?}]. Returns once started. */
     public void send(Object targets, List<Map<String, Object>> items) throws IOException {
+        send(targets, items, new LinkedHashMap<>());
+    }
+
+    /** M11 options: burn, print, and at (send later: kept here and sent at its time while the app runs). */
+    public void send(Object targets, List<Map<String, Object>> items, Map<String, Object> opts) throws IOException {
         List<String> ids = targets(targets);
+        boolean burn = Boolean.TRUE.equals(opts.get("burn"));
+        boolean print = Boolean.TRUE.equals(opts.get("print"));
+        if (opts.get("at") instanceof Number && ((Number) opts.get("at")).longValue() > System.currentTimeMillis() + 30_000) {
+            long at = ((Number) opts.get("at")).longValue();
+            if (at > System.currentTimeMillis() + 366 * 86_400_000L) throw new IllegalArgumentException("Pick a time within a year.");
+            Map<String, Object> j = new LinkedHashMap<>();
+            j.put("id", UUID.randomUUID().toString());
+            j.put("at", at);
+            j.put("targets", new ArrayList<Object>(ids));
+            List<Object> aliases = new ArrayList<>();
+            for (String i : ids) aliases.add(aliasOf(i));
+            j.put("aliases", aliases);
+            List<Object> names = new ArrayList<>();
+            List<Object> its = new ArrayList<>();
+            for (Map<String, Object> it : items) {
+                its.add(new LinkedHashMap<>(it));
+                Object path = it.get("path");
+                names.add("text".equals(it.get("kind")) ? "Text" : platform.displayName(String.valueOf(path)));
+            }
+            j.put("names", names);
+            j.put("items", its);
+            if (burn) j.put("burn", true);
+            if (print) j.put("print", true);
+            loadScheduled();
+            synchronized (scheduled) {
+                scheduled.add(j);
+                scheduled.sort((x, y) -> Long.compare((Long) x.get("at"), (Long) y.get("at")));
+                saveScheduled();
+            }
+            changed();
+            return;
+        }
         List<SendItem> sendItems = new ArrayList<>();
         long files = 0, bytes = 0;
         for (Map<String, Object> it : items) {
@@ -730,7 +783,7 @@ public final class AppController {
         }
         String tag = UUID.randomUUID().toString();
         List<Row> rs = startRows(ids, tag, files, bytes);
-        e().send(ids, sendItems, tag).whenComplete((r, x) -> {
+        e().sendWith(ids, sendItems, tag, burn, print).whenComplete((r, x) -> {
             if (x != null) failRows(rs, x);
         });
     }
@@ -1017,6 +1070,129 @@ public final class AppController {
         platform.reveal(ref);
     }
 
+    // ---- M11: receipts, burn after reading, send later, voice notes ---------------------------
+
+    static final long BURN_AFTER_OPEN_MS = 5 * 60_000L;
+    static final long BURN_UNOPENED_MS = 7 * 86_400_000L;
+
+    /** Opens a received file: the first open sends a read receipt and starts the burn clock. */
+    public void openReceived(String ref) {
+        try {
+            for (Map<String, Object> r : history.opened(ref, System.currentTimeMillis(), BURN_AFTER_OPEN_MS)) {
+                Object from = r.get("from");
+                Object sid = r.get("sessionId");
+                if (settings.get().sendReceipts && from instanceof String && ((String) from).matches("^[0-9a-f]{64}$") && sid instanceof String) {
+                    Map<String, Object> m = new LinkedHashMap<>();
+                    m.put("kind", "opened");
+                    m.put("sessionId", sid);
+                    workers.execute(() -> {
+                        try {
+                            e().appSend((String) from, m, 10_000);
+                        } catch (Exception ignored) {
+                            // the sender is away: no receipt
+                        }
+                    });
+                }
+            }
+        } catch (IOException ignored) {
+            // the history could not be written: the file still opens
+        }
+        platform.reveal(ref);
+        changed();
+    }
+
+    /** Deletes burned files whose time came; sends scheduled sends whose time came. */
+    void m11Tick() {
+        long now = System.currentTimeMillis();
+        try {
+            List<String> gone = history.burnDue(now, BURN_UNOPENED_MS);
+            for (String f : gone) platform.deleteReceived(f);
+            if (!gone.isEmpty()) changed();
+        } catch (IOException ignored) {
+            // retried next tick
+        }
+        List<Map<String, Object>> due = new ArrayList<>();
+        synchronized (scheduled) {
+            for (Map<String, Object> j : new ArrayList<>(scheduled)) {
+                if (j.get("at") instanceof Long && (Long) j.get("at") <= now) {
+                    scheduled.remove(j);
+                    due.add(j);
+                }
+            }
+            if (!due.isEmpty()) saveScheduled();
+        }
+        for (Map<String, Object> j : due) {
+            try {
+                Map<String, Object> opts = new LinkedHashMap<>();
+                if (Boolean.TRUE.equals(j.get("burn"))) opts.put("burn", true);
+                if (Boolean.TRUE.equals(j.get("print"))) opts.put("print", true);
+                send(j.get("targets"), asItems(j.get("items")), opts);
+            } catch (Exception x) {
+                if (settings.get().notifications) platform.notify("Scheduled send failed", String.valueOf(x.getMessage()), null);
+            }
+            changed();
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    private static List<Map<String, Object>> asItems(Object o) {
+        List<Map<String, Object>> out = new ArrayList<>();
+        if (o instanceof List) for (Object x : (List<Object>) o) if (x instanceof Map) out.add((Map<String, Object>) x);
+        return out;
+    }
+
+    private final List<Map<String, Object>> scheduled = new ArrayList<>();
+    private boolean scheduledLoaded;
+
+    private File scheduledFile() {
+        return new File(history.dir(), "scheduled.json");
+    }
+
+    @SuppressWarnings("unchecked")
+    private void loadScheduled() {
+        synchronized (scheduled) {
+            if (scheduledLoaded) return;
+            scheduledLoaded = true;
+            try {
+                Object j = Json.parse(new String(java.nio.file.Files.readAllBytes(scheduledFile().toPath()), StandardCharsets.UTF_8));
+                if (j instanceof List) for (Object x : (List<Object>) j) if (x instanceof Map) scheduled.add((Map<String, Object>) x);
+            } catch (IOException | RuntimeException ignored) {
+                // none
+            }
+        }
+    }
+
+    private void saveScheduled() {
+        try {
+            io.github.hafijbge.meshdrop.engine.util.Atomic.write(scheduledFile(), Json.stringify(scheduled).getBytes(StandardCharsets.UTF_8));
+        } catch (IOException ignored) {
+            // kept in memory
+        }
+    }
+
+    private List<Object> scheduledView() {
+        List<Object> out = new ArrayList<>();
+        synchronized (scheduled) {
+            for (Map<String, Object> j : scheduled) {
+                Map<String, Object> v = new LinkedHashMap<>(j);
+                v.remove("items");
+                out.add(v);
+            }
+        }
+        return out;
+    }
+
+    /** Voice notes: recorded bytes saved as a file to send (in this app's cache). */
+    private String saveBlob(String name, String b64) throws IOException {
+        String n = name.replaceAll("[^A-Za-z0-9._ -]", "_");
+        if (!n.matches("^[A-Za-z0-9][A-Za-z0-9._ -]{0,99}$")) throw new IllegalArgumentException("invalid name");
+        File dir = new File(history.dir(), "voice-notes");
+        if (!dir.isDirectory() && !dir.mkdirs()) throw new IOException("cannot save the voice note");
+        File f = new File(dir, n);
+        java.nio.file.Files.write(f.toPath(), java.util.Base64.getDecoder().decode(b64));
+        return f.getPath();
+    }
+
     // ---- the DesktopApi dispatch (used by the Android bridge) ------------------------------------
 
     @SuppressWarnings("unchecked")
@@ -1067,6 +1243,21 @@ public final class AppController {
                 platform.openUrl(url);
                 body.put("ok", true);
             }
+        } else if ("opened".equals(kind)) {
+            boolean any = false;
+            synchronized (rows) {
+                for (Row r : rows.values()) {
+                    if ("out".equals(r.direction) && peer.equals(r.deviceId) && r.sessionId != null && r.sessionId.equals(msg.get("sessionId")) && r.openedAt == 0) {
+                        r.openedAt = System.currentTimeMillis();
+                        any = true;
+                    }
+                }
+            }
+            if (any) {
+                if (settings.get().notifications) platform.notify("Opened", aliasOf(peer) + " opened what you sent.", null);
+                changed();
+            }
+            body.put("ok", true);
         } else if ("input".equals(kind) || "action".equals(kind) || "apps".equals(kind)) {
             status = 403;
             body.put("error", "remote-off"); // a phone is the remote, not the controlled device
@@ -1245,9 +1436,21 @@ public final class AppController {
             case "send": {
                 List<Map<String, Object>> items = new ArrayList<>();
                 for (Object it : (List<Object>) args.get(1)) items.add(obj(it));
-                send(a0, items);
+                send(a0, items, args.size() > 2 && args.get(2) instanceof Map ? obj(args.get(2)) : new LinkedHashMap<>());
                 return null;
             }
+            case "scheduleCancel": {
+                String id = str(a0);
+                loadScheduled();
+                synchronized (scheduled) {
+                    scheduled.removeIf(j -> id.equals(j.get("id")));
+                    saveScheduled();
+                }
+                changed();
+                return null;
+            }
+            case "saveBlob":
+                return saveBlob(str(a0), str(args.get(1)));
             case "sendClipboard":
                 sendClipboard(a0);
                 return null;
@@ -1271,7 +1474,7 @@ public final class AppController {
                 return null;
             case "reveal":
             case "openFile":
-                reveal(str(a0));
+                openReceived(str(a0));
                 return null;
             case "unpair":
                 e().unpair(str(a0));

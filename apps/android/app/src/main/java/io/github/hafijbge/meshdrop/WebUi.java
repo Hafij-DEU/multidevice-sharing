@@ -70,6 +70,27 @@ final class WebUi {
                 bridge.pageOrigin(url);
             }
         });
+        web.setWebChromeClient(new android.webkit.WebChromeClient() {
+            /**
+             * M11 voice notes: the app's own page may record audio (only audio, only from our origin)
+             * once Android has granted the microphone; it asks for it the first time.
+             */
+            @Override
+            public void onPermissionRequest(android.webkit.PermissionRequest req) {
+                boolean ours = req.getOrigin() != null && (req.getOrigin().toString() + "/").startsWith(ORIGIN + "/");
+                boolean audioOnly = java.util.Arrays.equals(req.getResources(), new String[] {android.webkit.PermissionRequest.RESOURCE_AUDIO_CAPTURE});
+                if (!ours || !audioOnly) {
+                    req.deny();
+                    return;
+                }
+                if (activity.checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) == android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                    req.grant(req.getResources());
+                } else {
+                    activity.requestPermissions(new String[] {android.Manifest.permission.RECORD_AUDIO}, 12);
+                    req.deny(); // the next tap works once allowed
+                }
+            }
+        });
         web.addJavascriptInterface(bridge, "MeshDropBridge");
         bridge.attach(web);
         web.loadUrl(ORIGIN + "/index.html" + (route == null ? "" : "#" + route));

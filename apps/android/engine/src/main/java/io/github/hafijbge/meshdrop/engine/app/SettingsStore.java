@@ -104,9 +104,15 @@ public final class SettingsStore {
             }
             case "openLinks":
             case "phoneNotifications":
+            case "sendReceipts":
+            case "printFromDevices":
+            case "sortInbox":
                 if (!(v instanceof Boolean)) throw new SettingsError("Invalid value for " + k + ".");
                 if (k.equals("openLinks")) s.openLinks = (Boolean) v;
-                else s.phoneNotifications = (Boolean) v;
+                else if (k.equals("phoneNotifications")) s.phoneNotifications = (Boolean) v;
+                else if (k.equals("sendReceipts")) s.sendReceipts = (Boolean) v;
+                else if (k.equals("printFromDevices")) s.printFromDevices = (Boolean) v;
+                else s.sortInbox = (Boolean) v;
                 break;
             case "guestMinutes":
                 if (!(v instanceof Long) && !(v instanceof Integer)) throw new SettingsError("Invalid value for guestMinutes.");

@@ -44,6 +44,46 @@ public final class HistoryStore {
     }
 
     public synchronized void addReceived(long at, String from, String alias, List<String> files, String text, boolean clipboard) throws IOException {
+        addReceived(at, from, alias, files, text, clipboard, null, false);
+    }
+
+    /** The folder the history lives in (M11: the time capsule keeps its list next to it). */
+    public File dir() {
+        return file.getParentFile();
+    }
+
+    /** M11: the first open of `ref` (the records it was in, with their changes), or none. */
+    public synchronized List<Map<String, Object>> opened(String ref, long now, long burnAfterMs) throws IOException {
+        List<Map<String, Object>> hit = new ArrayList<>();
+        for (Map<String, Object> r : records) {
+            if (r.get("openedAt") != null || !(r.get("files") instanceof List) || !((List<?>) r.get("files")).contains(ref)) continue;
+            r.put("openedAt", now);
+            if (Boolean.TRUE.equals(r.get("burn"))) r.put("burnAt", now + burnAfterMs);
+            hit.add(new LinkedHashMap<>(r));
+        }
+        if (!hit.isEmpty()) Atomic.write(file, Json.stringify(records).getBytes(StandardCharsets.UTF_8));
+        return hit;
+    }
+
+    /** M11: burn-after-reading records whose time came; they are marked burned and their files returned. */
+    @SuppressWarnings("unchecked")
+    public synchronized List<String> burnDue(long now, long unopenedMs) throws IOException {
+        List<String> out = new ArrayList<>();
+        for (Map<String, Object> r : records) {
+            if (!Boolean.TRUE.equals(r.get("burn")) || Boolean.TRUE.equals(r.get("burned"))) continue;
+            Object b = r.get("burnAt");
+            long at = r.get("at") instanceof Long ? (Long) r.get("at") : 0;
+            if (!((b instanceof Long && (Long) b <= now) || at + unopenedMs <= now)) continue;
+            for (Object f : (List<Object>) r.get("files")) out.add(String.valueOf(f));
+            r.put("files", new ArrayList<>());
+            r.remove("text");
+            r.put("burned", true);
+        }
+        if (!out.isEmpty()) Atomic.write(file, Json.stringify(records).getBytes(StandardCharsets.UTF_8));
+        return out;
+    }
+
+    public synchronized void addReceived(long at, String from, String alias, List<String> files, String text, boolean clipboard, String sessionId, boolean burn) throws IOException {
         Map<String, Object> r = new LinkedHashMap<>();
         r.put("at", at);
         r.put("from", from);
@@ -51,6 +91,8 @@ public final class HistoryStore {
         r.put("files", new ArrayList<Object>(files));
         if (text != null) r.put("text", text);
         if (clipboard) r.put("clipboard", true);
+        if (sessionId != null) r.put("sessionId", sessionId);
+        if (burn) r.put("burn", true);
         records.add(0, r);
         while (records.size() > cap) records.remove(records.size() - 1);
         Atomic.write(file, Json.stringify(records).getBytes(StandardCharsets.UTF_8));

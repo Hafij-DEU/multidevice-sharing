@@ -511,4 +511,33 @@ public class AppControllerTest {
         r = (Map<String, Object>) a.c.call("appSend", List.of(bId, Map.of("kind", "input", "events", List.of())));
         assertEquals(403L, r.get("status"));
     }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    public void m11BurnReceiptsAndSendLater() throws Exception {
+        Node a = make("ay");
+        Node b = make("bee");
+        pair(a.c, b.c);
+        String bId = selfId(b.c);
+        File f = new File(tmp.getRoot(), "secret.txt");
+        java.nio.file.Files.write(f.toPath(), "once".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        a.c.call("send", List.of(List.of(bId), List.of(Map.of("kind", "file", "path", f.getPath())), Map.of("burn", true)));
+        long end = System.currentTimeMillis() + 15_000;
+        while (list(state(b.c), "received").isEmpty() && System.currentTimeMillis() < end) Thread.sleep(50);
+        Map<String, Object> rec = list(state(b.c), "received").get(0);
+        assertEquals(true, rec.get("burn"));
+        String path = (String) ((List<Object>) rec.get("files")).get(0);
+        b.c.call("openFile", List.of(path));
+        assertTrue(list(state(b.c), "received").get(0).get("burnAt") instanceof Long);
+        end = System.currentTimeMillis() + 15_000;
+        while (list(state(a.c), "transfers").stream().noneMatch(t -> t.get("openedAt") != null) && System.currentTimeMillis() < end) Thread.sleep(50);
+        assertTrue("read receipt", list(state(a.c), "transfers").stream().anyMatch(t -> t.get("openedAt") != null));
+
+        a.c.call("send", List.of(List.of(bId), List.of(Map.of("kind", "text", "text", "later")), Map.of("at", System.currentTimeMillis() + 120_000)));
+        List<Map<String, Object>> sch = list(state(a.c), "scheduled");
+        assertEquals(1, sch.size());
+        assertEquals(List.of(bId), sch.get(0).get("targets"));
+        a.c.call("scheduleCancel", List.of(sch.get(0).get("id")));
+        assertEquals(0, list(state(a.c), "scheduled").size());
+    }
 }

@@ -116,4 +116,21 @@ public interface Platform {
     default void captureMic(java.io.OutputStream out, java.util.function.BooleanSupplier stop) throws java.io.IOException {
         throw new java.io.IOException("Not available on this device.");
     }
+
+    // ---- M11 ----
+
+    /** The name a picked file shows (a content:// ref has its own name). */
+    default String displayName(String ref) {
+        int i = ref.lastIndexOf('/');
+        return i >= 0 ? ref.substring(i + 1) : ref;
+    }
+
+    /** Deletes a received file (burn after reading). */
+    default void deleteReceived(String ref) {
+        try {
+            java.nio.file.Files.deleteIfExists(java.nio.file.Paths.get(ref));
+        } catch (java.io.IOException | RuntimeException ignored) {
+            // gone already
+        }
+    }
 }
