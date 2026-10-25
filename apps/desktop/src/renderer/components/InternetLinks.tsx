@@ -15,6 +15,7 @@ export function InternetLinks({ state, run }: { state: AppState; run: Run }) {
   const [password, setPassword] = useState('');
   const [max, setMax] = useState('');
   const [uploads, setUploads] = useState(false);
+  const [auto, setAuto] = useState(false);
   const [made, setMade] = useState<{ url: string; qrSvg: string } | null>(null);
   const isHub = state.hub.role === 'hub';
   if (!state.links || (!isHub && !state.hub.online)) {
@@ -30,7 +31,7 @@ export function InternetLinks({ state, run }: { state: AppState; run: Run }) {
   const create = () =>
     run(async () => {
       const r = await window.meshdrop.linkCreate({
-        files, days, allowUploads: dropBox || (isHub && uploads),
+        files, days, allowUploads: dropBox || (isHub && uploads), autoAccept: isHub && uploads && auto,
         // no files: a drop box, where they only send to you
         ...(files.length === 0 ? { text: 'Send your files here.' } : {}),
         ...(password ? { password } : {}),
@@ -62,8 +63,13 @@ export function InternetLinks({ state, run }: { state: AppState; run: Run }) {
         <input aria-label="Download limit" type="number" min={1} max={1000} placeholder="Downloads (any)" value={max} onChange={(e) => setMax(e.target.value)} />
       </div>
       {isHub && (
-        <label className="row">
-          <input type="checkbox" checked={uploads} onChange={(e) => setUploads(e.target.checked)} /> Let them send files to you (you accept each send; with no files chosen, the link is only for that)
+        <label className="toggle">
+          <input type="checkbox" checked={uploads} onChange={(e) => setUploads(e.target.checked)} /> Let them send files to you (with no files chosen, the link is only for that)
+        </label>
+      )}
+      {isHub && uploads && (
+        <label className="toggle">
+          <input type="checkbox" checked={auto} onChange={(e) => setAuto(e.target.checked)} /> Accept their files without asking me (they land in your inbox at once)
         </label>
       )}
       <button className="primary" disabled={files.length === 0 && !dropBox} onClick={() => void create()}>
@@ -83,7 +89,7 @@ export function InternetLinks({ state, run }: { state: AppState; run: Run }) {
         {state.links.map((l) => (
           <li key={l.id} className="row space" data-link={l.id}>
             <span>
-              {l.label} <span className="muted">· {fmtBytes(l.bytes)} · until {fmtTime(l.expiresAt)} · {l.downloads}{l.maxDownloads ? `/${l.maxDownloads}` : ''} opened{l.hasPassword ? ' · password' : ''}{l.allowUploads ? ' · uploads' : ''}</span>
+              {l.label} <span className="muted">· {fmtBytes(l.bytes)} · until {fmtTime(l.expiresAt)} · {l.downloads}{l.maxDownloads ? `/${l.maxDownloads}` : ''} opened{l.hasPassword ? ' · password' : ''}{l.allowUploads ? (l.autoAccept ? ' · uploads, accepted beforehand' : ' · uploads') : ''}</span>
             </span>
             <span className="row">
               {l.url && <button onClick={() => void run(() => navigator.clipboard.writeText(l.url!), 'Copied')}>Copy link</button>}

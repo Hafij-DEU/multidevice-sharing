@@ -299,7 +299,7 @@ const linkInput = (x: unknown): LinkCreateInput => {
   const max = o.maxDownloads;
   if (max !== undefined && (typeof max !== 'number' || !Number.isInteger(max) || max < 1 || max > 1000)) throw new ArgError('invalid download limit');
   return {
-    files: strs(o.files, 1000), days, allowUploads: o.allowUploads === true,
+    files: strs(o.files, 1000), days, allowUploads: o.allowUploads === true, autoAccept: o.allowUploads === true && o.autoAccept === true,
     ...(o.text !== undefined ? { text: str(o.text, 65536) } : {}),
     ...(o.password !== undefined && o.password !== '' ? { password: str(o.password, 1024) } : {}),
     ...(max !== undefined ? { maxDownloads: max as number } : {}),

@@ -162,6 +162,7 @@ export interface LinkView {
   maxDownloads?: number;
   hasPassword: boolean;
   allowUploads: boolean;
+  autoAccept?: boolean;
   url?: string;
 }
 
@@ -198,6 +199,8 @@ export interface LinkCreateInput {
   password?: string;
   maxDownloads?: number;
   allowUploads: boolean;
+  /** With allowUploads: their sends land without asking. */
+  autoAccept?: boolean;
 }
 
 export interface AppState {

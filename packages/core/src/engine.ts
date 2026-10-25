@@ -2166,9 +2166,13 @@ export class Engine extends EventEmitter {
 
   private onGuest(ev: GuestEvent, link?: string): void {
     switch (ev.type) {
-      case 'guest-offer':
-        this.emitEvent({ source: 'guest', type: 'offer', id: ev.id, files: ev.files, ...(ev.text !== undefined ? { text: ev.text } : {}), ...(link ? { via: 'link' as const, link } : {}) });
+      case 'guest-offer': {
+        const ask = () => this.emitEvent({ source: 'guest', type: 'offer', id: ev.id, files: ev.files, ...(ev.text !== undefined ? { text: ev.text } : {}), ...(link ? { via: 'link' as const, link } : {}) });
+        if (!link) ask();
+        // a drop-box link was accepted beforehand: no question, the files just land
+        else void this.links().autoAccepts(link).then((yes) => (yes ? this.guestAccept(ev.id) : ask())).catch(ask);
         break;
+      }
       case 'guest-received':
         this.emitEvent({ source: 'guest', type: 'received', id: ev.id, files: ev.files, ...(ev.text !== undefined ? { text: ev.text } : {}) });
         break;
@@ -2321,11 +2325,11 @@ export class Engine extends EventEmitter {
   }
 
   /** Hub only: seals files (and/or a message) into a new internet guest link and returns its full URL. */
-  async linkCreate(c: { files: string[]; text?: string; days?: number; hours?: number; password?: string; maxDownloads?: number; allowUploads?: boolean }): Promise<{ id: string; url: string; qrSvg: string; expiresAt: number }> {
+  async linkCreate(c: { files: string[]; text?: string; days?: number; hours?: number; password?: string; maxDownloads?: number; allowUploads?: boolean; autoAccept?: boolean }): Promise<{ id: string; url: string; qrSvg: string; expiresAt: number }> {
     if (!this.rootKey) return this.memberLinkCreate(c);
     const expiresInMs = c.hours !== undefined ? c.hours * 3_600_000 : (c.days ?? 7) * 24 * 3_600_000;
     const { id, key, expiresAt } = await this.links().create({
-      files: c.files, expiresInMs, allowUploads: c.allowUploads === true,
+      files: c.files, expiresInMs, allowUploads: c.allowUploads === true, autoAccept: c.autoAccept === true,
       ...(c.text ? { text: c.text } : {}), ...(c.password ? { password: c.password } : {}),
       ...(c.maxDownloads !== undefined ? { maxDownloads: c.maxDownloads } : {}),
     });

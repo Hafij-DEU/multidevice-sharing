@@ -46,6 +46,8 @@ interface LinkMeta {
   maxDownloads?: number;
   downloads: number;
   allowUploads: boolean;
+  /** Sends back are accepted without asking the owner (a drop box). */
+  autoAccept?: boolean;
   /** A member that made this link on its own device and uploaded it sealed (M9b); absent: the hub's own. */
   owner?: string;
 }
@@ -75,6 +77,7 @@ export interface LinkInfo {
   maxDownloads?: number;
   hasPassword: boolean;
   allowUploads: boolean;
+  autoAccept?: boolean;
   owner?: string;
 }
 
@@ -85,6 +88,8 @@ export interface LinkCreate {
   password?: string;
   maxDownloads?: number;
   allowUploads?: boolean;
+  /** With allowUploads: accept every send without asking. */
+  autoAccept?: boolean;
 }
 
 const sealedSize = (size: number) => size + 16 * linkChunkCount(size);
@@ -166,6 +171,7 @@ export class LinkStore {
         v: 1, id, label: c.files.length ? `${basename(c.files[0]!)}${c.files.length > 1 ? ` +${c.files.length - 1}` : ''}` : 'message',
         createdAt: now, expiresAt: now + ttl, keyHash: keyHash(key), files: stats.map((s) => ({ size: s.size })), bytes,
         downloads: 0, allowUploads: c.allowUploads === true,
+        ...(c.allowUploads && c.autoAccept ? { autoAccept: true } : {}),
         ...(c.maxDownloads !== undefined ? { maxDownloads: c.maxDownloads } : {}),
       };
       if (c.password) {
@@ -217,6 +223,7 @@ export class LinkStore {
         out.push({
           id: m.id, label: m.label, createdAt: m.createdAt, expiresAt: m.expiresAt, files: m.files.length, bytes: m.bytes,
           downloads: m.downloads, hasPassword: !!m.password, allowUploads: m.allowUploads,
+          ...(m.autoAccept ? { autoAccept: true } : {}),
           ...(m.maxDownloads !== undefined ? { maxDownloads: m.maxDownloads } : {}),
           ...(m.owner !== undefined ? { owner: m.owner } : {}),
         });
@@ -381,6 +388,15 @@ export class LinkStore {
   async info(id: string): Promise<{ needsPassword: boolean; allowUploads: boolean }> {
     const m = await this.#meta(id);
     return { needsPassword: !!m.password, allowUploads: m.allowUploads };
+  }
+
+  /** Whether sends back skip the owner's question (false for a link that is gone). */
+  async autoAccepts(id: string): Promise<boolean> {
+    try {
+      return (await this.#meta(id)).autoAccept === true;
+    } catch {
+      return false;
+    }
   }
 
   /** Whether the link needs a password (asked before open). */
