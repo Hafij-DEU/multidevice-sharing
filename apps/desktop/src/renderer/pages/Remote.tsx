@@ -512,7 +512,19 @@ function AndroidExtras({ state, run, trusted }: { state: AppState; run: Run; tru
           <div key={d.deviceId} className="row wrap">
             <Peer text={d.alias} />
             <button aria-pressed={on('audio')} onClick={() => toggle('audio')}>{on('audio') ? 'Stop PC sound' : 'Play PC sound here'}</button>
-            <button aria-pressed={on('camera')} onClick={() => toggle('camera')}>{on('camera') ? 'Stop webcam' : 'Use as webcam'}</button>
+            {on('camera') ? (
+              <>
+                <button aria-pressed onClick={() => toggle('camera')}>Stop webcam</button>
+                <button onClick={() => void run(() => window.meshdrop.streamStart!(d.deviceId, 'camera', c.cameraBack ? 'front' : 'back'))}>
+                  Switch to {c.cameraBack ? 'front' : 'back'} camera
+                </button>
+              </>
+            ) : (
+              <>
+                <button onClick={() => toggle('camera')}>Use as webcam</button>
+                <button onClick={() => void run(() => window.meshdrop.streamStart!(d.deviceId, 'camera', 'back'))}>Webcam with the back camera</button>
+              </>
+            )}
             <button aria-pressed={on('mic')} onClick={() => toggle('mic')}>{on('mic') ? 'Stop microphone' : 'Use as microphone'}</button>
             <SoundTo state={state} run={run} to={d.deviceId} label="Play phone sound on PC" />
           </div>

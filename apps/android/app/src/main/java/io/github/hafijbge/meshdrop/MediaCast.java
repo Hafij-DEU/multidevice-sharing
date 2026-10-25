@@ -46,11 +46,13 @@ final class MediaCast {
     private static final int HEIGHT = 720;
     private static final int JPEG_QUALITY = 70;
     private final Context ctx;
-    /** Kinds running now, for the service's foreground types. */
-    private final java.util.Set<String> running = java.util.concurrent.ConcurrentHashMap.newKeySet();
+    /** Kinds running now (counted: a restart's new session starts before the old one ends), for the service's foreground types. */
+    private final java.util.Map<String, Integer> running = new java.util.concurrent.ConcurrentHashMap<>();
     /** The system's answer to "capture what plays" (SoundConsentActivity): {resultCode, data}. */
     private static final ArrayBlockingQueue<Object[]> ANSWERS = new ArrayBlockingQueue<>(1);
     private volatile MediaProjection projection;
+    /** One camera session at a time: a new one waits until the last has really let the camera go. */
+    private static final java.util.concurrent.Semaphore CAMERA = new java.util.concurrent.Semaphore(1);
 
     static void consent(int result, Intent data) {
         ANSWERS.clear();
@@ -73,17 +75,19 @@ final class MediaCast {
         if (kind.equals("mic") || kind.equals("sound")) need(Manifest.permission.RECORD_AUDIO, kind.equals("mic") ? "microphone" : "phone's sound (Android files it under the microphone)");
         if (!kind.equals("audio") && !MainActivity.resumed) throw new IOException("Open MeshDrop on the phone to start the camera, microphone or sound.");
         Object[] answer = kind.equals("sound") ? askToCapture() : null;
-        running.add(kind);
+        running.merge(kind, 1, Integer::sum);
         applyTypes();
         if (answer != null) {
             // Android 14+: the service must run as mediaProjection (applyTypes) before the projection is made
             try {
+                MediaProjection old = projection;
+                if (old != null) old.stop(); // a restart: the last capture ends with it
                 MediaProjection p = ctx.getSystemService(MediaProjectionManager.class).getMediaProjection((Integer) answer[0], (Intent) answer[1]);
                 if (p == null) throw new IOException("Android did not allow capturing the sound.");
                 p.registerCallback(new MediaProjection.Callback() {
                     @Override
                     public void onStop() {
-                        projection = null;
+                        if (projection == p) projection = null; // not a newer one that replaced it
                     }
                 }, new Handler(ctx.getMainLooper()));
                 projection = p;
@@ -112,8 +116,8 @@ final class MediaCast {
     }
 
     void stopped(String kind) {
-        running.remove(kind);
-        if (kind.equals("sound")) {
+        running.computeIfPresent(kind, (k, n) -> n > 1 ? n - 1 : null);
+        if (kind.equals("sound") && !running.containsKey("sound")) {
             MediaProjection p = projection;
             projection = null;
             if (p != null) p.stop();
@@ -123,9 +127,9 @@ final class MediaCast {
 
     private void applyTypes() {
         int t = 0;
-        if (running.contains("camera")) t |= ServiceInfo.FOREGROUND_SERVICE_TYPE_CAMERA;
-        if (running.contains("mic") || running.contains("sound")) t |= ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE;
-        if (running.contains("sound")) t |= ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION;
+        if (running.containsKey("camera")) t |= ServiceInfo.FOREGROUND_SERVICE_TYPE_CAMERA;
+        if (running.containsKey("mic") || running.containsKey("sound")) t |= ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE;
+        if (running.containsKey("sound")) t |= ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION;
         try {
             MeshService.setMediaTypes(t);
         } catch (RuntimeException ignored) {
@@ -213,16 +217,40 @@ final class MediaCast {
         }
     }
 
-    /** The front camera (the back one if there is none) as JPEG frames; frames the network cannot keep up with are dropped. */
+    /**
+     * The front camera (or the back one; the other if the phone lacks it) as JPEG frames; frames the
+     * network cannot keep up with are dropped. Starting again right after a stop used to find the camera
+     * still busy (closing is asynchronous): sessions now take turns.
+     */
+    void camera(OutputStream out, BooleanSupplier stop, boolean back) throws IOException {
+        try {
+            if (!CAMERA.tryAcquire(8, TimeUnit.SECONDS)) throw new IOException("The camera is still busy: tap again in a moment.");
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IOException("Stopped.");
+        }
+        try {
+            cameraSession(out, stop, back);
+        } finally {
+            try {
+                Thread.sleep(400); // the camera service frees the device a moment after close()
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+            CAMERA.release();
+        }
+    }
+
     @android.annotation.SuppressLint("MissingPermission") // checked in starting()
-    void camera(OutputStream out, BooleanSupplier stop) throws IOException {
+    private void cameraSession(OutputStream out, BooleanSupplier stop, boolean back) throws IOException {
         CameraManager cm = ctx.getSystemService(CameraManager.class);
+        int want = back ? CameraCharacteristics.LENS_FACING_BACK : CameraCharacteristics.LENS_FACING_FRONT;
         String id = null;
         try {
             for (String c : cm.getCameraIdList()) {
                 Integer f = cm.getCameraCharacteristics(c).get(CameraCharacteristics.LENS_FACING);
-                if (id == null || (f != null && f == CameraCharacteristics.LENS_FACING_FRONT)) id = c;
-                if (f != null && f == CameraCharacteristics.LENS_FACING_FRONT) break;
+                if (id == null || (f != null && f == want)) id = c;
+                if (f != null && f == want) break;
             }
         } catch (android.hardware.camera2.CameraAccessException e) {
             throw new IOException("The camera is not available.");
@@ -294,7 +322,8 @@ final class MediaCast {
                 @Override
                 public void onError(CameraDevice d, int error) {
                     d.close();
-                    fail[0] = new IOException("The camera is not available (" + error + ").");
+                    fail[0] = new IOException(error == ERROR_CAMERA_IN_USE || error == ERROR_MAX_CAMERAS_IN_USE
+                            ? "Another app is using the camera: close it, then tap again." : "The camera is not available (" + error + ").");
                     opened.countDown();
                 }
             }, h);

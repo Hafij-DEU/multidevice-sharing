@@ -267,7 +267,7 @@ export interface AppState {
   /** M11: sends waiting for their time. */
   scheduled?: ScheduledView[];
   /** M10b Android: what this phone streams now. */
-  casting?: { audioFrom?: string; cameraTo?: string; micTo?: string; soundTo?: string };
+  casting?: { audioFrom?: string; cameraTo?: string; cameraBack?: boolean; micTo?: string; soundTo?: string };
 }
 
 /**
@@ -318,7 +318,7 @@ export interface DesktopApi {
   /** M10b: ends a live stream (desktop: by id from state.streams; Android: 'audio' | 'camera' | 'mic'). */
   streamStop(id: string): Promise<void>;
   /** M10b: 'audio' plays a PC's sound here (Android); 'camera' / 'mic' send this phone's to a PC; 'sound' sends this device's sound to another device. */
-  streamStart?(deviceId: string, kind: 'audio' | 'camera' | 'mic' | 'sound'): Promise<void>;
+  streamStart?(deviceId: string, kind: 'audio' | 'camera' | 'mic' | 'sound', camera?: 'front' | 'back'): Promise<void>;
   /** M10: forgets one forwarded phone notification (or all with no key). */
   noteDismiss(key?: string): Promise<void>;
   pickFiles(): Promise<string[]>;

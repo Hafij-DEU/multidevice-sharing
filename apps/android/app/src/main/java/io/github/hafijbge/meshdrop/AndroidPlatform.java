@@ -631,8 +631,8 @@ public class AndroidPlatform implements Platform {
     }
 
     @Override
-    public void captureCamera(java.io.OutputStream out, java.util.function.BooleanSupplier stop) throws java.io.IOException {
-        cast().camera(out, stop);
+    public void captureCamera(java.io.OutputStream out, java.util.function.BooleanSupplier stop, boolean back) throws java.io.IOException {
+        cast().camera(out, stop, back);
     }
 
     @Override

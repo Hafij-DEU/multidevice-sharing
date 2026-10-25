@@ -107,8 +107,8 @@ public interface Platform {
         throw new java.io.IOException("Not available on this device.");
     }
 
-    /** Writes JPEG frames (back to back) from the camera to `out` until `stop` says so. */
-    default void captureCamera(java.io.OutputStream out, java.util.function.BooleanSupplier stop) throws java.io.IOException {
+    /** Writes JPEG frames (back to back) from the front (or `back`) camera to `out` until `stop` says so. */
+    default void captureCamera(java.io.OutputStream out, java.util.function.BooleanSupplier stop, boolean back) throws java.io.IOException {
         throw new java.io.IOException("Not available on this device.");
     }
 

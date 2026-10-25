@@ -349,6 +349,7 @@ public final class AppController {
         m.put("scheduled", scheduledView());
         Map<String, Object> casting = new LinkedHashMap<>();
         for (Map.Entry<String, String> c : castTo.entrySet()) casting.put(c.getKey().equals("audio") ? "audioFrom" : c.getKey().equals("camera") ? "cameraTo" : c.getKey().equals("sound") ? "soundTo" : "micTo", c.getValue());
+        if (castTo.containsKey("camera") && cameraBack) casting.put("cameraBack", true);
         m.put("casting", casting);
         m.put("notifyAccess", platform.notificationAccess());
         m.put("deviceStatus", new LinkedHashMap<>(deviceStatus));
@@ -1283,7 +1284,10 @@ public final class AppController {
     private final Map<String, String> castTo = new java.util.concurrent.ConcurrentHashMap<>();
     private final Map<String, io.github.hafijbge.meshdrop.engine.Engine.Stream> casts = new java.util.concurrent.ConcurrentHashMap<>();
 
-    private void streamStart(String deviceId, String kind) throws IOException {
+    /** The camera a running webcam uses (true: the back one). */
+    private volatile boolean cameraBack;
+
+    private void streamStart(String deviceId, String kind, boolean back) throws IOException {
         if (!kind.equals("audio") && !kind.equals("camera") && !kind.equals("mic") && !kind.equals("sound")) throw new IllegalArgumentException("unknown stream");
         streamStop(kind);
         platform.mediaStarting(kind);
@@ -1297,12 +1301,13 @@ public final class AppController {
         }
         casts.put(kind, s);
         castTo.put(kind, deviceId);
+        if (kind.equals("camera")) cameraBack = back;
         changed();
         Thread t = new Thread(() -> {
             java.util.function.BooleanSupplier stop = () -> casts.get(kind) != s;
             try {
                 if (kind.equals("audio")) platform.playAudio(s.in, stop);
-                else if (kind.equals("camera")) platform.captureCamera(s.out, stop);
+                else if (kind.equals("camera")) platform.captureCamera(s.out, stop, back);
                 else if (kind.equals("sound")) platform.captureSound(s.out, stop);
                 else platform.captureMic(s.out, stop);
             } catch (IOException | RuntimeException ignored) {
@@ -1735,7 +1740,7 @@ public final class AppController {
                 ring(false);
                 return null;
             case "streamStart":
-                streamStart(str(a0), str(args.get(1)));
+                streamStart(str(a0), str(args.get(1)), args.size() > 2 && "back".equals(args.get(2)));
                 return null;
             case "streamStop":
                 streamStop(str(a0));
