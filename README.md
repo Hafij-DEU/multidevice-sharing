@@ -87,6 +87,12 @@ More → Remote, on the phone and on the PC:
   the PC.
 - **Link handoff**: type or paste a link in Send → Text and press "Open link on device"; sharing a link
   to MeshDrop on the phone works the same way. The other device opens it in its browser.
+- **PC sound on the phone, phone as webcam and microphone** (same Wi-Fi): on the phone's Remote page,
+  "Play PC sound here" plays what the PC plays (only for devices ticked on the PC); "Use as webcam" and
+  "Use as microphone" make the phone's front camera and microphone show up on the PC as
+  "<phone> camera (MeshDrop)" and "<phone> microphone (MeshDrop)" (PipeWire devices, no driver or root
+  needed; apps that use PipeWire cameras, such as Firefox and Chrome, see the camera). Keep MeshDrop
+  open on the phone to start them.
 - **Second screen**: the phone's Remote page opens Extendo.
 
 ## LocalSend

@@ -24,7 +24,7 @@ import { createServer as createHttpsServer, type Server } from 'node:https';
 import { homedir, hostname, networkInterfaces } from 'node:os';
 import { basename, isAbsolute, join, resolve, sep } from 'node:path';
 import { connect } from 'node:tls';
-import { createMeshHandler, type TrustSource } from './api/handler.ts';
+import { createMeshHandler, type MeshServerOptions, type TrustSource } from './api/handler.ts';
 import { createMeshServer, type ReceiverEvent } from './api/server.ts';
 import { CHUNK_SIZE, chunkCount } from './chunk.ts';
 import QRCode from 'qrcode';
@@ -1424,6 +1424,7 @@ export class Engine extends EventEmitter {
       accepting: () => this.accepting,
       sync: syncRoutes({ store: this.syncStore, onPoke: (peer, folder) => this.scheduleSync(folder, peer, 300) }),
       links: (peer, method, seg, q, body) => this.memberLinkRoutes(peer, method, seg, q, body),
+      stream: (s) => this.streamHandler?.(s) ?? false,
       app: (peer, msg) => (this.appHandler ? this.appHandler(peer, msg) : Promise.resolve({ status: 404, body: { error: 'not-found' } })),
     };
   }
@@ -1433,6 +1434,13 @@ export class Engine extends EventEmitter {
 
   setAppHandler(h: ((peer: string, msg: unknown) => Promise<{ status: number; body: unknown }>) | null): void {
     this.appHandler = h;
+  }
+
+  /** The app's handler for live streams (M10b, LAN only; see MeshServerOptions.stream). */
+  private streamHandler: MeshServerOptions['stream'] | null = null;
+
+  setStreamHandler(h: MeshServerOptions['stream'] | null): void {
+    this.streamHandler = h;
   }
 
   /**

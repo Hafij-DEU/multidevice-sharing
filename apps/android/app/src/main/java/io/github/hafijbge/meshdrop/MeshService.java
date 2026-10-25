@@ -33,6 +33,20 @@ public final class MeshService extends Service {
         ctx.startForegroundService(new Intent(ctx, MeshService.class));
     }
 
+    private static volatile MeshService live;
+    private boolean receivingNote = true;
+
+    /**
+     * M10b: camera and microphone use need the service to run with those types too (Android 11+), and
+     * it may only switch them while the app is in front (the user just tapped Use as webcam).
+     */
+    static boolean setMediaTypes(int types) {
+        MeshService s = live;
+        if (s == null) return false;
+        s.startForeground(NOTE_ID, s.notification(s.receivingNote), ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE | types);
+        return true;
+    }
+
     @Override
     public void onCreate() {
         super.onCreate();
@@ -41,6 +55,7 @@ public final class MeshService extends Service {
         ch.setShowBadge(false);
         nm.createNotificationChannel(ch);
         startForeground(NOTE_ID, notification(true), ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE);
+        live = this;
         Core core = ((MeshApp) getApplication()).core();
         new Thread(() -> {
             try {
@@ -104,6 +119,7 @@ public final class MeshService extends Service {
         String a = intent == null ? null : intent.getAction();
         if (ACTION_PAUSE.equals(a) || ACTION_RESUME.equals(a)) {
             boolean on = ACTION_RESUME.equals(a);
+            receivingNote = on;
             ((MeshApp) getApplication()).core().controller.setReceiving(on);
             getSystemService(NotificationManager.class).notify(NOTE_ID, notification(on));
         }
@@ -112,6 +128,7 @@ public final class MeshService extends Service {
 
     @Override
     public void onDestroy() {
+        live = null;
         if (netCallback != null) getSystemService(ConnectivityManager.class).unregisterNetworkCallback(netCallback);
         if (screen != null) unregisterReceiver(screen);
         super.onDestroy();

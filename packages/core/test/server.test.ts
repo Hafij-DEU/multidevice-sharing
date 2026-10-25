@@ -117,6 +117,7 @@ describe('receiver API', () => {
     const h = await startServer();
     expect(h.server.headersTimeout).toBe(10_000);
     expect(h.server.maxConnections).toBe(256);
+    expect(h.server.timeout).toBe(120_000);
   });
 
   it('info is open to anyone; every other route is 403 untrusted for an untrusted peer', async () => {

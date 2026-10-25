@@ -1400,6 +1400,106 @@ public final class Engine {
      * LAN if discovery knows the device (or one of its directory addresses answers), else the hub
      * relay if it is online there, else held on the hub, else unreachable.
      */
+    // ---- live streams (M10b): LAN only, pinned TLS ------------------------------------------
+
+    /** A live stream to or from a device on the LAN: read `in` (GET) or write `out` (POST); close() ends it. */
+    public static final class Stream implements java.io.Closeable {
+        public final java.io.InputStream in;
+        public final java.io.OutputStream out;
+        private final javax.net.ssl.SSLSocket s;
+
+        Stream(javax.net.ssl.SSLSocket s, java.io.InputStream in, java.io.OutputStream out) {
+            this.s = s;
+            this.in = in;
+            this.out = out;
+        }
+
+        @Override
+        public void close() {
+            try {
+                s.close();
+            } catch (IOException ignored) {
+                // closed
+            }
+        }
+    }
+
+    private javax.net.ssl.SSLSocket streamSocket(String deviceId) throws IOException {
+        Route r = route(deviceId);
+        Sender.Target t = target(deviceId, r);
+        if (t == null || t.host == null) throw new IOException("That device is not on this network: live sound and camera work on the same Wi-Fi.");
+        javax.net.ssl.SSLSocket s = Tls.connect(Tls.pinnedClient(identity, deviceId), t.host, t.port, 5_000);
+        s.setSoTimeout(30_000);
+        return s;
+    }
+
+    /** GET /mesh/v1/stream/<path>: the body as it comes (HTTP/1.0, so it is never chunked). */
+    public Stream streamFrom(String deviceId, String path) throws IOException {
+        javax.net.ssl.SSLSocket s = streamSocket(deviceId);
+        try {
+            java.io.OutputStream o = s.getOutputStream();
+            o.write(("GET /mesh/v1/stream/" + path + " HTTP/1.0\r\nHost: meshdrop\r\n\r\n").getBytes(StandardCharsets.US_ASCII));
+            o.flush();
+            java.io.InputStream in = new java.io.BufferedInputStream(s.getInputStream());
+            String status = headLine(in);
+            int code = status.length() >= 12 ? Integer.parseInt(status.substring(9, 12)) : 0;
+            while (!headLine(in).isEmpty()) {
+                // skip the headers
+            }
+            if (code != 200) throw new IOException(code == 403 ? "That PC does not allow this device: tick it on the PC (More > Remote)." : "The PC refused (" + code + ").");
+            return new Stream(s, in, null);
+        } catch (IOException | RuntimeException e) {
+            s.close();
+            throw e instanceof IOException ? (IOException) e : new IOException(e);
+        }
+    }
+
+    /** POST /mesh/v1/stream/<path>: what is written to `out` goes as chunks until close(). */
+    public Stream streamTo(String deviceId, String path, String contentType) throws IOException {
+        javax.net.ssl.SSLSocket s = streamSocket(deviceId);
+        s.setSoTimeout(0);
+        java.io.OutputStream raw = new java.io.BufferedOutputStream(s.getOutputStream(), 64 * 1024);
+        raw.write(("POST /mesh/v1/stream/" + path + " HTTP/1.1\r\nHost: meshdrop\r\nContent-Type: " + contentType + "\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n").getBytes(StandardCharsets.US_ASCII));
+        java.io.OutputStream chunked = new java.io.OutputStream() {
+            @Override
+            public void write(int b) throws IOException {
+                write(new byte[] {(byte) b}, 0, 1);
+            }
+
+            @Override
+            public void write(byte[] b, int off, int len) throws IOException {
+                if (len == 0) return;
+                raw.write((Integer.toHexString(len) + "\r\n").getBytes(StandardCharsets.US_ASCII));
+                raw.write(b, off, len);
+                raw.write(CRLF);
+                raw.flush();
+            }
+
+            @Override
+            public void close() throws IOException {
+                try {
+                    raw.write("0\r\n\r\n".getBytes(StandardCharsets.US_ASCII));
+                    raw.flush();
+                } finally {
+                    s.close();
+                }
+            }
+        };
+        return new Stream(s, s.getInputStream(), chunked);
+    }
+
+    private static final byte[] CRLF = {'\r', '\n'};
+
+    private static String headLine(java.io.InputStream in) throws IOException {
+        StringBuilder b = new StringBuilder();
+        for (int c; (c = in.read()) != -1; ) {
+            if (c == '\n') break;
+            if (c != '\r') b.append((char) c);
+            if (b.length() > 8192) throw new IOException("header too long");
+        }
+        return b.toString();
+    }
+
     // ---- app messages (M10): remote control, ring, status, notifications ----------------------
 
     private volatile MeshServer.AppHandler appHandler;

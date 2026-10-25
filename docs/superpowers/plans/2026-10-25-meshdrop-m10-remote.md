@@ -49,7 +49,11 @@ One route on the mesh API, `POST /mesh/v1/app`, with a JSON body `{kind, ...}` o
   - PC → phone: the Send page's Text box gets "Open on device" when it holds a URL.
   - Phone → PC: Share a link to MeshDrop, then "Open on PC".
 - **Extendo:** the phone's More → "Second screen (Extendo)" opens `io.github.hafijbge.extendo`, or its download page when it is not installed.
-- **Deferred within M10 (own milestone M10b):** audio cast PC → phone, and webcam + mic from the phone. Both need a streaming channel (not request/answer), and a virtual camera needs v4l2loopback (root).
+- **M10b, live streams:** raw HTTP streams on the LAN mesh server under `/mesh/v1/stream/`, outside the request/answer handler.
+  - `GET audio`: the PC's sound as s16le 48 kHz stereo from `pw-record --raw` (sink monitor). Only for devices in `remoteFrom`.
+  - `POST camera`: back-to-back JPEG frames, chunked, into GStreamer `jpegdec ! pipewiresink` as a PipeWire Video/Source.
+  - `POST mic`: s16le 48 kHz mono into `pw-cat --raw`, fed into a `pw-loopback` sink/source pair.
+  - These need no v4l2loopback and no root. The phone starts them (Android only allows the camera and microphone while the app is in front).
 
 ## Tasks
 

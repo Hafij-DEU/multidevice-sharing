@@ -605,4 +605,38 @@ public class AndroidPlatform implements Platform {
         String on = android.provider.Settings.Secure.getString(ctx.getContentResolver(), "enabled_notification_listeners");
         return on != null && on.contains(ctx.getPackageName() + "/");
     }
+
+    // ---- M10b: PC sound here, this phone's camera and microphone on the PC ----------------------
+
+    private MediaCast cast;
+
+    private synchronized MediaCast cast() {
+        if (cast == null) cast = new MediaCast(ctx);
+        return cast;
+    }
+
+    @Override
+    public void mediaStarting(String kind) throws java.io.IOException {
+        cast().starting(kind);
+    }
+
+    @Override
+    public void mediaStopped(String kind) {
+        cast().stopped(kind);
+    }
+
+    @Override
+    public void playAudio(java.io.InputStream in, java.util.function.BooleanSupplier stop) throws java.io.IOException {
+        cast().play(in, stop);
+    }
+
+    @Override
+    public void captureCamera(java.io.OutputStream out, java.util.function.BooleanSupplier stop) throws java.io.IOException {
+        cast().camera(out, stop);
+    }
+
+    @Override
+    public void captureMic(java.io.OutputStream out, java.util.function.BooleanSupplier stop) throws java.io.IOException {
+        cast().mic(out, stop);
+    }
 }

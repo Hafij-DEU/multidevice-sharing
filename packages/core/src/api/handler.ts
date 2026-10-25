@@ -68,6 +68,12 @@ export interface MeshServerOptions {
    * phone status, notifications. The app decides per kind and per device; without it: 404.
    */
   app?: (peer: string, msg: unknown) => Promise<{ status: number; body: unknown }>;
+  /**
+   * Live streams (M10b, `stream/...`, LAN server only): PC sound to a phone, a phone's camera and
+   * microphone to a PC. Raw request and response: the app streams; it returns false for 404.
+   * The caller is a trusted device (checked before).
+   */
+  stream?: (s: { peer: string; method: string; path: string; query: URLSearchParams; req: import('node:http').IncomingMessage; res: import('node:http').ServerResponse }) => boolean;
   /** Internet links made on members (M9b, `links/...`; a hub only). Without it: 404. */
   links?: (peer: string, method: string, seg: string[], query: URLSearchParams, body: (cap: number) => Promise<Buffer>) => Promise<MeshResponse>;
 }

@@ -328,6 +328,25 @@ export function Remote({ state, run }: { state: AppState; run: Run }) {
         </div>
       )}
 
+      {!android && (state.streams ?? []).length > 0 && (
+        <>
+          <h2>Live now</h2>
+          <ul className="list">
+            {(state.streams ?? []).map((st) => (
+              <li key={st.id} className="row space">
+                <span>
+                  {st.kind === 'audio' ? 'This PC\'s sound plays on ' : st.kind === 'camera' ? 'Camera of ' : 'Microphone of '}
+                  <Peer text={st.alias ?? 'a device'} />
+                  {st.kind === 'camera' && <span className="muted"> · pick "{st.alias} camera (MeshDrop)" in your video app</span>}
+                  {st.kind === 'mic' && <span className="muted"> · pick "{st.alias} microphone (MeshDrop)" as input</span>}
+                </span>
+                <button onClick={() => void run(() => window.meshdrop.streamStop(st.id))}>Stop</button>
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
+
       <h2>Control a device</h2>
       <Control state={state} run={run} targets={reachable.filter((d) => d.deviceType !== 'mobile')} />
 
@@ -455,6 +474,21 @@ function AndroidExtras({ state, run, trusted }: { state: AppState; run: Run; tru
           Allow notification access
         </button>
       )}
+      <h2>Sound, camera and microphone</h2>
+      <p className="muted">On the same Wi-Fi. The PC's sound plays here only for devices ticked on that PC; your camera and microphone show up on the PC as a webcam and a microphone for video calls.</p>
+      {pcs.filter((d) => d.reach === 'lan').map((d) => {
+        const c = state.casting ?? {};
+        const on = (k: 'audio' | 'camera' | 'mic') => (k === 'audio' ? c.audioFrom : k === 'camera' ? c.cameraTo : c.micTo) === d.deviceId;
+        const toggle = (k: 'audio' | 'camera' | 'mic') => void run(() => (on(k) ? window.meshdrop.streamStop(k) : window.meshdrop.streamStart!(d.deviceId, k)));
+        return (
+          <div key={d.deviceId} className="row wrap">
+            <Peer text={d.alias} />
+            <button aria-pressed={on('audio')} onClick={() => toggle('audio')}>{on('audio') ? 'Stop PC sound' : 'Play PC sound here'}</button>
+            <button aria-pressed={on('camera')} onClick={() => toggle('camera')}>{on('camera') ? 'Stop webcam' : 'Use as webcam'}</button>
+            <button aria-pressed={on('mic')} onClick={() => toggle('mic')}>{on('mic') ? 'Stop microphone' : 'Use as microphone'}</button>
+          </div>
+        );
+      })}
       <h2>Second screen</h2>
       <p className="muted">Use this phone or tablet as a second monitor for the PC with Extendo.</p>
       <button onClick={() => void run(() => window.meshdrop.keepAliveAction!('extendo'))}>Open Extendo</button>

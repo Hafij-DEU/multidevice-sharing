@@ -42,6 +42,20 @@ export interface Platform {
   ring?(on: boolean): void;
   openUrl?(url: string): Promise<void>;
   status?(): Promise<Omit<DeviceStatus, 'at'>>;
+  /** M10b: this PC's sound as raw s16le 48 kHz stereo, until stop(). */
+  captureAudio?(): MediaPipe;
+  /** M10b: a virtual camera fed with JPEG frames (written back to back), until stop(). */
+  cameraSink?(name: string): MediaPipe;
+  /** M10b: a virtual microphone fed with s16le 48 kHz mono, until stop(). */
+  micSink?(name: string): MediaPipe;
+}
+
+/** A media helper process: read from `out` or write to `in`; stop() ends it. */
+export interface MediaPipe {
+  out?: NodeJS.ReadableStream;
+  in?: NodeJS.WritableStream;
+  stop(): void;
+  onExit(cb: () => void): void;
 }
 
 /** What the input helper understands (see build/meshdrop-input.py). */
@@ -224,6 +238,8 @@ export class AppController extends EventEmitter {
   #ringing: NodeJS.Timeout | null = null;
   #inputError: string | undefined;
   #statusTimer: NodeJS.Timeout | null = null;
+  /** M10b: live streams now (PC sound to a phone, a phone's camera or microphone here). */
+  #streams = new Map<string, { kind: 'audio' | 'camera' | 'mic'; peer: string; alias?: string; stop: () => void }>();
   #linkTimer: NodeJS.Timeout | null = null;
 
   constructor(opts: ControllerOptions) {
@@ -249,6 +265,7 @@ export class AppController extends EventEmitter {
     if (this.#statusTimer) clearInterval(this.#statusTimer);
     this.#statusTimer = null;
     if (this.#ringing) void this.ringStop();
+    for (const st of this.#streams.values()) st.stop();
     if (this.#timer) clearTimeout(this.#timer);
     this.#timer = null;
     await this.#halt();
@@ -273,6 +290,7 @@ export class AppController extends EventEmitter {
     const e = await Engine.create(opts);
     e.on('event', (ev: EngineEvent) => this.#onEvent(ev));
     e.setAppHandler((peer, msg) => this.#onApp(peer, msg));
+    e.setStreamHandler((s) => this.#onStream(s));
     if (!this.#statusTimer) {
       this.#statusTimer = setInterval(() => void this.#pollStatus(), STATUS_POLL_MS);
       this.#statusTimer.unref();
@@ -400,6 +418,7 @@ export class AppController extends EventEmitter {
       deviceStatus: { ...this.#deviceStatus },
       ringing: this.#ringing !== null,
       ...(this.#inputError ? { inputError: this.#inputError } : {}),
+      streams: [...this.#streams].map(([id, s]) => ({ id, kind: s.kind, peer: s.peer, ...(s.alias ? { alias: s.alias } : {}) })),
       platform: 'desktop',
       ...(this.#shared.length > 0 ? { sharedPending: this.#shared.length } : {}),
       receiving: this.#mode === 'serving' && !this.#paused && this.#error === undefined,
@@ -1010,6 +1029,64 @@ export class AppController extends EventEmitter {
       default:
         return { status: 404, body: { error: 'unknown-kind' } };
     }
+  }
+
+  /**
+   * M10b live streams on the LAN server: GET audio (this PC's sound, for devices that may control it),
+   * POST camera / mic (a phone's camera or microphone becomes a virtual device here).
+   */
+  #onStream(s: { peer: string; method: string; path: string; req: import('node:http').IncomingMessage; res: import('node:http').ServerResponse }): boolean {
+    const p = this.#platform;
+    const alias = this.#e.devices().find((d) => d.deviceId === s.peer)?.alias;
+    const deny = (status: number, error: string) => {
+      s.res.writeHead(status, { 'content-type': 'application/json' });
+      s.res.end(JSON.stringify({ error }));
+      return true;
+    };
+    const kind = s.method === 'GET' && s.path === 'audio' ? 'audio' : s.method === 'POST' && (s.path === 'camera' || s.path === 'mic') ? s.path : null;
+    if (!kind) return false;
+    if (kind === 'audio' && !this.#settings.get().remoteFrom.includes(s.peer)) return deny(403, 'remote-off');
+    const make = kind === 'audio' ? p.captureAudio : kind === 'camera' ? p.cameraSink : p.micSink;
+    if (!make) return deny(501, 'unsupported');
+    let pipe: MediaPipe;
+    try {
+      pipe = kind === 'audio' ? p.captureAudio!() : make.call(p, `${alias ?? 'Phone'}`);
+    } catch (e) {
+      return deny(503, e instanceof Error ? e.message : 'unavailable');
+    }
+    const id = randomUUID();
+    let ended = false;
+    const end = () => {
+      if (ended) return;
+      ended = true;
+      pipe.stop();
+      this.#streams.delete(id);
+      if (!s.res.writableEnded) s.res.destroy();
+      this.#changed();
+    };
+    this.#streams.set(id, { kind, peer: s.peer, ...(alias ? { alias } : {}), stop: end });
+    pipe.onExit(end);
+    s.req.on('close', end);
+    s.res.on('close', end);
+    if (kind === 'audio') {
+      s.res.writeHead(200, { 'content-type': 'audio/L16; rate=48000; channels=2', 'cache-control': 'no-store' });
+      pipe.out!.pipe(s.res);
+    } else {
+      s.req.pipe(pipe.in! as NodeJS.WritableStream);
+      s.req.on('end', () => {
+        if (!s.res.headersSent) s.res.writeHead(200, { 'content-type': 'application/json' });
+        s.res.end('{"ok":true}');
+      });
+      if (this.#settings.get().notifications) {
+        p.notify(kind === 'camera' ? 'Phone camera connected' : 'Phone microphone connected', `${alias ?? 'Your phone'}: pick "${kind === 'camera' ? 'Phone camera' : 'Phone microphone'} (MeshDrop)" in your video or call app.`);
+      }
+    }
+    this.#changed();
+    return true;
+  }
+
+  async streamStop(id: string): Promise<void> {
+    this.#streams.get(id)?.stop();
   }
 
   #ring(from?: string): void {

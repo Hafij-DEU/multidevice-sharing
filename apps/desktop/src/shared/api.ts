@@ -212,6 +212,10 @@ export interface AppState {
   inputError?: string;
   /** Android: notification access is granted (needed to forward notifications). */
   notifyAccess?: boolean;
+  /** M10b: live streams (PC sound to a phone; a phone's camera or microphone used here). */
+  streams?: { id: string; kind: 'audio' | 'camera' | 'mic'; peer: string; alias?: string }[];
+  /** M10b Android: what this phone streams now. */
+  casting?: { audioFrom?: string; cameraTo?: string; micTo?: string };
 }
 
 /** A notification forwarded from a phone (M10). */
@@ -252,6 +256,10 @@ export interface DesktopApi {
   appSend(deviceId: string, msg: Record<string, unknown>): Promise<{ status: number; body: unknown }>;
   /** M10: stops this device's own ringing. */
   ringStop(): Promise<void>;
+  /** M10b: ends a live stream (desktop: by id from state.streams; Android: 'audio' | 'camera' | 'mic'). */
+  streamStop(id: string): Promise<void>;
+  /** M10b Android: plays a PC's sound here / sends this phone's camera or microphone to a PC. */
+  streamStart?(deviceId: string, kind: 'audio' | 'camera' | 'mic'): Promise<void>;
   /** M10: forgets one forwarded phone notification (or all with no key). */
   noteDismiss(key?: string): Promise<void>;
   pickFiles(): Promise<string[]>;

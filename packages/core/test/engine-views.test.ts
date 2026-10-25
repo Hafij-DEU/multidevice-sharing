@@ -328,3 +328,28 @@ describe('app messages (M10)', () => {
     expect(seen).toEqual([[A.e.identity.deviceId, { kind: 'ping', n: 1 }]]);
   });
 });
+
+describe('live streams (M10b)', () => {
+  it('a trusted device reaches the app stream handler on the LAN server; others get 403', async () => {
+    const { LanTransport } = await import('../src/transfer/transport.ts');
+    const A = await make({ alias: 'ay' });
+    await A.e.start();
+    const B = await make({ alias: 'bee' });
+    await B.e.start();
+    const C = await make({ alias: 'sea' });
+    await C.e.start();
+    await A.e.pairManual('127.0.0.1', B.e.port, 'bee');
+    await B.e.pairManual('127.0.0.1', A.e.port, 'ay');
+    B.e.setStreamHandler((s) => {
+      if (s.path !== 'echo') return false;
+      s.res.writeHead(200, { 'content-type': 'text/plain' });
+      s.res.end(`hi ${s.peer.slice(0, 4)} ${s.query.get('x')}`);
+      return true;
+    });
+    const get = (from: Engine, path: string) => new LanTransport(from.identity, { deviceId: B.e.identity.deviceId, host: '127.0.0.1', port: B.e.port }).request('GET', path, undefined, {}, { timeoutMs: 5000 });
+    const ok = await get(A.e, '/mesh/v1/stream/echo?x=1');
+    expect([ok.status, ok.body.toString()]).toEqual([200, `hi ${A.e.identity.deviceId.slice(0, 4)} 1`]);
+    expect((await get(A.e, '/mesh/v1/stream/nope')).status).toBe(404);
+    expect((await get(C.e, '/mesh/v1/stream/echo')).status).toBe(403);
+  });
+});

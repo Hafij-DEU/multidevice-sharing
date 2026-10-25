@@ -7,7 +7,7 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 import type { DeviceStatus } from '../shared/api.ts';
-import type { InputPrim, Platform } from './controller.ts';
+import type { InputPrim, MediaPipe, Platform } from './controller.ts';
 
 const run = promisify(execFile);
 const READY_TIMEOUT_MS = 90_000; // the first time the user answers GNOME's dialog
@@ -173,6 +173,64 @@ export function pcStatus(inboxDir: string): Omit<DeviceStatus, 'at'> {
     /* unknown */
   }
   return s;
+}
+
+/** A helper process as a MediaPipe (its stdin or stdout carries the media). */
+function mediaPipe(cmd: string, args: string[], dir: 'in' | 'out'): MediaPipe {
+  const p = spawn(cmd, args, { stdio: dir === 'in' ? ['pipe', 'ignore', 'ignore'] : ['ignore', 'pipe', 'ignore'] });
+  const exits: (() => void)[] = [];
+  let done = false;
+  const fire = () => {
+    if (done) return;
+    done = true;
+    for (const f of exits) f();
+  };
+  p.on('exit', fire);
+  p.on('error', fire);
+  (dir === 'in' ? p.stdin! : p.stdout!).on('error', () => {});
+  return {
+    ...(dir === 'in' ? { in: p.stdin! } : { out: p.stdout! }),
+    stop: () => {
+      p.kill();
+      fire();
+    },
+    onExit: (cb) => exits.push(cb),
+  };
+}
+
+/** Media for M10b: this PC's sound out, a phone's camera and microphone in (PipeWire, no root). */
+export function mediaPlatform(): Required<Pick<Platform, 'captureAudio' | 'cameraSink' | 'micSink'>> {
+  const label = (s: string) => s.replace(/[^\p{L}\p{N} ._-]/gu, '').slice(0, 40) || 'Phone';
+  return {
+    // what the speakers play (the default sink's monitor)
+    captureAudio: () => mediaPipe('pw-record', ['--raw', '-P', '{ stream.capture.sink=true node.name=meshdrop-cast }', '--format', 's16', '--rate', '48000', '--channels', '2', '-'], 'out'),
+    // back-to-back JPEG frames -> a PipeWire video source that browsers and call apps can pick
+    cameraSink: (name) =>
+      mediaPipe('gst-launch-1.0', [
+        '-q', 'fdsrc', 'fd=0', 'do-timestamp=true', '!', 'jpegparse', '!', 'jpegdec', '!', 'videoconvert', '!', 'video/x-raw,format=YUY2', '!',
+        // gst-launch re-parses its arguments: the description's quotes must be escaped inside the quoted value
+        'pipewiresink', `stream-properties="props,media.class=Video/Source,media.role=Camera,node.name=meshdrop-camera,node.description=\\"${label(name)} camera (MeshDrop)\\""`,
+      ], 'in'),
+    // s16le 48 kHz mono -> a virtual microphone (a null-sink loopback whose source side apps record from)
+    micSink: (name) => {
+      const loop = spawn('pw-loopback', [
+        '--capture-props', 'media.class=Audio/Sink node.name=meshdrop-mic-in node.description="MeshDrop mic input" audio.position=[MONO]',
+        '--playback-props', `media.class=Audio/Source node.name=meshdrop-mic node.description="${label(name)} microphone (MeshDrop)" audio.position=[MONO]`,
+      ], { stdio: 'ignore' });
+      const cat = mediaPipe('pw-cat', ['--playback', '--raw', '--target', 'meshdrop-mic-in', '--format', 's16', '--rate', '48000', '--channels', '1', '-'], 'in');
+      return {
+        in: cat.in!,
+        stop: () => {
+          cat.stop();
+          loop.kill();
+        },
+        onExit: (cb) => cat.onExit(() => {
+          loop.kill();
+          cb();
+        }),
+      };
+    },
+  };
 }
 
 /** The M10 part of the Electron platform. */

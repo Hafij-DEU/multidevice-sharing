@@ -5,7 +5,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 import { Engine } from '@meshdrop/core/src/engine.ts';
-import { AppController, toPrims, type InputPrim, type Platform } from '../src/main/controller.ts';
+import { PassThrough } from 'node:stream';
+import { AppController, toPrims, type InputPrim, type MediaPipe, type Platform } from '../src/main/controller.ts';
 import { HistoryStore } from '../src/main/history.ts';
 import { SettingsStore, defaultSettings } from '../src/main/settings.ts';
 import type { AppState, Settings } from '../src/shared/api.ts';
@@ -42,6 +43,7 @@ interface FakePlatform extends Platform {
   lasers: [number, number, boolean][];
   rings: boolean[];
   urls: string[];
+  camera: Buffer[];
 }
 function fakePlatform(): FakePlatform {
   const p: FakePlatform = {
@@ -64,6 +66,17 @@ function fakePlatform(): FakePlatform {
     lasers: [],
     rings: [],
     urls: [],
+    camera: [],
+    captureAudio: (): MediaPipe => {
+      const out = new PassThrough();
+      out.write(Buffer.alloc(1920, 7));
+      return { out, stop: () => out.end(), onExit: () => {} };
+    },
+    cameraSink: (): MediaPipe => {
+      const inp = new PassThrough();
+      inp.on('data', (c: Buffer) => p.camera.push(c));
+      return { in: inp, stop: () => inp.destroy(), onExit: () => {} };
+    },
     input: async (x) => void p.prims.push(...x),
     laser: (x, y, on) => void p.lasers.push([x, y, on]),
     ring: (on) => void p.rings.push(on),
@@ -495,5 +508,33 @@ describe('AppController internet access', () => {
       { t: 'key', keysym: 0xffe9, down: true }, { t: 'key', keysym: 0xff09, down: true }, { t: 'key', keysym: 0xff09, down: false }, { t: 'key', keysym: 0xffe9, down: false },
     ]);
     expect(toPrims([{ t: 'key', k: 'rm -rf' }])).toEqual([]);
+  });
+
+  it('M10b streams: PC sound only for allowed devices; a phone camera arrives as a stream', async () => {
+    const { LanTransport } = await import('@meshdrop/core/src/transfer/transport.ts');
+    const { loadOrCreateIdentity } = await import('@meshdrop/core/src/identity.ts');
+    const A = await make('ay');
+    const B = await make('bee');
+    await pair(A.c, B.c);
+    const aId = A.c.state().self.deviceId;
+    const idA = await loadOrCreateIdentity(A.home);
+    const lan = () => new LanTransport(idA, { deviceId: B.c.state().self.deviceId, host: '127.0.0.1', port: B.c.state().self.port });
+    expect((await lan().request('GET', '/mesh/v1/stream/audio', undefined, {}, { timeoutMs: 5000 })).status).toBe(403);
+    await B.c.setSettings({ remoteFrom: [aId] });
+    const { connectPinned } = await import('@meshdrop/core/src/tls.ts');
+    const sock = await connectPinned('127.0.0.1', B.c.state().self.port, idA, B.c.state().self.deviceId, { timeoutMs: 5000 });
+    sock.write('GET /mesh/v1/stream/audio HTTP/1.0\r\nHost: x\r\n\r\n');
+    let got = Buffer.alloc(0);
+    await new Promise<void>((ok) => sock.on('data', (c: Buffer) => ((got = Buffer.concat([got, c])), got.length > 1900 && ok())));
+    expect(got.toString('latin1')).toMatch(/^HTTP\/1\.1 200[\s\S]*audio\/L16/);
+    expect(B.c.state().streams).toEqual([expect.objectContaining({ kind: 'audio', peer: aId })]);
+    sock.destroy();
+    await new Promise((r) => setTimeout(r, 200));
+    expect(B.c.state().streams).toEqual([]);
+
+    const jpeg = Buffer.from([0xff, 0xd8, 1, 2, 3, 0xff, 0xd9]);
+    const r = await lan().request('POST', '/mesh/v1/stream/camera', jpeg, { 'content-type': 'image/jpeg' }, { timeoutMs: 5000 });
+    expect(r.status).toBe(200);
+    expect(Buffer.concat(B.p.camera)).toEqual(jpeg);
   });
 });

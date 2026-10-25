@@ -11,6 +11,8 @@ import java.io.IOException;
 public final class MainActivity extends Activity {
     /** The UI is in front (Android lets an app open a page by itself only then). */
     static volatile boolean resumed;
+    /** The activity in front (permission prompts from the app layer), or null. */
+    static volatile android.app.Activity current;
 
     private WebView web;
     private Bridge bridge;
@@ -77,6 +79,7 @@ public final class MainActivity extends Activity {
     protected void onResume() {
         super.onResume();
         resumed = true;
+        current = this;
         AppController c = ((MeshApp) getApplication()).core().controller;
         c.refresh(); // a keep-alive step may have changed
         c.setForeground(true);
@@ -85,6 +88,7 @@ public final class MainActivity extends Activity {
     @Override
     protected void onPause() {
         resumed = false;
+        if (current == this) current = null;
         ((MeshApp) getApplication()).core().controller.setForeground(false);
         super.onPause();
     }

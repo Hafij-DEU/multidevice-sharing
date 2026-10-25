@@ -92,4 +92,28 @@ public interface Platform {
     default boolean notificationAccess() {
         return false;
     }
+
+    // ---- M10b: live sound, camera, microphone (LAN) ----
+
+    /** Throws (with what to do) unless this kind ("audio" | "camera" | "mic") can start now; also keeps the service running for it. */
+    default void mediaStarting(String kind) throws java.io.IOException {
+        throw new java.io.IOException("Not available on this device.");
+    }
+
+    default void mediaStopped(String kind) {}
+
+    /** Plays raw s16le 48 kHz stereo from `in` until it ends or `stop` says so. */
+    default void playAudio(java.io.InputStream in, java.util.function.BooleanSupplier stop) throws java.io.IOException {
+        throw new java.io.IOException("Not available on this device.");
+    }
+
+    /** Writes JPEG frames (back to back) from the camera to `out` until `stop` says so. */
+    default void captureCamera(java.io.OutputStream out, java.util.function.BooleanSupplier stop) throws java.io.IOException {
+        throw new java.io.IOException("Not available on this device.");
+    }
+
+    /** Writes s16le 48 kHz mono from the microphone to `out` until `stop` says so. */
+    default void captureMic(java.io.OutputStream out, java.util.function.BooleanSupplier stop) throws java.io.IOException {
+        throw new java.io.IOException("Not available on this device.");
+    }
 }

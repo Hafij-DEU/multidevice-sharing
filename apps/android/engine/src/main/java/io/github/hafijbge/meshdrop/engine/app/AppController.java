@@ -328,6 +328,9 @@ public final class AppController {
         if (guestQr != null && Boolean.TRUE.equals(guest.get("active"))) guest.put("qrSvg", guestQr);
         m.put("guest", guest);
         m.put("ringing", ringing);
+        Map<String, Object> casting = new LinkedHashMap<>();
+        for (Map.Entry<String, String> c : castTo.entrySet()) casting.put(c.getKey().equals("audio") ? "audioFrom" : c.getKey().equals("camera") ? "cameraTo" : "micTo", c.getValue());
+        m.put("casting", casting);
         m.put("notifyAccess", platform.notificationAccess());
         m.put("deviceStatus", new LinkedHashMap<>(deviceStatus));
         if (mesh != null) {
@@ -1074,6 +1077,58 @@ public final class AppController {
         return new io.github.hafijbge.meshdrop.engine.recv.MeshServer.Reply(status, Json.stringify(body).getBytes(java.nio.charset.StandardCharsets.UTF_8));
     }
 
+    // ---- M10b: live sound / camera / microphone --------------------------------------------
+
+    /** kind ("audio" | "camera" | "mic") -> the device it plays from or sends to. */
+    private final Map<String, String> castTo = new java.util.concurrent.ConcurrentHashMap<>();
+    private final Map<String, io.github.hafijbge.meshdrop.engine.Engine.Stream> casts = new java.util.concurrent.ConcurrentHashMap<>();
+
+    private void streamStart(String deviceId, String kind) throws IOException {
+        if (!kind.equals("audio") && !kind.equals("camera") && !kind.equals("mic")) throw new IllegalArgumentException("unknown stream");
+        streamStop(kind);
+        platform.mediaStarting(kind);
+        io.github.hafijbge.meshdrop.engine.Engine.Stream s;
+        try {
+            s = kind.equals("audio") ? e().streamFrom(deviceId, "audio")
+                    : e().streamTo(deviceId, kind, kind.equals("camera") ? "multipart/x-mixed-replace" : "audio/L16; rate=48000; channels=1");
+        } catch (IOException x) {
+            platform.mediaStopped(kind);
+            throw x;
+        }
+        casts.put(kind, s);
+        castTo.put(kind, deviceId);
+        changed();
+        Thread t = new Thread(() -> {
+            java.util.function.BooleanSupplier stop = () -> casts.get(kind) != s;
+            try {
+                if (kind.equals("audio")) platform.playAudio(s.in, stop);
+                else if (kind.equals("camera")) platform.captureCamera(s.out, stop);
+                else platform.captureMic(s.out, stop);
+            } catch (IOException | RuntimeException ignored) {
+                // the PC went away or the stream was stopped
+            } finally {
+                try {
+                    if (s.out != null) s.out.close();
+                } catch (IOException ignored) {
+                    // closing anyway
+                }
+                s.close();
+                if (casts.remove(kind, s)) castTo.remove(kind);
+                platform.mediaStopped(kind);
+                changed();
+            }
+        }, "cast-" + kind);
+        t.setDaemon(true);
+        t.start();
+    }
+
+    private void streamStop(String kind) {
+        io.github.hafijbge.meshdrop.engine.Engine.Stream s = casts.remove(kind);
+        castTo.remove(kind);
+        if (s != null) s.close();
+        changed();
+    }
+
     private java.util.concurrent.ScheduledFuture<?> ringTimer;
 
     private synchronized void ring(boolean on) {
@@ -1267,6 +1322,12 @@ public final class AppController {
             }
             case "ringStop":
                 ring(false);
+                return null;
+            case "streamStart":
+                streamStart(str(a0), str(args.get(1)));
+                return null;
+            case "streamStop":
+                streamStop(str(a0));
                 return null;
             case "noteDismiss":
                 return null;
