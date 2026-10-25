@@ -16,7 +16,7 @@ import { writeFileAtomic } from '@meshdrop/core/src/trust.ts';
 import { BUTTONS, KEYSYMS, charKeysym } from './keys.ts';
 import { ensureDir, land } from '@meshdrop/core/src/guest/uploads.ts';
 import { cleanHandoff, handoffUrl, type HandoffState } from '@meshdrop/core/src/handoff.ts';
-import type { AppState, DeviceStatus, ReceivedRecord, DeviceView, PhoneNote, RemoteEvent, ScheduledView, SendOptions, GuestView, LinkCreateInput, LinkView, ReachInput, ReachView, SendItemInput, Settings, SyncView, TransferView } from '../shared/api.ts';
+import type { AppState, StreamKind, DeviceStatus, ReceivedRecord, DeviceView, PhoneNote, RemoteEvent, ScheduledView, SendOptions, GuestView, LinkCreateInput, LinkView, ReachInput, ReachView, SendItemInput, Settings, SyncView, TransferView } from '../shared/api.ts';
 import type { HistoryStore } from './history.ts';
 import { SettingsError, type SettingsStore } from './settings.ts';
 
@@ -56,6 +56,8 @@ export interface Platform {
   cameraSink?(name: string): MediaPipe;
   /** M10b: a virtual microphone fed with s16le 48 kHz mono, until stop(). */
   micSink?(name: string): MediaPipe;
+  /** Another device's sound (s16le 48 kHz stereo) out of this PC's speakers, until stop(). */
+  speakerSink?(name: string): MediaPipe;
 }
 
 /** A media helper process: read from `out` or write to `in`; stop() ends it. */
@@ -270,7 +272,7 @@ export class AppController extends EventEmitter {
   #scheduled: (ScheduledView & { items: SendItemInput[] })[] = [];
   #m11Timer: NodeJS.Timeout | null = null;
   /** M10b: live streams now (PC sound to a phone, a phone's camera or microphone here). */
-  #streams = new Map<string, { kind: 'audio' | 'camera' | 'mic'; peer: string; alias?: string; stop: () => void }>();
+  #streams = new Map<string, { kind: StreamKind; peer: string; alias?: string; stop: () => void }>();
   #linkTimer: NodeJS.Timeout | null = null;
 
   constructor(opts: ControllerOptions) {
@@ -1193,10 +1195,11 @@ export class AppController extends EventEmitter {
       s.res.end(JSON.stringify({ error }));
       return true;
     };
-    const kind = s.method === 'GET' && s.path === 'audio' ? 'audio' : s.method === 'POST' && (s.path === 'camera' || s.path === 'mic') ? s.path : null;
+    const kind = s.method === 'GET' && s.path === 'audio' ? 'audio' : s.method === 'POST' && (s.path === 'camera' || s.path === 'mic' || s.path === 'sound') ? s.path : null;
     if (!kind) return false;
-    if (kind === 'audio' && !this.#settings.get().remoteFrom.includes(s.peer)) return deny(403, 'remote-off');
-    const make = kind === 'audio' ? p.captureAudio : kind === 'camera' ? p.cameraSink : p.micSink;
+    // this PC's sound, and sound played out of its speakers: only for devices allowed on the Remote page
+    if ((kind === 'audio' || kind === 'sound') && !this.#settings.get().remoteFrom.includes(s.peer)) return deny(403, 'remote-off');
+    const make = kind === 'audio' ? p.captureAudio : kind === 'camera' ? p.cameraSink : kind === 'mic' ? p.micSink : p.speakerSink;
     if (!make) return deny(501, 'unsupported');
     let pipe: MediaPipe;
     try {
@@ -1228,7 +1231,8 @@ export class AppController extends EventEmitter {
         s.res.end('{"ok":true}');
       });
       if (this.#settings.get().notifications) {
-        p.notify(kind === 'camera' ? 'Phone camera connected' : 'Phone microphone connected', `${alias ?? 'Your phone'}: pick "${kind === 'camera' ? 'Phone camera' : 'Phone microphone'} (MeshDrop)" in your video or call app.`);
+        if (kind === 'sound') p.notify('Playing sound from another device', `${alias ?? 'A device'} plays its sound on this PC. Stop it on the Remote page.`);
+        else p.notify(kind === 'camera' ? 'Phone camera connected' : 'Phone microphone connected', `${alias ?? 'Your phone'}: pick "${kind === 'camera' ? 'Phone camera' : 'Phone microphone'} (MeshDrop)" in your video or call app.`);
       }
     }
     this.#changed();
@@ -1237,6 +1241,41 @@ export class AppController extends EventEmitter {
 
   async streamStop(id: string): Promise<void> {
     this.#streams.get(id)?.stop();
+  }
+
+  /**
+   * Sends this PC's sound to another device on the same Wi-Fi, where it plays (that device must allow
+   * this PC on its Remote page). Resolves once it plays, or rejects when the device refuses.
+   */
+  async streamStart(deviceId: string, kind: 'sound'): Promise<void> {
+    if (kind !== 'sound') throw new Error('unknown stream');
+    const p = this.#platform;
+    if (!p.captureAudio) throw new Error("This PC's sound cannot be captured here.");
+    if ([...this.#streams.values()].some((s) => s.kind === 'sound-out' && s.peer === deviceId)) return;
+    const alias = this.#e.devices().find((d) => d.deviceId === deviceId)?.alias;
+    const pipe = p.captureAudio();
+    const abort = new AbortController();
+    const id = randomUUID();
+    let ended = false;
+    const end = () => {
+      if (ended) return;
+      ended = true;
+      pipe.stop();
+      abort.abort();
+      this.#streams.delete(id);
+      this.#changed();
+    };
+    this.#streams.set(id, { kind: 'sound-out', peer: deviceId, ...(alias ? { alias } : {}), stop: end });
+    pipe.onExit(end);
+    this.#changed();
+    const done = this.#e
+      .streamPost(deviceId, 'sound', 'audio/L16; rate=48000; channels=2', pipe.out as import('node:stream').Readable, abort.signal)
+      .then((status) => (status === 403 ? `${alias ?? 'That device'} does not let this PC play there: on it, tick this PC on the Remote page.` : status === 501 ? `${alias ?? 'That device'} cannot play sound.` : null))
+      .catch((e: unknown) => (ended ? null : e instanceof Error ? e.message : String(e)))
+      .finally(end);
+    // a refusal comes back at once; a stream that plays only ends when stopped
+    const early = await Promise.race([done, new Promise<'playing'>((r) => setTimeout(() => r('playing'), 1500))]);
+    if (early !== 'playing' && early) throw new Error(early);
   }
 
   #ring(from?: string): void {

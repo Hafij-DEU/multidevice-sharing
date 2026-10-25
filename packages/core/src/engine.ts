@@ -17,6 +17,7 @@
 // Events: everything is emitted on the single 'event' channel as an EngineEvent.
 import { X509Certificate, createPublicKey, randomBytes, type KeyObject } from 'node:crypto';
 import { EventEmitter } from 'node:events';
+import type { Readable } from 'node:stream';
 import { closeSync, createReadStream, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, statSync, unlinkSync, watch, writeSync, type FSWatcher } from 'node:fs';
 import { copyFile, lstat, open, readdir } from 'node:fs/promises';
 import type { Server as HttpServer } from 'node:http';
@@ -1441,6 +1442,22 @@ export class Engine extends EventEmitter {
 
   setStreamHandler(h: MeshServerOptions['stream'] | null): void {
     this.streamHandler = h;
+  }
+
+  /**
+   * Pushes a live body (raw sound) to a paired device's stream handler: POST /mesh/v1/stream/<path>,
+   * on the LAN only (a live stream through the hub would be too slow). Resolves with the answer's
+   * status once the body ends, or at once when the device refuses (403 when it does not allow us).
+   */
+  async streamPost(deviceId: string, path: string, contentType: string, body: Readable, signal?: AbortSignal): Promise<number> {
+    const id = this.resolveDeviceId(deviceId);
+    const t = this.trustSource.get(id);
+    if (!t) throw new Error('That device is not paired.');
+    const route = await this.route(id);
+    if (route.kind !== 'lan') throw new Error('Live sound works when both devices are on the same Wi-Fi.');
+    const tr = this.transportFor(route, { deviceId: id, publicKey: createPublicKey(t.publicKeyPem) }, 0);
+    const r = await tr.request('POST', `/mesh/v1/stream/${path}`, body, { 'content-type': contentType }, { timeoutMs: 30_000, ...(signal ? { signal } : {}) });
+    return r.status;
   }
 
   /**

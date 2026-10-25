@@ -640,6 +640,11 @@ public class AndroidPlatform implements Platform {
         cast().mic(out, stop);
     }
 
+    @Override
+    public void captureSound(java.io.OutputStream out, java.util.function.BooleanSupplier stop) throws java.io.IOException {
+        cast().sound(out, stop);
+    }
+
     // ---- M11 ----
 
     @Override

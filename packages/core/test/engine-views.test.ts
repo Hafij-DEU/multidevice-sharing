@@ -352,6 +352,37 @@ describe('live streams (M10b)', () => {
     expect((await get(A.e, '/mesh/v1/stream/nope')).status).toBe(404);
     expect((await get(C.e, '/mesh/v1/stream/echo')).status).toBe(403);
   });
+
+  it('streamPost pushes a live body to a paired device until it ends; a refusal ends it at once', async () => {
+    const A = await make({ alias: 'ay' });
+    await A.e.start();
+    const B = await make({ alias: 'bee' });
+    await B.e.start();
+    await A.e.pairManual('127.0.0.1', B.e.port, 'bee');
+    await B.e.pairManual('127.0.0.1', A.e.port, 'ay');
+    const got: Buffer[] = [];
+    B.e.setStreamHandler((s) => {
+      if (s.method !== 'POST') return false;
+      if (s.path === 'no') {
+        s.res.writeHead(403, { 'content-type': 'application/json' });
+        s.res.end('{"error":"remote-off"}');
+        return true;
+      }
+      s.req.on('data', (d: Buffer) => got.push(d));
+      s.req.on('end', () => s.res.end('{"ok":true}'));
+      return true;
+    });
+    const { PassThrough } = await import('node:stream');
+    const body = new PassThrough();
+    const sent = A.e.streamPost(B.e.identity.deviceId, 'sound', 'audio/L16; rate=48000; channels=2', body);
+    body.write(Buffer.from('pcm-1'));
+    await new Promise((r) => setTimeout(r, 200));
+    body.end(Buffer.from('pcm-2'));
+    expect(await sent).toBe(200);
+    expect(Buffer.concat(got).toString()).toBe('pcm-1pcm-2');
+    const never = new PassThrough();
+    expect(await A.e.streamPost(B.e.identity.deviceId, 'no', 'audio/L16', never)).toBe(403);
+  });
 });
 
 describe('burn and print flags (M11)', () => {

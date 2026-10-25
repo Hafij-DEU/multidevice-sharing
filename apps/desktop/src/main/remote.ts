@@ -199,11 +199,14 @@ function mediaPipe(cmd: string, args: string[], dir: 'in' | 'out'): MediaPipe {
 }
 
 /** Media for M10b: this PC's sound out, a phone's camera and microphone in (PipeWire, no root). */
-export function mediaPlatform(): Required<Pick<Platform, 'captureAudio' | 'cameraSink' | 'micSink'>> {
+export function mediaPlatform(): Required<Pick<Platform, 'captureAudio' | 'cameraSink' | 'micSink' | 'speakerSink'>> {
   const label = (s: string) => s.replace(/[^\p{L}\p{N} ._-]/gu, '').slice(0, 40) || 'Phone';
   return {
     // what the speakers play (the default sink's monitor)
     captureAudio: () => mediaPipe('pw-record', ['--raw', '-P', '{ stream.capture.sink=true node.name=meshdrop-cast }', '--format', 's16', '--rate', '48000', '--channels', '2', '-'], 'out'),
+    // another device's sound (s16le 48 kHz stereo) -> this PC's speakers
+    speakerSink: (name) =>
+      mediaPipe('pw-cat', ['--playback', '--raw', '--format', 's16', '--rate', '48000', '--channels', '2', '-P', `{ node.name=meshdrop-sound media.name="Sound from ${label(name)}" }`, '-'], 'in'),
     // back-to-back JPEG frames -> a PipeWire video source that browsers and call apps can pick
     cameraSink: (name) =>
       mediaPipe('gst-launch-1.0', [

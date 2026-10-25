@@ -348,7 +348,7 @@ public final class AppController {
         loadScheduled();
         m.put("scheduled", scheduledView());
         Map<String, Object> casting = new LinkedHashMap<>();
-        for (Map.Entry<String, String> c : castTo.entrySet()) casting.put(c.getKey().equals("audio") ? "audioFrom" : c.getKey().equals("camera") ? "cameraTo" : "micTo", c.getValue());
+        for (Map.Entry<String, String> c : castTo.entrySet()) casting.put(c.getKey().equals("audio") ? "audioFrom" : c.getKey().equals("camera") ? "cameraTo" : c.getKey().equals("sound") ? "soundTo" : "micTo", c.getValue());
         m.put("casting", casting);
         m.put("notifyAccess", platform.notificationAccess());
         m.put("deviceStatus", new LinkedHashMap<>(deviceStatus));
@@ -1284,13 +1284,13 @@ public final class AppController {
     private final Map<String, io.github.hafijbge.meshdrop.engine.Engine.Stream> casts = new java.util.concurrent.ConcurrentHashMap<>();
 
     private void streamStart(String deviceId, String kind) throws IOException {
-        if (!kind.equals("audio") && !kind.equals("camera") && !kind.equals("mic")) throw new IllegalArgumentException("unknown stream");
+        if (!kind.equals("audio") && !kind.equals("camera") && !kind.equals("mic") && !kind.equals("sound")) throw new IllegalArgumentException("unknown stream");
         streamStop(kind);
         platform.mediaStarting(kind);
         io.github.hafijbge.meshdrop.engine.Engine.Stream s;
         try {
             s = kind.equals("audio") ? e().streamFrom(deviceId, "audio")
-                    : e().streamTo(deviceId, kind, kind.equals("camera") ? "multipart/x-mixed-replace" : "audio/L16; rate=48000; channels=1");
+                    : e().streamTo(deviceId, kind, kind.equals("camera") ? "multipart/x-mixed-replace" : kind.equals("sound") ? "audio/L16; rate=48000; channels=2" : "audio/L16; rate=48000; channels=1");
         } catch (IOException x) {
             platform.mediaStopped(kind);
             throw x;
@@ -1303,6 +1303,7 @@ public final class AppController {
             try {
                 if (kind.equals("audio")) platform.playAudio(s.in, stop);
                 else if (kind.equals("camera")) platform.captureCamera(s.out, stop);
+                else if (kind.equals("sound")) platform.captureSound(s.out, stop);
                 else platform.captureMic(s.out, stop);
             } catch (IOException | RuntimeException ignored) {
                 // the PC went away or the stream was stopped

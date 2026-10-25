@@ -250,6 +250,20 @@ function PcActions({ target, run }: { target: string; run: Run }) {
   );
 }
 
+/** Sends this device's sound to another one, where it plays (a toggle). */
+function SoundTo({ state, run, to, label }: { state: AppState; run: Run; to: string; label: string }) {
+  const out = (state.streams ?? []).find((s) => s.kind === 'sound-out' && s.peer === to);
+  const on = state.platform === 'android' ? state.casting?.soundTo === to : !!out;
+  return (
+    <button
+      aria-pressed={on}
+      onClick={() => void run(() => (on ? window.meshdrop.streamStop(out?.id ?? 'sound') : window.meshdrop.streamStart!(to, 'sound')), on ? 'Sound stopped' : 'Sound playing there')}
+    >
+      {on ? 'Stop sound there' : label}
+    </button>
+  );
+}
+
 const PANELS = ['Touchpad', 'Keyboard', 'Media', 'Presenter', 'PC'] as const;
 
 /** Control another device (a PC) from this one: touchpad, keyboard, media keys, slides, PC actions. */
@@ -284,6 +298,7 @@ function Control({ state, run, targets }: { state: AppState; run: Run; targets: 
             </option>
           ))}
         </select>
+        {target && state.platform !== 'android' && <SoundTo state={state} run={run} to={target} label="Play this PC's sound there" />}
       </div>
       {away && <p className="muted">This PC is away right now: clicks and keys reach it again once it is back.</p>}
       <div className="segmented" role="tablist">
@@ -348,7 +363,7 @@ export function Remote({ state, run }: { state: AppState; run: Run }) {
             {(state.streams ?? []).map((st) => (
               <li key={st.id} className="row space">
                 <span>
-                  {st.kind === 'audio' ? 'This PC\'s sound plays on ' : st.kind === 'camera' ? 'Camera of ' : 'Microphone of '}
+                  {st.kind === 'audio' || st.kind === 'sound-out' ? "This PC's sound plays on " : st.kind === 'sound' ? 'Playing the sound of ' : st.kind === 'camera' ? 'Camera of ' : 'Microphone of '}
                   <Peer text={st.alias ?? 'a device'} />
                   {st.kind === 'camera' && <span className="muted"> · pick "{st.alias} camera (MeshDrop)" in your video app</span>}
                   {st.kind === 'mic' && <span className="muted"> · pick "{st.alias} microphone (MeshDrop)" as input</span>}
@@ -488,7 +503,7 @@ function AndroidExtras({ state, run, trusted }: { state: AppState; run: Run; tru
         </button>
       )}
       <h2>Sound, camera and microphone</h2>
-      <p className="muted">On the same Wi-Fi. The PC's sound plays here only for devices ticked on that PC; your camera and microphone show up on the PC as a webcam and a microphone for video calls.</p>
+      <p className="muted">On the same Wi-Fi. Sound goes either way only with devices ticked on that PC ("Devices that may control this PC"); your camera and microphone show up on the PC as a webcam and a microphone for video calls.</p>
       {pcs.filter((d) => d.reach === 'lan').map((d) => {
         const c = state.casting ?? {};
         const on = (k: 'audio' | 'camera' | 'mic') => (k === 'audio' ? c.audioFrom : k === 'camera' ? c.cameraTo : c.micTo) === d.deviceId;
@@ -499,6 +514,7 @@ function AndroidExtras({ state, run, trusted }: { state: AppState; run: Run; tru
             <button aria-pressed={on('audio')} onClick={() => toggle('audio')}>{on('audio') ? 'Stop PC sound' : 'Play PC sound here'}</button>
             <button aria-pressed={on('camera')} onClick={() => toggle('camera')}>{on('camera') ? 'Stop webcam' : 'Use as webcam'}</button>
             <button aria-pressed={on('mic')} onClick={() => toggle('mic')}>{on('mic') ? 'Stop microphone' : 'Use as microphone'}</button>
+            <SoundTo state={state} run={run} to={d.deviceId} label="Play phone sound on PC" />
           </div>
         );
       })}

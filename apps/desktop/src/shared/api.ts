@@ -256,8 +256,8 @@ export interface AppState {
   inputError?: string;
   /** Android: notification access is granted (needed to forward notifications). */
   notifyAccess?: boolean;
-  /** M10b: live streams (PC sound to a phone; a phone's camera or microphone used here). */
-  streams?: { id: string; kind: 'audio' | 'camera' | 'mic'; peer: string; alias?: string }[];
+  /** M10b: live streams (PC sound to a phone; a phone's camera or microphone used here; sound between devices). */
+  streams?: { id: string; kind: StreamKind; peer: string; alias?: string }[];
   /** M13 handoff: the PC's browser extension is connected, and the page it last saw. */
   handoff?: { extension: boolean; page?: { title: string; url: string } };
   /** M12 watch parties this device hosts (or, on a phone, made on a PC). */
@@ -267,8 +267,15 @@ export interface AppState {
   /** M11: sends waiting for their time. */
   scheduled?: ScheduledView[];
   /** M10b Android: what this phone streams now. */
-  casting?: { audioFrom?: string; cameraTo?: string; micTo?: string };
+  casting?: { audioFrom?: string; cameraTo?: string; micTo?: string; soundTo?: string };
 }
+
+/**
+ * A live stream on this PC: 'audio' this PC's sound played on a phone (the phone pulls it), 'camera' /
+ * 'mic' a phone's camera or microphone used here, 'sound' another device's sound out of these
+ * speakers, 'sound-out' this PC's sound sent to another device.
+ */
+export type StreamKind = 'audio' | 'camera' | 'mic' | 'sound' | 'sound-out';
 
 /** A notification forwarded from a phone (M10). */
 export interface PhoneNote {
@@ -310,8 +317,8 @@ export interface DesktopApi {
   ringStop(): Promise<void>;
   /** M10b: ends a live stream (desktop: by id from state.streams; Android: 'audio' | 'camera' | 'mic'). */
   streamStop(id: string): Promise<void>;
-  /** M10b Android: plays a PC's sound here / sends this phone's camera or microphone to a PC. */
-  streamStart?(deviceId: string, kind: 'audio' | 'camera' | 'mic'): Promise<void>;
+  /** M10b: 'audio' plays a PC's sound here (Android); 'camera' / 'mic' send this phone's to a PC; 'sound' sends this device's sound to another device. */
+  streamStart?(deviceId: string, kind: 'audio' | 'camera' | 'mic' | 'sound'): Promise<void>;
   /** M10: forgets one forwarded phone notification (or all with no key). */
   noteDismiss(key?: string): Promise<void>;
   pickFiles(): Promise<string[]>;

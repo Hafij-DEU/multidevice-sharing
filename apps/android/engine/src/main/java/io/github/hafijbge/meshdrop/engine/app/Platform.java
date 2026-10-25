@@ -117,6 +117,11 @@ public interface Platform {
         throw new java.io.IOException("Not available on this device.");
     }
 
+    /** Writes what this device plays (s16le 48 kHz stereo) to `out` until `stop` says so. */
+    default void captureSound(java.io.OutputStream out, java.util.function.BooleanSupplier stop) throws java.io.IOException {
+        throw new java.io.IOException("Not available on this device.");
+    }
+
     // ---- M11 ----
 
     /** The name a picked file shows (a content:// ref has its own name). */

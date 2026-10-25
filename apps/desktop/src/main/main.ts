@@ -392,6 +392,10 @@ function wireIpc(): void {
   handle('watchPlayLocal', (_e, c, p) => ctl().watchPlayLocal(str(c, 6), str(p)));
   handle('setupPhones', () => setupPhones());
   handle('streamStop', (_e, id) => ctl().streamStop(str(id, 64)));
+  handle('streamStart', (_e, id, kind) => {
+    if (kind !== 'sound') throw new ArgError('unknown stream');
+    return ctl().streamStart(str(id, 64), 'sound');
+  });
   handle('noteDismiss', (_e, k) => ctl().noteDismiss(k === undefined ? undefined : str(k, 300)));
   handle('addByAddress', (_e, h, p, a, id) => ctl().addByAddress(str(h, 255), int(p), str(a, 64), id === undefined ? undefined : str(id, 128)));
   handle('scanSubnet', (_e) => ctl().scanSubnet());

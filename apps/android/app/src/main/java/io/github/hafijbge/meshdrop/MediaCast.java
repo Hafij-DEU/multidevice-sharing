@@ -13,13 +13,17 @@ import android.hardware.camera2.CameraManager;
 import android.hardware.camera2.CaptureRequest;
 import android.hardware.camera2.params.OutputConfiguration;
 import android.hardware.camera2.params.SessionConfiguration;
+import android.content.Intent;
 import android.media.AudioAttributes;
 import android.media.AudioFormat;
+import android.media.AudioPlaybackCaptureConfiguration;
 import android.media.AudioRecord;
 import android.media.AudioTrack;
 import android.media.Image;
 import android.media.ImageReader;
 import android.media.MediaRecorder;
+import android.media.projection.MediaProjection;
+import android.media.projection.MediaProjectionManager;
 import android.os.Handler;
 import android.os.HandlerThread;
 import java.io.IOException;
@@ -33,7 +37,8 @@ import java.util.function.BooleanSupplier;
 
 /**
  * M10b on the phone: plays a PC's sound (AudioTrack), and streams the front camera as JPEG frames and
- * the microphone as PCM to a PC, which shows them as a webcam and a microphone for video calls.
+ * the microphone as PCM to a PC, which shows them as a webcam and a microphone for video calls; and
+ * what the phone plays (Android 10 playback capture, after the system's consent) to a PC's speakers.
  */
 final class MediaCast {
     static final int RATE = 48_000;
@@ -43,6 +48,14 @@ final class MediaCast {
     private final Context ctx;
     /** Kinds running now, for the service's foreground types. */
     private final java.util.Set<String> running = java.util.concurrent.ConcurrentHashMap.newKeySet();
+    /** The system's answer to "capture what plays" (SoundConsentActivity): {resultCode, data}. */
+    private static final ArrayBlockingQueue<Object[]> ANSWERS = new ArrayBlockingQueue<>(1);
+    private volatile MediaProjection projection;
+
+    static void consent(int result, Intent data) {
+        ANSWERS.clear();
+        ANSWERS.offer(new Object[] {result, data});
+    }
 
     MediaCast(Context ctx) {
         this.ctx = ctx;
@@ -57,21 +70,62 @@ final class MediaCast {
 
     void starting(String kind) throws IOException {
         if (kind.equals("camera")) need(Manifest.permission.CAMERA, "camera");
-        if (kind.equals("mic")) need(Manifest.permission.RECORD_AUDIO, "microphone");
-        if (!kind.equals("audio") && !MainActivity.resumed) throw new IOException("Open MeshDrop on the phone to start the camera or microphone.");
+        if (kind.equals("mic") || kind.equals("sound")) need(Manifest.permission.RECORD_AUDIO, kind.equals("mic") ? "microphone" : "phone's sound (Android files it under the microphone)");
+        if (!kind.equals("audio") && !MainActivity.resumed) throw new IOException("Open MeshDrop on the phone to start the camera, microphone or sound.");
+        Object[] answer = kind.equals("sound") ? askToCapture() : null;
         running.add(kind);
         applyTypes();
+        if (answer != null) {
+            // Android 14+: the service must run as mediaProjection (applyTypes) before the projection is made
+            try {
+                MediaProjection p = ctx.getSystemService(MediaProjectionManager.class).getMediaProjection((Integer) answer[0], (Intent) answer[1]);
+                if (p == null) throw new IOException("Android did not allow capturing the sound.");
+                p.registerCallback(new MediaProjection.Callback() {
+                    @Override
+                    public void onStop() {
+                        projection = null;
+                    }
+                }, new Handler(ctx.getMainLooper()));
+                projection = p;
+            } catch (SecurityException | IllegalStateException e) {
+                stopped(kind);
+                throw new IOException("Android did not allow capturing the sound.");
+            }
+        }
+    }
+
+    /** Shows the system's "start capturing?" dialog and waits for the answer (a minute at most). */
+    private Object[] askToCapture() throws IOException {
+        ANSWERS.clear();
+        Activity a = MainActivity.current;
+        Intent i = new Intent(ctx, SoundConsentActivity.class);
+        if (a != null) a.runOnUiThread(() -> a.startActivity(i));
+        else ctx.startActivity(i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+        try {
+            Object[] r = ANSWERS.poll(60, TimeUnit.SECONDS);
+            if (r == null || (Integer) r[0] != Activity.RESULT_OK || r[1] == null) throw new IOException("Sharing the phone's sound was not allowed.");
+            return r;
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IOException("Stopped.");
+        }
     }
 
     void stopped(String kind) {
         running.remove(kind);
+        if (kind.equals("sound")) {
+            MediaProjection p = projection;
+            projection = null;
+            if (p != null) p.stop();
+        }
         applyTypes();
     }
 
     private void applyTypes() {
         int t = 0;
         if (running.contains("camera")) t |= ServiceInfo.FOREGROUND_SERVICE_TYPE_CAMERA;
-        if (running.contains("mic")) t |= ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE;
+        if (running.contains("mic") || running.contains("sound")) t |= ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE;
+        if (running.contains("sound")) t |= ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION;
         try {
             MeshService.setMediaTypes(t);
         } catch (RuntimeException ignored) {
@@ -120,6 +174,37 @@ final class MediaCast {
             while (!stop.getAsBoolean()) {
                 int n = r.read(buf, 0, buf.length);
                 if (n < 0) throw new IOException("microphone error " + n);
+                out.write(buf, 0, n);
+            }
+        } finally {
+            r.stop();
+            r.release();
+        }
+    }
+
+    /** What the phone plays (music, videos, games; apps that forbid capture stay silent) as s16le 48 kHz stereo. */
+    @android.annotation.SuppressLint("MissingPermission") // checked in starting()
+    void sound(OutputStream out, BooleanSupplier stop) throws IOException {
+        MediaProjection p = projection;
+        if (p == null) throw new IOException("Sharing the phone's sound was not allowed.");
+        AudioPlaybackCaptureConfiguration cfg = new AudioPlaybackCaptureConfiguration.Builder(p)
+                .addMatchingUsage(AudioAttributes.USAGE_MEDIA)
+                .addMatchingUsage(AudioAttributes.USAGE_GAME)
+                .addMatchingUsage(AudioAttributes.USAGE_UNKNOWN)
+                .build();
+        AudioFormat fmt = new AudioFormat.Builder().setSampleRate(RATE).setEncoding(AudioFormat.ENCODING_PCM_16BIT).setChannelMask(AudioFormat.CHANNEL_IN_STEREO).build();
+        int min = AudioRecord.getMinBufferSize(RATE, AudioFormat.CHANNEL_IN_STEREO, AudioFormat.ENCODING_PCM_16BIT);
+        AudioRecord r = new AudioRecord.Builder().setAudioPlaybackCaptureConfig(cfg).setAudioFormat(fmt).setBufferSizeInBytes(Math.max(min, RATE * 4 / 5)).build();
+        if (r.getState() != AudioRecord.STATE_INITIALIZED) {
+            r.release();
+            throw new IOException("The phone's sound cannot be captured now.");
+        }
+        try {
+            r.startRecording();
+            byte[] buf = new byte[RATE / 50 * 4]; // 20 ms of stereo
+            while (!stop.getAsBoolean() && projection != null) {
+                int n = r.read(buf, 0, buf.length);
+                if (n < 0) throw new IOException("sound capture error " + n);
                 out.write(buf, 0, n);
             }
         } finally {

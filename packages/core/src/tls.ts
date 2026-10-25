@@ -239,9 +239,12 @@ export function pinnedRequest(
 
     if (body === undefined) req.end();
     else if (Buffer.isBuffer(body)) req.end(body);
-    else
+    else {
+      // a live stream may have no bytes yet: send the headers now, so the peer can answer (or refuse) at once
+      req.flushHeaders();
       pipeline(body, req, (err) => {
         if (err) finish(err);
       });
+    }
   });
 }

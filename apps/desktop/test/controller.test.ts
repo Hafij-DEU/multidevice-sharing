@@ -46,6 +46,7 @@ interface FakePlatform extends Platform {
   rings: boolean[];
   urls: string[];
   camera: Buffer[];
+  speaker: Buffer[];
   printed: string[];
 }
 function fakePlatform(): FakePlatform {
@@ -70,12 +71,18 @@ function fakePlatform(): FakePlatform {
     rings: [],
     urls: [],
     camera: [],
+    speaker: [],
     printed: [],
     print: async (f) => void p.printed.push(f),
     captureAudio: (): MediaPipe => {
       const out = new PassThrough();
       out.write(Buffer.alloc(1920, 7));
       return { out, stop: () => out.end(), onExit: () => {} };
+    },
+    speakerSink: (): MediaPipe => {
+      const inp = new PassThrough();
+      inp.on('data', (c: Buffer) => p.speaker.push(c));
+      return { in: inp, stop: () => inp.destroy(), onExit: () => {} };
     },
     cameraSink: (): MediaPipe => {
       const inp = new PassThrough();
@@ -563,6 +570,24 @@ describe('AppController internet access', () => {
     const r = await lan().request('POST', '/mesh/v1/stream/camera', jpeg, { 'content-type': 'image/jpeg' }, { timeoutMs: 5000 });
     expect(r.status).toBe(200);
     expect(Buffer.concat(B.p.camera)).toEqual(jpeg);
+  });
+
+  it("one PC's sound plays on another PC that allows it; refused otherwise; Stop ends it on both", async () => {
+    const A = await make('ay');
+    const B = await make('bee');
+    await pair(A.c, B.c);
+    const aId = A.c.state().self.deviceId;
+    const bId = B.c.state().self.deviceId;
+    await expect(A.c.streamStart(bId, 'sound')).rejects.toThrow(/tick this PC/);
+    expect(A.c.state().streams).toEqual([]);
+    await B.c.setSettings({ remoteFrom: [aId] });
+    await A.c.streamStart(bId, 'sound');
+    expect(A.c.state().streams).toEqual([expect.objectContaining({ kind: 'sound-out', peer: bId })]);
+    await until(() => Buffer.concat(B.p.speaker).length >= 1920);
+    expect(B.c.state().streams).toEqual([expect.objectContaining({ kind: 'sound', peer: aId })]);
+    await A.c.streamStop(A.c.state().streams![0]!.id);
+    expect(A.c.state().streams).toEqual([]);
+    await until(() => (B.c.state().streams ?? []).length === 0);
   });
 
   it('M11: burn after reading, read receipts, print, smart inbox and send later', async () => {
