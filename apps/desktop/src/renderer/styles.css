@@ -113,8 +113,8 @@ button.danger { background: var(--bad); color: #fff; border-color: var(--bad); }
 .modal { background: var(--panel); border-radius: var(--radius); padding: 18px 20px; max-width: 440px; box-shadow: 0 8px 30px rgb(0 0 0 / 0.3); }
 .modal h2 { margin-top: 0; }
 .pair-code { font: 700 2rem/1.2 ui-monospace, monospace; letter-spacing: 0.08em; text-align: center; margin: 8px 0; }
-.settings .field { display: flex; flex-direction: column; gap: 4px; margin: 10px 0; max-width: 560px; }
-.settings .field > span:first-child { font-weight: 600; }
+.settings .field, .reach .field { display: flex; flex-direction: column; gap: 4px; margin: 10px 0; max-width: 560px; }
+.settings .field > span:first-child, .reach .field > span:first-child { font-weight: 600; }
 .picker { padding: 14px 16px; }
 .picker h1 { font-size: 17px; }
 .picker .list > li { padding: 6px 10px; }
@@ -285,3 +285,8 @@ code { font-size: 12.5px; padding: 1px 6px; border-radius: 6px; background: colo
 .watch-input { font: 600 20px ui-monospace, monospace; letter-spacing: 0.25em; width: 170px; text-transform: uppercase; }
 
 .steps li { margin: 8px 0; }
+.steps li.done > span { color: var(--muted); text-decoration: line-through; }
+.steps li.done::marker { content: '✓  '; color: var(--ok); font-weight: 700; }
+.steps .step-body { margin-top: 4px; }
+.steps .step-body .row { margin: 2px 0; flex-wrap: nowrap; }
+.steps .step-body code { overflow-wrap: anywhere; }

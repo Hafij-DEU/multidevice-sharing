@@ -20,6 +20,70 @@ function Linked({ text }: { text: string }) {
   );
 }
 
+/** Tailscale Funnel, step by step; finished steps tick themselves off from what MeshDrop sees. */
+function TailscaleSetup({ reach, run }: { reach: ReachView; run: Run }) {
+  const applied = reach.mode === 'tailscale';
+  // how far along: installed (1), signed in (2), MeshDrop may drive it (3), all on (6)
+  const done = !applied
+    ? 0
+    : reach.state === 'on'
+      ? 6
+      : reach.state === 'missing'
+        ? 0
+        : reach.state === 'logged-out'
+          ? 1
+          : /operator/.test(reach.fix ?? '')
+            ? 2
+            : reach.state === 'error'
+              ? 3
+              : 0;
+  const approve = /https:\/\/login\.tailscale\.com\/f\/\S+/.exec(reach.fix ?? '')?.[0];
+  const cmd = (c: string) => (
+    <span className="row">
+      <code>{c}</code>
+      <button onClick={() => void run(() => navigator.clipboard.writeText(c), 'Copied: paste it in a terminal')}>Copy</button>
+    </span>
+  );
+  const steps: [string, React.ReactNode][] = [
+    ['Install Tailscale (free) in a terminal', cmd('curl -fsSL https://tailscale.com/install.sh | sh')],
+    ['Sign in: open the link it prints', cmd('sudo tailscale up')],
+    ['Let MeshDrop turn the funnel on and off', cmd('sudo tailscale set --operator=$USER')],
+    [
+      'Turn on HTTPS certificates',
+      <>
+        <a href="https://login.tailscale.com/admin/dns" target="_blank" rel="noreferrer">Tailscale admin → DNS</a> → HTTPS Certificates → <b>Enable HTTPS</b>
+      </>,
+    ],
+    [
+      'Allow Funnel for this PC',
+      approve ? (
+        <>
+          <a href={approve} target="_blank" rel="noreferrer">Open the approval page</a> → <b>Enable</b>
+        </>
+      ) : (
+        <>
+          Press Apply below: if Funnel is not allowed yet, the approval link shows up here. (Or in{' '}
+          <a href="https://login.tailscale.com/admin/acls" target="_blank" rel="noreferrer">Access controls</a>, add the node attribute <code>funnel</code>.)
+        </>
+      ),
+    ],
+    ['Press Apply. Then open MeshDrop once on each phone on the same Wi-Fi, so it learns the new address.', null],
+  ];
+  return (
+    <div className="setup">
+      <p className="muted">Reach this PC from anywhere through Tailscale Funnel: free, no domain, works behind CGNAT. Once, on this PC:</p>
+      <ol className="steps">
+        {steps.map(([title, body], i) => (
+          <li key={title} className={i < done ? 'done' : ''}>
+            <span>{title}</span>
+            {body && <div className="step-body">{body}</div>}
+          </li>
+        ))}
+      </ol>
+    </div>
+  );
+}
+
 const MODES: [ReachMode, string][] = [
   ['off', 'Off (this network only)'],
   ['tailscale', 'Tailscale Funnel (free account, no domain needed)'],
@@ -74,7 +138,7 @@ export function InternetAccess({ reach, run }: { reach: ReachView; run: Run }) {
           ))}
         </select>
       </label>
-      {mode === 'tailscale' && <p className="muted">Needs Tailscale installed and signed in on this PC, with Funnel allowed for it. MeshDrop turns the funnel on and off.</p>}
+      {mode === 'tailscale' && reach.state !== 'on' && <TailscaleSetup reach={reach} run={run} />}
       {mode === 'cloudflare' && (
         <label className="field">
           <span>Hostname on your Cloudflare domain</span>
