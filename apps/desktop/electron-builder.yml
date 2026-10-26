@@ -3,7 +3,7 @@
 # the repository).
 appId: io.github.hafijbge.meshdrop
 productName: MeshDrop
-copyright: Copyright © 2026 Hafij-BGE
+copyright: Copyright © 2026 Md. Hafijur Rahman
 directories:
   buildResources: build
 files:
@@ -17,6 +17,12 @@ extraResources:
     to: cli.cjs
   - from: ../browser-extension
     to: browser-extension
+  - from: ../../LICENSE
+    to: LICENSE
+  - from: ../../PRIVACY.md
+    to: PRIVACY.md
+  - from: ../../THIRD_PARTY_NOTICES.md
+    to: THIRD_PARTY_NOTICES.md
 linux:
   target: deb
   extraResources:

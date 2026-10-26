@@ -89,6 +89,11 @@ function About() {
       <p>Developed by Md. Hafijur Rahman</p>
       <p>GitHub: {link('https://github.com/Hafij-DEU/multidevice-sharing')}</p>
       <p>License: GPL-3.0</p>
+      <p>Privacy: {link('https://github.com/Hafij-DEU/multidevice-sharing/blob/main/PRIVACY.md', 'PRIVACY.md')}</p>
+      <p className="muted">
+        Third-party software: Electron, React, ws, qrcode (MIT/ISC), ZXing and AndroidX (Apache-2.0). Speaks the LocalSend
+        protocol (MIT) to talk to LocalSend apps. {link('https://github.com/Hafij-DEU/multidevice-sharing/blob/main/THIRD_PARTY_NOTICES.md', 'Full notices')}
+      </p>
       <p className="muted">This app was generated with AI. Developer support may not be available.</p>
     </>
   );
