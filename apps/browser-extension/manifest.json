@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "MeshDrop Handoff",
-  "version": "0.6.3",
+  "version": "0.6.4",
   "description": "Continue the page you are on on your phone, at the same spot (scroll and video time), with MeshDrop.",
   "permissions": ["tabs", "storage", "alarms"],
   "host_permissions": ["<all_urls>"],

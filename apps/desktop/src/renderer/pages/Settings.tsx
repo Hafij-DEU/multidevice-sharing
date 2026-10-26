@@ -77,6 +77,23 @@ function KeepAlive({ state, run }: { state: AppState; run: Run }) {
   );
 }
 
+/** About: who made MeshDrop and where to find them. */
+function About() {
+  const link = (href: string, text = href) => (
+    <a href={href} target="_blank" rel="noreferrer">{text}</a>
+  );
+  return (
+    <>
+      <h2>About</h2>
+      <p><b>MeshDrop</b> {__APP_VERSION__}</p>
+      <p>Developed by Md. Hafijur Rahman</p>
+      <p>GitHub: {link('https://github.com/Hafij-DEU/multidevice-sharing')}</p>
+      <p>License: GPL-3.0</p>
+      <p className="muted">This app was generated with AI. Developer support may not be available.</p>
+    </>
+  );
+}
+
 export function Settings({ state, run }: { state: AppState; run: Run }) {
   const android = state.platform === 'android';
   const [draft, setDraft] = useState<S>(state.settings);
@@ -178,6 +195,8 @@ export function Settings({ state, run }: { state: AppState; run: Run }) {
 
         </>
       )}
+
+      <About />
 
       {confirm && (
         <div className="modal-backdrop">
