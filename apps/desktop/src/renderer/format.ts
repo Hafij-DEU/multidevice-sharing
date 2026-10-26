@@ -10,8 +10,9 @@ export function fmtBytes(n: number): string {
   return `${v.toFixed(v < 10 ? 1 : 0)} ${units[i]}`;
 }
 
+/** The last part of a path: /home/me/a.txt and C:\Users\me\a.txt both give a.txt. */
 export function baseName(p: string): string {
-  const parts = p.split('/');
+  const parts = p.split(/[/\\]/);
   return parts[parts.length - 1] || p;
 }
 

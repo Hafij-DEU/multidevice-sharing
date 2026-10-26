@@ -1,7 +1,7 @@
 {
   "name": "@meshdrop/desktop",
   "productName": "MeshDrop",
-  "version": "0.6.2",
+  "version": "0.6.3",
   "description": "MeshDrop desktop app: send files between your devices",
   "author": "Hafij-BGE <mdhafijur.rahman@ogr.deu.edu.tr>",
   "license": "GPL-3.0-only",
@@ -11,11 +11,12 @@
   "main": "dist/main/main.cjs",
   "desktopName": "meshdrop.desktop",
   "scripts": {
-    "build": "vite build -c vite.main.config.ts && vite build -c vite.renderer.config.ts && vite build -c vite.cli.config.ts && mkdir -p dist/icons && cp build/icon.png build/tray.png dist/icons/",
+    "build": "vite build -c vite.main.config.ts && vite build -c vite.renderer.config.ts && vite build -c vite.cli.config.ts && node scripts/copy-icons.mjs",
     "test": "vitest run",
     "e2e": "playwright test",
     "typecheck": "tsc -p . --noEmit",
-    "dist": "bash scripts/build-deb.sh"
+    "dist": "bash scripts/build-deb.sh",
+    "dist:win": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-win.ps1"
   },
   "devDependencies": {
     "@meshdrop/core": "workspace:*",

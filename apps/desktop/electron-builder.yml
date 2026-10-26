@@ -1,5 +1,6 @@
-# .deb for Ubuntu. Build with scripts/build-deb.sh (it runs the Vite builds first and keeps the
-# electron-builder output out of the repository).
+# .deb for Ubuntu and the Windows 11 installer (.exe). Build with scripts/build-deb.sh or
+# scripts/build-win.ps1 (they run the Vite builds first and keep electron-builder's output out of
+# the repository).
 appId: io.github.hafijbge.meshdrop
 productName: MeshDrop
 copyright: Copyright © 2026 Hafij-BGE
@@ -14,14 +15,15 @@ files:
 extraResources:
   - from: dist/cli/cli.cjs
     to: cli.cjs
-  - from: build/meshdrop
-    to: meshdrop
-  - from: build/meshdrop-input.py
-    to: meshdrop-input.py
   - from: ../browser-extension
     to: browser-extension
 linux:
   target: deb
+  extraResources:
+    - from: build/meshdrop
+      to: meshdrop
+    - from: build/meshdrop-input.py
+      to: meshdrop-input.py
   category: Network;FileTransfer
   executableName: meshdrop-desktop
   icon: build/icons
@@ -38,13 +40,33 @@ linux:
       StartupWMClass: meshdrop
       Keywords: share;send;transfer;files;clipboard;
 win:
-  target: nsis
+  target:
+    - target: nsis
+      arch: [x64]
   icon: build/icon.png
   executableName: MeshDrop
+  extraResources:
+    - from: build/meshdrop-input.ps1
+      to: meshdrop-input.ps1
+    - from: build/meshdrop-path.ps1
+      to: meshdrop-path.ps1
+  # the meshdrop command line, put on PATH by the installer (build/installer.nsh)
+  extraFiles:
+    - from: build/meshdrop.cmd
+      to: bin/meshdrop.cmd
+# Like the .deb: installed for every user of the PC (asks for administrator once), with Start menu and
+# desktop shortcuts, a firewall rule, the meshdrop command and Explorer's Send to → MeshDrop.
 nsis:
   oneClick: false
-  perMachine: false
+  perMachine: true
+  allowElevation: true
   allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: MeshDrop
+  runAfterFinish: true
+  deleteAppDataOnUninstall: false
+  include: build/installer.nsh
   artifactName: MeshDrop-Setup-${version}.exe
 deb:
   packageName: meshdrop

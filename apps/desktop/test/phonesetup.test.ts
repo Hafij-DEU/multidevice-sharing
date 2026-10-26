@@ -50,6 +50,6 @@ describe('Set up a phone (USB)', () => {
   });
 
   it('says how to install adb when it is missing', async () => {
-    await expect(setupPhones('/nonexistent/adb')).rejects.toThrow(/sudo apt install adb/);
+    await expect(setupPhones('/nonexistent/adb')).rejects.toThrow(process.platform === 'win32' ? /winget install Google\.PlatformTools/ : /sudo apt install adb/);
   });
 });

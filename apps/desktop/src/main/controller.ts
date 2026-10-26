@@ -7,7 +7,7 @@ import { mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync }
 import { lstat, readdir } from 'node:fs/promises';
 import { createServer } from 'node:net';
 import { homedir, networkInterfaces } from 'node:os';
-import { isAbsolute, join, relative, resolve } from 'node:path';
+import { basename, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import QRCode from 'qrcode';
 import { CHUNK_SIZE } from '@meshdrop/core/src/chunk.ts';
 import { Engine, liveListener, type EngineEvent, type EngineOptions, type SendItem } from '@meshdrop/core/src/engine.ts';
@@ -738,12 +738,12 @@ export class AppController extends EventEmitter {
       const moved: string[] = [];
       for (const f of ev.files) {
         try {
-          if (relative(inbox, f).includes('/')) {
+          if (relative(inbox, f).includes(sep)) {
             moved.push(f); // inside a received folder: the folder stays together
             continue;
           }
           const dir = await ensureDir(inbox, [inboxCategory(f)]);
-          moved.push(await land(f, dir, f.slice(f.lastIndexOf('/') + 1)));
+          moved.push(await land(f, dir, basename(f)));
         } catch {
           moved.push(f);
         }
@@ -817,7 +817,7 @@ export class AppController extends EventEmitter {
       if (opts.at > Date.now() + 366 * 86_400_000) throw new Error('Pick a time within a year.');
       this.#scheduled.push({
         id: randomUUID(), at: opts.at, targets: ids, aliases: ids.map((i) => this.#aliasOf(i)), items: items.map((i) => ({ ...i })),
-        names: items.map((i) => (i.kind === 'text' ? 'Text' : i.path!.slice(i.path!.lastIndexOf('/') + 1))),
+        names: items.map((i) => (i.kind === 'text' ? 'Text' : basename(i.path!))),
         ...(opts.burn ? { burn: true } : {}), ...(opts.print ? { print: true } : {}),
       });
       this.#scheduled.sort((a, b) => a.at - b.at);
@@ -1739,7 +1739,7 @@ export class AppController extends EventEmitter {
 
   async roomSave(id: string): Promise<string> {
     const p = await this.#e.roomSave(id);
-    if (this.#settings.get().notifications) this.#platform.notify('Saved from the room', p.slice(p.lastIndexOf('/') + 1), () => this.#platform.revealPath(p));
+    if (this.#settings.get().notifications) this.#platform.notify('Saved from the room', basename(p), () => this.#platform.revealPath(p));
     return p;
   }
 

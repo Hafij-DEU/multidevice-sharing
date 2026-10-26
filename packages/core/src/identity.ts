@@ -7,7 +7,7 @@ import {
   randomBytes,
   type KeyObject,
 } from 'node:crypto';
-import { chmod, mkdir, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, readFile, readdir, rename, rm, rmdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { configDir } from './paths.ts';
 import { buildSelfSignedCert } from './x509.ts';
@@ -111,7 +111,8 @@ export async function loadOrCreateIdentity(dir: string = configDir()): Promise<I
       await rename(tmpDir, idDir); // replaces an empty identity/ dir
     } catch (e) {
       const c = (e as NodeJS.ErrnoException).code;
-      if (c !== 'ENOTEMPTY' && c !== 'EEXIST') throw e;
+      // Windows will not rename a folder onto an existing one, even an empty one: EPERM there
+      if (c !== 'ENOTEMPTY' && c !== 'EEXIST' && !(c === 'EPERM' && process.platform === 'win32')) throw e;
       // Lost a race to another process: use its identity.
       if ((await readIfExists(keyPath)) || (await readIfExists(certPath))) return loadOrCreateIdentity(dir);
       // identity/ holds neither file. Leftover `*.tmp` files from a crashed first run (older
@@ -125,6 +126,7 @@ export async function loadOrCreateIdentity(dir: string = configDir()): Promise<I
         );
       }
       for (const n of names) await rm(join(idDir, n), { force: true });
+      await rmdir(idDir); // empty now (fails if not): gone, so Windows can rename onto it too
       await rename(tmpDir, idDir);
     }
   } finally {

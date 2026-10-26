@@ -1,6 +1,6 @@
 name: Release
 
-# Builds the Ubuntu .deb, the signed Android APK and (best effort) the Windows installer for a v* tag,
+# Builds the Ubuntu .deb, the signed Android APK and the Windows 11 installer (.exe) for a v* tag,
 # and attaches them to a DRAFT release: the owner reviews and publishes it.
 # APK signing needs these repository secrets (the owner adds them once):
 #   MESHDROP_KEYSTORE_B64 (base64 of the .jks), MESHDROP_KS_PASS, MESHDROP_KEY_ALIAS, MESHDROP_KEY_PASS
@@ -69,7 +69,6 @@ jobs:
 
   windows:
     runs-on: windows-latest
-    continue-on-error: true # not a priority target yet
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -78,15 +77,14 @@ jobs:
           node-version: 24
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - run: pnpm --filter @meshdrop/desktop build
-      - run: pnpm --filter @meshdrop/desktop exec electron-builder --win nsis --config electron-builder.yml --publish never
+      - run: pnpm --filter @meshdrop/desktop dist:win
       - uses: actions/upload-artifact@v4
         with:
           name: windows
-          path: apps/desktop/dist/*.exe
+          path: apps/desktop/dist-win/*.exe
 
   draft:
-    needs: [deb, apk]
+    needs: [deb, apk, windows]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-24.04
     steps:

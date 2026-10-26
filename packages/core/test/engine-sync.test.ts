@@ -33,7 +33,7 @@ async function mk(alias: string) {
   const events: EngineEvent[] = [];
   e.on('event', (x: EngineEvent) => events.push(x));
   await e.start();
-  const folder = join(home, 'Sync');
+  const folder = join(home, 'Synced'); // not 'Sync': on Windows and macOS that is the engine's own sync/ folder
   return { e, events, folder };
 }
 
@@ -45,7 +45,7 @@ function tree(root: string): Record<string, string> {
       if (ignored(n.name)) continue;
       const p = join(d, n.name);
       if (n.isDirectory()) walk(p);
-      else out[relative(root, p)] = readFileSync(p, 'utf8');
+      else out[relative(root, p).replace(/\\/g, '/')] = readFileSync(p, 'utf8'); // '/' keys on Windows too
     }
   };
   walk(root);

@@ -5,12 +5,15 @@ import { Peer } from '../components/Peer.tsx';
 import { fmtBytes } from '../format.ts';
 
 const SPEED = 1.6;
+/** This window runs on Windows (the PC app; the phone's WebView says Android). */
+const WINDOWS = /Windows NT/.test(navigator.userAgent);
 const TAP_MS = 220;
 const TAP_SLOP = 8;
 
 const ERRORS: Record<string, string> = {
   'remote-off': 'That PC does not allow this device yet: on the PC, open More → Remote and tick this device under "Devices that may control this PC".',
   'input-unavailable': 'The PC cannot take input right now.',
+  unsupported: 'That PC cannot do this yet: sound, camera and microphone need MeshDrop on Linux for now.',
 };
 
 /** What an app message answered, as an error to show (undefined: it worked). */
@@ -451,7 +454,7 @@ export function Remote({ state, run }: { state: AppState; run: Run }) {
       {!android && (
         <>
           <h2>Devices that may control this PC</h2>
-          <p className="muted">They can move the pointer, type, press media keys, lock, sleep or shut down this PC, and open apps. The first time, GNOME asks you to allow remote interaction.</p>
+          <p className="muted">They can move the pointer, type, press media keys, lock, sleep or shut down this PC, and open apps.{WINDOWS ? ' Windows does not ask first; windows of apps run as administrator ignore it.' : ' The first time, GNOME asks you to allow remote interaction.'}</p>
           {state.inputError && <p className="error-text">{state.inputError}</p>}
           <ul className="list">
             {trusted.map((d) => (

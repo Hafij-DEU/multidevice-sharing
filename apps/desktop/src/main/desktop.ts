@@ -2,7 +2,7 @@
 // shortcut for "send clipboard" and the Files (Nautilus) right-click script "Send with MeshDrop".
 import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { isAbsolute, join } from 'node:path';
 import { writeFileAtomic } from '@meshdrop/core/src/trust.ts';
 
 export const AUTOSTART_NAME = 'io.github.hafijbge.meshdrop.desktop';
@@ -101,8 +101,8 @@ export function installNautilusScript(execPath: Exec, dir = nautilusScriptsDir()
   return true;
 }
 
-/** The files after `--send` in a command line (absolute paths that exist). */
+/** The files after `--send` in a command line (absolute paths that exist; `C:\...` on Windows). */
 export function sendArgs(argv: string[]): string[] {
   const i = argv.indexOf('--send');
-  return i < 0 ? [] : argv.slice(i + 1).filter((p) => p.startsWith('/') && existsSync(p));
+  return i < 0 ? [] : argv.slice(i + 1).filter((p) => isAbsolute(p) && existsSync(p));
 }

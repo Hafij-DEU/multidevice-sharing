@@ -1,12 +1,12 @@
 // Electron entry: the main window, the clipboard picker and the tray over one app controller.
 // Security: isolated, sandboxed renderers that can only call the DesktopApi (every argument
 // type-checked here); no navigation, no new windows.
-import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeImage, Notification, shell, Tray, type IpcMainInvokeEvent } from 'electron';
+import { app, BrowserWindow, clipboard, dialog, globalShortcut, ipcMain, Menu, nativeImage, Notification, shell, Tray, type IpcMainInvokeEvent } from 'electron';
 import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { cpSync, existsSync, mkdirSync, statSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { isAbsolute, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
 import { configDir } from '@meshdrop/core/src/paths.ts';
@@ -15,7 +15,8 @@ import type { AppState, LinkCreateInput, ReachInput, ReceivedRecord, SendItemInp
 import { AppController, type Platform } from './controller.ts';
 import { autostartDir, gnomeShortcutCommands, installNautilusScript, parseStrList, READ_KEYBINDINGS, sendArgs, setAutostart, validBinding } from './desktop.ts';
 import { HistoryStore } from './history.ts';
-import { mediaPlatform, remotePlatform } from './remote.ts';
+import { Laser, mediaPlatform, remotePlatform } from './remote.ts';
+import { gtkToAccelerator, parseFileNameW, printWin, savedShortcut, saveShortcut, winRemotePlatform, writeClipboardFilesWin } from './windows.ts';
 import { setupPhones } from './phonesetup.ts';
 import { onReplaced } from './selfupdate.ts';
 import { startHandoffServer } from './handoff.ts';
@@ -23,6 +24,8 @@ import { SettingsStore, defaultSettings } from './settings.ts';
 
 const execFileP = promisify(execFile);
 const TEST = process.env.MESHDROP_TEST === '1';
+const WIN = process.platform === 'win32';
+const APP_ID = 'io.github.hafijbge.meshdrop';
 const HOME = process.env.MESHDROP_HOME ?? configDir();
 const ICONS = join(__dirname, '../icons');
 
@@ -167,6 +170,16 @@ const platform: Platform = {
   writeClipboard: (text) => clipboard.writeText(text),
   readClipboard: () => clipboard.readText(),
   readClipboardFiles: () => {
+    if (WIN) {
+      // Explorer's Copy: FileNameW names the first file (Electron cannot read the full CF_HDROP list)
+      return parseFileNameW(clipboard.readBuffer('FileNameW')).filter((p) => {
+        try {
+          return statSync(p).isFile();
+        } catch {
+          return false;
+        }
+      });
+    }
     // availableFormats() does not list these on Linux, but readBuffer finds them (empty when absent).
     for (const f of ['x-special/gnome-copied-files', 'text/uri-list']) {
       const out: string[] = [];
@@ -197,6 +210,7 @@ const platform: Platform = {
         return;
       }
     }
+    if (WIN) return writeClipboardFilesWin(paths);
     // What GNOME Files (and most Linux file managers) paste as files.
     clipboard.writeBuffer('x-special/gnome-copied-files', Buffer.from(['copy', ...paths.map((p) => pathToFileURL(p).href)].join('\n')));
   },
@@ -206,14 +220,30 @@ const platform: Platform = {
   },
   revealPath: (p) => shell.showItemInFolder(p),
   thumbnail: thumbnailOf,
-  ...remotePlatform({
-    home: HOME,
-    // packaged: resources/meshdrop-input.py; from the source tree: build/
-    script: app.isPackaged ? join(process.resourcesPath, 'meshdrop-input.py') : join(__dirname, '../../build/meshdrop-input.py'),
-    inbox: () => ctl().state().settings.inbox,
-    openUrl: (u) => shell.openExternal(u),
-  }),
-  ...mediaPlatform(),
+  ...(WIN
+    ? winRemotePlatform({
+        // packaged: resources/meshdrop-input.ps1; from the source tree: build/
+        script: app.isPackaged ? join(process.resourcesPath, 'meshdrop-input.ps1') : join(__dirname, '../../build/meshdrop-input.ps1'),
+        inbox: () => ctl().state().settings.inbox,
+        openUrl: (u) => shell.openExternal(u),
+        openPath: async (p) => {
+          const err = await shell.openPath(p);
+          if (err) throw new Error(err);
+        },
+        laser: (() => {
+          const l = new Laser();
+          return (x: number, y: number, on: boolean) => l.show(x, y, on);
+        })(),
+      })
+    : remotePlatform({
+        home: HOME,
+        // packaged: resources/meshdrop-input.py; from the source tree: build/
+        script: app.isPackaged ? join(process.resourcesPath, 'meshdrop-input.py') : join(__dirname, '../../build/meshdrop-input.py'),
+        inbox: () => ctl().state().settings.inbox,
+        openUrl: (u) => shell.openExternal(u),
+      })),
+  // sound, camera and microphone go through PipeWire: Linux only for now (absent: the UI says so)
+  ...(WIN ? {} : mediaPlatform()),
   openWindow: (url) => {
     // the watch-party player: an ordinary web page in its own window (no app powers)
     const w = new BrowserWindow({ width: 1280, height: 800, title: 'Watch party', autoHideMenuBar: true, webPreferences: { contextIsolation: true, sandbox: true, nodeIntegration: false } });
@@ -233,6 +263,7 @@ const platform: Platform = {
   },
   print: async (p) => {
     // received files are absolute paths in the inbox (never an option to lp)
+    if (WIN) return isAbsolute(p) ? printWin(p) : Promise.reject(new Error('bad path'));
     if (!p.startsWith('/')) throw new Error('bad path');
     await promisify(execFile)('lp', [p], { timeout: 30_000 });
   },
@@ -318,6 +349,13 @@ const reachInput = (x: unknown): ReachInput => {
     ...(o.mapping === 'manual' || o.mapping === 'auto' ? { mapping: o.mapping } : {}),
   };
 };
+
+/** Windows: the "send clipboard" shortcut, held by this process (replaces the one held before). */
+function registerWinShortcut(binding: string, strict: boolean): void {
+  const accel = gtkToAccelerator(binding);
+  globalShortcut.unregisterAll();
+  if (!globalShortcut.register(accel, showPicker) && strict) throw new Error(`${accel} is already used by another app. Try another shortcut.`);
+}
 
 function ctl(): AppController {
   if (!controller) throw new Error('MeshDrop is still starting');
@@ -418,7 +456,11 @@ function wireIpc(): void {
   handle('setSettings', async (_e, p) => {
     const before = ctl().state().settings;
     const s = await ctl().setSettings(settingsPatch(p));
-    if (s.autostart !== before.autostart) setAutostart(s.autostart, launchCommand(), TEST ? join(HOME, 'autostart') : autostartDir());
+    if (s.autostart !== before.autostart) {
+      // Windows: the Run key of this user (Task Manager → Startup apps lists it)
+      if (WIN && !TEST) app.setLoginItemSettings({ openAtLogin: s.autostart, args: ['--hidden'] });
+      else setAutostart(s.autostart, launchCommand(), TEST ? join(HOME, 'autostart') : autostartDir());
+    }
     rebuildTray();
     return s;
   });
@@ -446,6 +488,12 @@ function wireIpc(): void {
     const binding = str(b, 64);
     if (!validBinding(binding)) throw new Error('That is not a valid shortcut (example: <Primary><Alt>c).');
     if (TEST) throw new Error('not in tests');
+    if (WIN) {
+      // no desktop settings to write to: MeshDrop holds the shortcut itself while it runs
+      registerWinShortcut(binding, true);
+      saveShortcut(HOME, binding);
+      return;
+    }
     const { stdout } = await execFileP(READ_KEYBINDINGS[0]!, READ_KEYBINDINGS.slice(1));
     for (const [cmd, ...args] of gnomeShortcutCommands(binding, launchCommand(), parseStrList(stdout))) await execFileP(cmd!, args);
   });
@@ -495,6 +543,8 @@ async function startController(): Promise<void> {
 
 // One MeshDrop per config home: the Chromium profile lives beside it, and so does the instance lock.
 app.setPath('userData', join(HOME, 'electron'));
+// Windows: notifications and the taskbar group under the id the installer gave the Start menu shortcut
+if (WIN) app.setAppUserModelId(APP_ID);
 if (!app.requestSingleInstanceLock()) {
   app.exit(0); // the running instance got our argv through 'second-instance'
 } else {
@@ -535,6 +585,14 @@ if (!app.requestSingleInstanceLock()) {
         app.relaunch({ args: [...process.argv.slice(1).filter((a) => a !== '--hidden'), ...(shown ? [] : ['--hidden'])] });
         quit();
       });
+    }
+    if (WIN && !TEST) {
+      const binding = savedShortcut(HOME);
+      try {
+        if (binding) registerWinShortcut(binding, false);
+      } catch {
+        // a shortcut saved by an older build that no longer parses: Settings can set a new one
+      }
     }
     if (app.isPackaged && !TEST && process.platform === 'linux') {
       try {

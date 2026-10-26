@@ -10,7 +10,7 @@ These steps change things outside this repository. Do them yourself: nothing her
 
    Every update must be signed with this same key.
 3. **Tag.** `git tag v0.2.0 && git push origin v0.2.0`. The Release workflow builds the .deb, the
-   signed APK and (best effort) the Windows installer, then creates a **draft** release. Check it, then
+   signed APK and the Windows installer, then creates a **draft** release. Check it, then
    publish it.
 4. **App Hub (Ubuntu).** Add the entry below to `src/catalog.json` in Hafij-DEU/Application-hub and a
    96 px icon `src/icons/meshdrop.png` (from `apps/desktop/build/icon.png`). Release App Hub as usual.
@@ -45,6 +45,13 @@ These steps change things outside this repository. Do them yourself: nothing her
 
 ## Windows
 
-`electron-builder.yml` has an NSIS target (per-user install with a choosable folder). It is built in
-the Release workflow, but is not tested on Windows: the LAN discovery, file paths and the clipboard
-shortcut there need a real check first.
+`MeshDrop-Setup-<version>.exe` (NSIS, x64) is built by the Release workflow, or on a Windows PC with
+`pnpm --filter @meshdrop/desktop dist:win` (into `apps/desktop/dist-win/`). It installs for every user
+(administrator once) and, through `build/installer.nsh`: a Windows Firewall rule for MeshDrop.exe, the
+`meshdrop` command (`bin/meshdrop.cmd`) on the system PATH and Explorer's Send to → MeshDrop; the
+uninstaller takes them away again. The config lives in `%LOCALAPPDATA%\MeshDrop`.
+
+The Windows parts are in `src/main/windows.ts`: remote input through `build/meshdrop-input.ps1`
+(SendInput), PC actions, Start menu apps, ringing, the battery and the clipboard shortcut (Electron's
+globalShortcut). Sound, camera and microphone (PipeWire) are Linux only. The installer is not code
+signed, so SmartScreen warns on first run.

@@ -4,6 +4,8 @@ import type { Run } from '../App.tsx';
 import { setThemeChoice, themeChoice, type ThemeChoice } from '../theme.ts';
 
 const DEFAULT_BINDING = '<Primary><Alt>c';
+/** Windows: MeshDrop holds the shortcut itself (GNOME keeps it in its settings on Linux). */
+const WINDOWS = /Windows NT/.test(navigator.userAgent);
 const THEMES: [ThemeChoice, string][] = [
   ['system', 'System'],
   ['light', 'Light'],
@@ -163,7 +165,7 @@ export function Settings({ state, run }: { state: AppState; run: Run }) {
       ) : (
         <>
       <h2>Keyboard shortcut</h2>
-      <p className="muted">Adds a GNOME shortcut that opens a small window to send what is on your clipboard.</p>
+      <p className="muted">{WINDOWS ? 'A shortcut that opens a small window to send what is on your clipboard (while MeshDrop runs, also in the tray).' : 'Adds a GNOME shortcut that opens a small window to send what is on your clipboard.'}</p>
       <div className="row">
         <input aria-label="Shortcut" value={binding} onChange={(e) => setBinding(e.target.value)} />
         <button onClick={() => setConfirm(true)}>Set up keyboard shortcut</button>
@@ -182,7 +184,7 @@ export function Settings({ state, run }: { state: AppState; run: Run }) {
           <div role="dialog" aria-modal="true" aria-labelledby="sc-title" className="modal">
             <h2 id="sc-title">Add this shortcut?</h2>
             <p>
-              GNOME will run “MeshDrop: send clipboard” when you press <code>{binding}</code>. Your other custom shortcuts stay as they are.
+              {WINDOWS ? 'MeshDrop will open “Send clipboard” when you press ' : 'GNOME will run “MeshDrop: send clipboard” when you press '}<code>{binding}</code>.{WINDOWS ? ' It replaces the one set before.' : ' Your other custom shortcuts stay as they are.'}
             </p>
             <div className="row">
               <button onClick={() => setConfirm(false)}>Cancel</button>

@@ -88,7 +88,7 @@ class InputHelper {
 }
 
 /** A transparent, click-through window over the whole screen that draws the laser dot. */
-class Laser {
+export class Laser {
   #win: BrowserWindow | null = null;
   #hide: NodeJS.Timeout | null = null;
 

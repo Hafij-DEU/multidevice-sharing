@@ -154,7 +154,7 @@ describe('device identity', () => {
 });
 
 describe('configDir', () => {
-  it('honours MESHDROP_HOME, then XDG_CONFIG_HOME, then ~/.config', () => {
+  it('honours MESHDROP_HOME, then XDG_CONFIG_HOME, then ~/.config (%LOCALAPPDATA%/MeshDrop on Windows)', () => {
     const saved = { m: process.env.MESHDROP_HOME, x: process.env.XDG_CONFIG_HOME };
     try {
       process.env.MESHDROP_HOME = '/tmp/md-home';
@@ -163,7 +163,7 @@ describe('configDir', () => {
       process.env.XDG_CONFIG_HOME = '/tmp/xdg';
       expect(configDir()).toBe(join('/tmp/xdg', 'meshdrop'));
       delete process.env.XDG_CONFIG_HOME;
-      expect(configDir()).toMatch(/\.config[\\/]meshdrop$/);
+      expect(configDir()).toMatch(process.platform === 'win32' ? /AppData[\\/]Local[\\/]MeshDrop$/ : /\.config[\\/]meshdrop$/);
     } finally {
       if (saved.m === undefined) delete process.env.MESHDROP_HOME;
       else process.env.MESHDROP_HOME = saved.m;

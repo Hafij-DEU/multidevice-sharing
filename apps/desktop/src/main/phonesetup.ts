@@ -38,7 +38,8 @@ export async function adbDevices(adb = 'adb'): Promise<{ serial: string; state: 
     out = (await run(adb, ['devices', '-l'], { timeout: 15_000 })).stdout;
   } catch (e) {
     const code = (e as NodeJS.ErrnoException).code;
-    throw new Error(code === 'ENOENT' ? 'adb is not installed on this PC. Install it once with: sudo apt install adb' : 'adb did not answer.');
+    const install = process.platform === 'win32' ? 'winget install Google.PlatformTools' : 'sudo apt install adb';
+    throw new Error(code === 'ENOENT' ? `adb is not installed on this PC. Install it once with: ${install}` : 'adb did not answer.');
   }
   return out
     .split('\n')

@@ -33,9 +33,9 @@ export function validSyncName(n: unknown): n is string {
   return typeof n === 'string' && n.trim() === n && n.length >= 1 && n.length <= 64 && !/[\u0000-\u001f\u007f/\\]/.test(n);
 }
 
-/** A default name for a folder path or URI: its last segment. */
+/** A default name for a folder path or URI: its last segment (C:\Users\me\Photos → Photos too). */
 export function defaultSyncName(folder: string): string {
-  const last = decodeURIComponent(folder.replace(/\/+$/, '').split(/[/:]/).pop() ?? '').trim();
+  const last = decodeURIComponent(folder.replace(/[/\\]+$/, '').split(/[/\\:]/).pop() ?? '').trim();
   const n = (last || basename(folder) || 'Sync').replace(/[\u0000-\u001f\u007f/\\]/g, '_').slice(0, 64).trim();
   return n || 'Sync';
 }

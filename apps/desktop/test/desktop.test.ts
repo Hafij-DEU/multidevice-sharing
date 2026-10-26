@@ -87,6 +87,8 @@ describe('Files right-click script', () => {
       writeFileSync(f, 'x');
       expect(sendArgs(['/usr/bin/meshdrop-desktop', '--send', f, 'relative.txt', join(d, 'missing')])).toEqual([f]);
       expect(sendArgs(['/usr/bin/meshdrop-desktop', '--hidden'])).toEqual([]);
+      // Explorer's Send to passes Windows paths (C:\...); a drive-relative one is not absolute
+      if (process.platform === 'win32') expect(sendArgs(['MeshDrop.exe', '--send', f, 'C:x.txt'])).toEqual([f]);
     } finally {
       rmSync(d, { recursive: true, force: true });
     }

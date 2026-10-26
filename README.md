@@ -12,10 +12,12 @@ left off. End-to-end encrypted, no account, no third-party server.
 [![CI](https://github.com/Hafij-DEU/multidevice-sharing/actions/workflows/ci.yml/badge.svg)](https://github.com/Hafij-DEU/multidevice-sharing/actions/workflows/ci.yml)
 [![CodeQL](https://github.com/Hafij-DEU/multidevice-sharing/actions/workflows/codeql.yml/badge.svg)](https://github.com/Hafij-DEU/multidevice-sharing/actions/workflows/codeql.yml)
 ![Ubuntu](https://img.shields.io/badge/Ubuntu-.deb-E95420?logo=ubuntu&logoColor=white)
+![Windows](https://img.shields.io/badge/Windows%2011-.exe-0078D4?logo=windows11&logoColor=white)
 ![Android](https://img.shields.io/badge/Android-10%2B-3DDC84?logo=android&logoColor=white)
 ![License](https://img.shields.io/badge/license-GPL--3.0-blue)
 
 [**Download for Ubuntu**](https://github.com/Hafij-DEU/multidevice-sharing/releases/latest) ·
+[**Download for Windows**](https://github.com/Hafij-DEU/multidevice-sharing/releases/latest) ·
 [**Download for Android**](https://github.com/Hafij-DEU/multidevice-sharing/releases/latest) ·
 [Features](#features) · [Screenshots](#screenshots) · [Guide](#guide)
 
@@ -133,6 +135,7 @@ grab the PC clipboard, a party drop board, LocalSend compatible, light & dark th
 | | |
 |---|---|
 | **Ubuntu** | Download `meshdrop_<version>_amd64.deb` from [Releases](https://github.com/Hafij-DEU/multidevice-sharing/releases/latest), then `sudo apt install ./meshdrop_*_amd64.deb`. Or install and update it with **App Hub**. |
+| **Windows 11** | Download `MeshDrop-Setup-<version>.exe` from [Releases](https://github.com/Hafij-DEU/multidevice-sharing/releases/latest) and run it (it asks for administrator once). It adds MeshDrop to the Start menu, a firewall rule so your phone can reach it, the `meshdrop` command and Explorer's right-click **Send to → MeshDrop**. Sound, camera and microphone streaming are Linux-only for now. |
 | **Android 10+** | Download `MeshDrop-<version>.apk` from [Releases](https://github.com/Hafij-DEU/multidevice-sharing/releases/latest) and open it on the phone. |
 | **Browser extension** | `meshdrop-extension-<version>.zip` (for *Continue*). App Hub installs it too: MeshDrop card → **Extension**. |
 

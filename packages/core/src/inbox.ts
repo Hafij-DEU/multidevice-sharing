@@ -18,6 +18,7 @@
 import { createHash } from 'node:crypto';
 import { constants } from 'node:fs';
 import * as nodeFs from 'node:fs/promises';
+import { sep } from 'node:path';
 import { CHUNK_SIZE, chunkCount, serializeManifest, type FileEntry, type HaveMap, type Manifest } from './chunk.ts';
 import { safeRelPath, uniqueName, UnsafePathError } from './sanitize.ts';
 
@@ -98,6 +99,14 @@ function inboxRelParts(p: string): string[] {
   if (parts[0]!.toLowerCase() === PARTIAL_DIR) throw new UnsafePathError('reserved directory name');
   return parts;
 }
+
+/**
+ * A path built here ('/'-joined under the root) in the OS's own form: Windows takes '/' too, but
+ * what leaves the inbox (shown, revealed in Explorer, compared) should read C:\...\a.txt.
+ */
+const native = (p: string): string => (sep === '\\' ? p.replace(/\//g, '\\') : p);
+/** The same path with '/' separators (a no-op off Windows). */
+const slashed = (p: string): string => (sep === '\\' ? p.replace(/\\/g, '/') : p);
 
 export class Inbox {
   readonly root: string;
@@ -406,7 +415,9 @@ export class Inbox {
 
   /** `abs` relative to the inbox root ('/'-separated), as returned to peers on the wire. */
   relative(abs: string): string {
-    return abs.startsWith(`${this.root}/`) ? abs.slice(this.root.length + 1) : abs;
+    const a = slashed(abs);
+    const root = slashed(this.root);
+    return a.startsWith(`${root}/`) ? a.slice(root.length + 1) : abs;
   }
 
   async writeChunk(sessionId: string, fileId: number, index: number, pt: Buffer): Promise<void> {
@@ -486,6 +497,10 @@ export class Inbox {
   }
 
   async finalize(sessionId: string, fileId: number): Promise<string> {
+    return native(await this.finalizeSlashed(sessionId, fileId));
+  }
+
+  private finalizeSlashed(sessionId: string, fileId: number): Promise<string> {
     return this.lock(`${sessionId}/${fileId}`, async () => {
       const s = await this.requireSession(sessionId);
       const file = s.files.get(fileId);
