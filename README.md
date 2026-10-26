@@ -16,9 +16,9 @@ left off. End-to-end encrypted, no account, no third-party server.
 ![Android](https://img.shields.io/badge/Android-10%2B-3DDC84?logo=android&logoColor=white)
 ![License](https://img.shields.io/badge/license-GPL--3.0-blue)
 
-[**Download for Ubuntu**](https://github.com/Hafij-DEU/multidevice-sharing/releases/latest) ·
+[**Download for Ubuntu**](https://github.com/Hafij-DEU/multidevice-sharing/releases) ·
 [**Download for Windows**](https://github.com/Hafij-DEU/multidevice-sharing/releases/latest) ·
-[**Download for Android**](https://github.com/Hafij-DEU/multidevice-sharing/releases/latest) ·
+[**Download for Android**](https://github.com/Hafij-DEU/multidevice-sharing/releases) ·
 [Features](#features) · [Screenshots](#screenshots) · [Guide](#guide)
 
 <img src="docs/media/demo.gif" width="800" alt="MeshDrop on the PC: Home, Send, Watch party, Remote, Continue, then switching to the light theme">
@@ -134,9 +134,9 @@ grab the PC clipboard, a party drop board, LocalSend compatible, light & dark th
 
 | | |
 |---|---|
-| **Ubuntu** | Download `meshdrop_<version>_amd64.deb` from [Releases](https://github.com/Hafij-DEU/multidevice-sharing/releases/latest), then `sudo apt install ./meshdrop_*_amd64.deb`. Or install and update it with **App Hub**. |
+| **Ubuntu** | Download `meshdrop_<version>_amd64.deb` from the newest release that has one on [Releases](https://github.com/Hafij-DEU/multidevice-sharing/releases), then `sudo apt install ./meshdrop_*_amd64.deb`. Or install and update it with **App Hub**. |
 | **Windows 11** | Download `MeshDrop-Setup-<version>.exe` from [Releases](https://github.com/Hafij-DEU/multidevice-sharing/releases/latest) and run it (it asks for administrator once). It adds MeshDrop to the Start menu, a firewall rule so your phone can reach it, the `meshdrop` command and Explorer's right-click **Send to → MeshDrop**. Sound, camera and microphone streaming are Linux-only for now. |
-| **Android 10+** | Download `MeshDrop-<version>.apk` from [Releases](https://github.com/Hafij-DEU/multidevice-sharing/releases/latest) and open it on the phone. |
+| **Android 10+** | Download `MeshDrop-<version>.apk` from the newest release that has one on [Releases](https://github.com/Hafij-DEU/multidevice-sharing/releases) and open it on the phone. |
 | **Browser extension** | `meshdrop-extension-<version>.zip` (for *Continue*). App Hub installs it too: MeshDrop card → **Extension**. |
 
 1. **Open MeshDrop** on the PC and the phone. On the same Wi-Fi they appear under *Nearby*.
