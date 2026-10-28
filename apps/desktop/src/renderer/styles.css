@@ -158,11 +158,13 @@ input:focus, textarea:focus, select:focus { outline: 2px solid color-mix(in srgb
 .dot { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
 .dot.reach-lan { background: var(--ok); box-shadow: 0 0 0 3px color-mix(in srgb, var(--ok) 25%, transparent); }
 .dot.reach-hub { background: #6366f1; box-shadow: 0 0 0 3px color-mix(in srgb, #6366f1 25%, transparent); }
+.dot.reach-bt { background: #0ea5e9; box-shadow: 0 0 0 3px color-mix(in srgb, #0ea5e9 25%, transparent); }
 .avatar { flex: none; width: 38px; height: 38px; border-radius: 12px; display: grid; place-items: center; font-weight: 700; color: #fff;
   background: linear-gradient(135deg, hsl(var(--h) 85% 62%), hsl(calc(var(--h) + 40) 85% 55%)); box-shadow: 0 3px 10px hsl(var(--h) 80% 50% / 0.35); }
 .badge { font-weight: 600; }
 .reach-lan { background: color-mix(in srgb, var(--ok) 18%, transparent); color: color-mix(in srgb, var(--ok) 75%, var(--text)); }
 .reach-hub { background: color-mix(in srgb, #6366f1 18%, transparent); color: color-mix(in srgb, #6366f1 75%, var(--text)); }
+.reach-bt { background: color-mix(in srgb, #0ea5e9 18%, transparent); color: color-mix(in srgb, #0ea5e9 75%, var(--text)); }
 .reach-offline { background: color-mix(in srgb, var(--muted) 15%, transparent); }
 .dropzone { border: 2px dashed color-mix(in srgb, var(--accent) 45%, var(--border)); background: color-mix(in srgb, var(--accent) 5%, var(--panel)); border-radius: 16px; padding: 28px; color: var(--accent); font-weight: 500; }
 .dropzone.over { background: color-mix(in srgb, var(--accent) 14%, var(--panel)); border-color: var(--accent-2); color: var(--accent-2); }

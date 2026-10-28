@@ -1,7 +1,7 @@
 // The contract between the UI (renderer) and the app (main). The renderer imports only types from
 // here and talks only to window.meshdrop, so the same UI can run elsewhere (the Android WebView).
 
-export type Reach = 'lan' | 'hub' | 'offline';
+export type Reach = 'lan' | 'bt' | 'hub' | 'offline';
 
 export interface DeviceView {
   deviceId: string;

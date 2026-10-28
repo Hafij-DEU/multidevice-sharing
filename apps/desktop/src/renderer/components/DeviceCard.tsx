@@ -2,7 +2,7 @@ import type { CSSProperties } from 'react';
 import type { DeviceStatus, DeviceView } from '../../shared/api.ts';
 import { Peer } from './Peer.tsx';
 
-const REACH: Record<DeviceView['reach'], string> = { lan: 'On this network', hub: 'Via hub', offline: 'Offline' };
+const REACH: Record<DeviceView['reach'], string> = { lan: 'On this network', bt: 'Over Bluetooth', hub: 'Via hub', offline: 'Offline' };
 const ROLE: Record<DeviceView['role'], string> = { hub: 'Hub', member: 'Mesh member', paired: 'Paired', nearby: 'Nearby', localsend: 'LocalSend' };
 
 /** A stable hue per device, so each one keeps its color everywhere. */

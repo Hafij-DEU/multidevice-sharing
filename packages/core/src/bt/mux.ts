@@ -29,7 +29,7 @@ export function encodeFrame(type: number, stream: number, payload: Buffer = Buff
 
 /** Splits a byte stream into frames. Throws on an unknown type or an oversized payload. */
 export class FrameReader {
-  #buf = Buffer.alloc(0);
+  #buf: Buffer = Buffer.alloc(0);
 
   push(chunk: Buffer): Frame[] {
     this.#buf = this.#buf.length ? Buffer.concat([this.#buf, chunk]) : chunk;
@@ -273,7 +273,12 @@ class Pipe {
   inFlight = 0;
   localEnded = false;
   remoteEnded = false;
-  constructor(readonly id: number, readonly sock: Socket) {}
+  readonly id: number;
+  readonly sock: Socket;
+  constructor(id: number, sock: Socket) {
+    this.id = id;
+    this.sock = sock;
+  }
 }
 
 /**

@@ -27,6 +27,7 @@ import { basename, isAbsolute, join, resolve, sep } from 'node:path';
 import { connect } from 'node:tls';
 import { createMeshHandler, type MeshServerOptions, type TrustSource } from './api/handler.ts';
 import { createMeshServer, type ReceiverEvent } from './api/server.ts';
+import { BtLinks, DEFAULT_LINK_POLICY, type BtPlatform, type LinkMode, type LinkPolicy } from './bt/links.ts';
 import { CHUNK_SIZE, chunkCount } from './chunk.ts';
 import QRCode from 'qrcode';
 import { GuestBook } from './guest/book.ts';
@@ -86,6 +87,8 @@ export type EngineEvent =
   | { source: 'sender'; type: 'progress'; deviceId: string; sessionId: string; fileId: number; sent: number; total: number; tag?: string }
   | ({ source: 'sender'; type: 'result'; tag?: string } & SendResult)
   | { source: 'discovery'; type: 'peer' | 'lost'; peer: PeerInfo }
+  /** A Bluetooth link to a trusted device came up or went down (M14). */
+  | { source: 'bt'; type: 'up' | 'down'; deviceId: string }
   /** A LocalSend app showed up on the LAN. */
   | { source: 'localsend'; type: 'peer'; fingerprint: string; alias: string }
   /** LAN guests: an offer waiting for the owner, a finished upload, one file of it, a rejected offer, the session ended. */
@@ -260,6 +263,11 @@ export interface EngineOptions {
    * to a running listener sees the LAN. Default false (one-shot CLI commands).
    */
   clientDiscovery?: boolean;
+  /**
+   * Bluetooth links (M14, No Wi-Fi): the platform's RFCOMM sockets and the starting policy. Only with
+   * serve. Absent: no Bluetooth.
+   */
+  bt?: { platform: BtPlatform; policy?: LinkPolicy; tickMs?: number; idleMs?: number; backoffMs?: [number, number]; pingMs?: number; dialTimeoutMs?: number };
 }
 
 /** A device as the app shows it: who it is, whether we trust it, and how we can reach it now. */
@@ -269,7 +277,8 @@ export interface EngineDevice {
   /** localsend: a LocalSend app on the LAN (untrusted; sends to it go through its own protocol). */
   role: 'hub' | 'member' | 'paired' | 'nearby' | 'localsend';
   trusted: boolean;
-  reach: 'lan' | 'hub' | 'offline';
+  /** bt: over a Bluetooth link (M14). */
+  reach: 'lan' | 'bt' | 'hub' | 'offline';
   deviceType?: string;
   lastSeen?: number;
   /** Nearby devices: where they announced themselves (to pair with one click). */
@@ -312,6 +321,8 @@ const PENDING_RETRY_MS = 10_000;
 const HELD_FRAME_OVERHEAD = 32 * 1024;
 const PAIR_TIMEOUT_MS = 5000;
 const REPROBE_TIMEOUT_MS = 2000;
+/** On-demand Bluetooth dial when a send finds no other path (M14). */
+const BT_DIAL_TIMEOUT_MS = 8000;
 
 // ---- trust store that follows other processes' writes -------------------------------------------
 
@@ -510,7 +521,12 @@ interface Running {
 /** Sealed bytes per upload request of a link made on this member (M9b). */
 const MEMBER_LINK_SLICE = 1024 * 1024;
 
-type Route = { kind: 'lan'; host: string; port: number } | { kind: 'relay' } | { kind: 'held' } | { kind: 'unreachable' };
+/** A Bluetooth route is a LAN route to the link's local port (`via: 'bt'`), so every caller works unchanged. */
+type Route =
+  | { kind: 'lan'; host: string; port: number; via?: 'bt'; priorityPort?: number }
+  | { kind: 'relay' }
+  | { kind: 'held' }
+  | { kind: 'unreachable' };
 
 /** Bytes a held session may store on the hub: ciphertext (plaintext + 16 per chunk) plus framing. */
 async function estimateHoldBytes(items: SendItem[]): Promise<number> {
@@ -847,6 +863,7 @@ export class Engine extends EventEmitter {
     }
 
     this.running = { server, guest, guestPort, ls, discovery, abort: new AbortController(), port, hub, relayHub, ingressPort, client: null, timers: [] };
+    if (server && this.opts.bt) await this.startBt(this.opts.bt);
     if (server) {
       if (this.mesh) this.startClient();
       const r = this.running;
@@ -913,6 +930,8 @@ export class Engine extends EventEmitter {
     this.running = null;
     r.abort.abort();
     for (const t of r.timers) clearInterval(t);
+    this.btLinks?.stop();
+    this.btLinks = null;
     for (const w of this.syncWatchers.values()) w.close();
     this.syncWatchers.clear();
     for (const t of this.syncDebounces.values()) clearTimeout(t);
@@ -995,20 +1014,92 @@ export class Engine extends EventEmitter {
    */
   private async route(deviceId: string): Promise<Route> {
     const r = this.requireRunning();
+    const mode = this.linkMode(deviceId);
     const viaHubOk = this.mesh?.isTrusted(deviceId) === true; // only mesh members are reachable through the hub
     const known = (): PeerInfo | undefined => r.discovery.peers().find((p) => p.deviceId === deviceId);
-    let peer = known();
     const dir = this.directory().find((d) => d.deviceId === deviceId);
-    if (!peer && dir) {
-      for (const a of dir.lanAddrs) {
-        await r.discovery.probe(a.host, a.port, { timeoutMs: REPROBE_TIMEOUT_MS }).catch(() => {});
-        peer = known();
-        if (peer) break;
+    if (mode !== 'bt') {
+      let peer = known();
+      if (!peer && dir) {
+        for (const a of dir.lanAddrs) {
+          await r.discovery.probe(a.host, a.port, { timeoutMs: REPROBE_TIMEOUT_MS }).catch(() => {});
+          peer = known();
+          if (peer) break;
+        }
       }
+      if (peer) return { kind: 'lan', host: peer.host, port: peer.port };
     }
-    if (peer) return { kind: 'lan', host: peer.host, port: peer.port };
-    if (viaHubOk && this.hubOnline()) return dir?.online ? { kind: 'relay' } : { kind: 'held' };
+    if (mode !== 'wifi' && this.btLinks) {
+      const l = this.btLinks.link(deviceId) ?? (await this.btLinks.ensure(deviceId, this.opts.bt?.dialTimeoutMs ?? BT_DIAL_TIMEOUT_MS));
+      if (l?.ports) return { kind: 'lan', host: '127.0.0.1', port: l.ports.normal, via: 'bt', priorityPort: l.ports.priority };
+    }
+    if (mode !== 'bt' && viaHubOk && this.hubOnline()) return dir?.online ? { kind: 'relay' } : { kind: 'held' };
     return { kind: 'unreachable' };
+  }
+
+  // ---- Bluetooth links (M14) ----------------------------------------------------------------------
+
+  private btLinks: BtLinks | null = null;
+  private btPolicy: LinkPolicy = DEFAULT_LINK_POLICY;
+
+  private async startBt(o: NonNullable<EngineOptions['bt']>): Promise<void> {
+    if (o.policy) this.btPolicy = o.policy;
+    const links = new BtLinks({
+      platform: o.platform,
+      selfId: this.identity.deviceId,
+      meshPort: () => this.port,
+      isTrusted: (id) => this.trustSource.isTrusted(id),
+      trustedIds: () => this.trustedIds(),
+      onLan: (id) => this.running?.discovery.peers().some((p) => p.deviceId === id) ?? false,
+      file: join(this.home, 'bt-peers.json'),
+      ...(o.tickMs !== undefined ? { tickMs: o.tickMs } : {}),
+      ...(o.idleMs !== undefined ? { idleMs: o.idleMs } : {}),
+      ...(o.backoffMs ? { backoffMs: o.backoffMs } : {}),
+      ...(o.pingMs ? { pingMs: o.pingMs } : {}),
+    });
+    links.setPolicy(this.btPolicy);
+    links.on('up', (id: string) => {
+      this.emitEvent({ source: 'bt', type: 'up', deviceId: id });
+      void this.maybeAutoResume(id);
+    });
+    links.on('down', (id: string) => this.emitEvent({ source: 'bt', type: 'down', deviceId: id }));
+    try {
+      await links.start();
+      this.btLinks = links;
+    } catch {
+      links.stop(); // no adapter, or Bluetooth off: the LAN and hub paths still work
+    }
+  }
+
+  /** The link policy (No Wi-Fi settings): Bluetooth on/off, everything over Bluetooth, per-device mode. */
+  setLinkPolicy(p: LinkPolicy): void {
+    this.btPolicy = { bluetooth: p.bluetooth, allBluetooth: p.allBluetooth, deviceLinks: { ...p.deviceLinks } };
+    this.btLinks?.setPolicy(this.btPolicy);
+  }
+
+  linkPolicy(): LinkPolicy {
+    return this.btPolicy;
+  }
+
+  /** How `deviceId` may be reached: 'wifi' whenever this engine has no Bluetooth. */
+  linkMode(deviceId: string): LinkMode {
+    return this.btLinks ? this.btLinks.mode(deviceId) : 'wifi';
+  }
+
+  /** Whether the device is reached over Bluetooth right now (live sound picks Opus then). */
+  async viaBluetooth(deviceId: string): Promise<boolean> {
+    const route = await this.route(this.resolveDeviceId(deviceId));
+    return route.kind === 'lan' && route.via === 'bt';
+  }
+
+  /** Devices with a Bluetooth link up now. */
+  btLinked(): string[] {
+    return this.btLinks?.linked() ?? [];
+  }
+
+  /** Whether Bluetooth links run (a platform was given and it started). */
+  btAvailable(): boolean {
+    return this.btLinks !== null;
   }
 
   private transportFor(route: Route, target: Target, holdBytes: number): Transport {
@@ -1046,8 +1137,9 @@ export class Engine extends EventEmitter {
     const r = this.requireRunning();
     let ids: string[];
     if (deviceIds === 'all') {
-      const present = new Set(r.discovery.peers().map((p) => p.deviceId));
-      for (const d of this.directory()) if (d.online) present.add(d.deviceId);
+      const present = new Set(r.discovery.peers().map((p) => p.deviceId).filter((id) => this.linkMode(id) !== 'bt'));
+      for (const d of this.directory()) if (d.online && this.linkMode(d.deviceId) !== 'bt') present.add(d.deviceId);
+      for (const id of this.btLinked()) present.add(id);
       ids = this.trustedIds().filter((id) => present.has(id));
       if (ids.length === 0) return [];
     } else {
@@ -1086,7 +1178,7 @@ export class Engine extends EventEmitter {
       // A LAN attempt that failed for a transient reason resumes the same session over the hub once.
       // A relay that found the target gone (our directory was stale) leaves it on the hub instead.
       for (const [i, res] of sent.entries()) {
-        if (res.status !== 'failed' || !this.hubOnline() || this.mesh?.isTrusted(res.deviceId) !== true) continue;
+        if (res.status !== 'failed' || !this.hubOnline() || this.mesh?.isTrusted(res.deviceId) !== true || this.linkMode(res.deviceId) === 'bt') continue;
         const was = routes.get(res.deviceId)?.kind;
         const lanHiccup = was === 'lan' && isTransientError(res.error);
         const relayGone = was === 'relay' && res.error === 'http-503 offline';
@@ -1192,7 +1284,8 @@ export class Engine extends EventEmitter {
     if (isSessionActive(e.sessionId)) throw new Error(`outbox entry ${e.sessionId} is being sent right now; stop that send first`);
     await this.outbox.remove(e.sessionId);
     const peer = this.running?.discovery.peers().find((p) => p.deviceId === e.target.deviceId);
-    const addr: { host?: string; port?: number } = peer ? { host: peer.host, port: peer.port } : {};
+    const bt = this.btLinks?.link(e.target.deviceId)?.ports;
+    const addr: { host?: string; port?: number } = peer && this.linkMode(e.target.deviceId) !== 'bt' ? { host: peer.host, port: peer.port } : bt ? { host: '127.0.0.1', port: bt.normal } : {};
     if (!peer && e.target.host !== undefined && e.target.port !== undefined) Object.assign(addr, { host: e.target.host, port: e.target.port });
     const cancelled = await postCancel(this.identity, { deviceId: e.target.deviceId, ...addr }, e.sessionId);
     return { removed: this.outboxItem(e), cancelled };
@@ -1258,8 +1351,13 @@ export class Engine extends EventEmitter {
     const peers = new Map((this.running?.discovery.peers() ?? []).map((p) => [p.deviceId, p]));
     const dir = new Map(this.directory().map((d) => [d.deviceId, d]));
     const out = new Map<string, EngineDevice>();
-    const reach = (id: string, viaHub: boolean): EngineDevice['reach'] =>
-      peers.has(id) ? 'lan' : viaHub && this.hubOnline() && dir.get(id)?.online ? 'hub' : 'offline';
+    const bt = new Set(this.btLinked());
+    const reach = (id: string, viaHub: boolean): EngineDevice['reach'] => {
+      const mode = this.linkMode(id);
+      if (mode !== 'bt' && peers.has(id)) return 'lan';
+      if (mode !== 'wifi' && bt.has(id)) return 'bt';
+      return mode !== 'bt' && viaHub && this.hubOnline() && dir.get(id)?.online ? 'hub' : 'offline';
+    };
     const list = this.mesh?.list();
     for (const m of list?.members ?? []) {
       if (m.deviceId === me) continue;
@@ -1446,16 +1544,18 @@ export class Engine extends EventEmitter {
 
   /**
    * Pushes a live body (raw sound) to a paired device's stream handler: POST /mesh/v1/stream/<path>,
-   * on the LAN only (a live stream through the hub would be too slow). Resolves with the answer's
-   * status once the body ends, or at once when the device refuses (403 when it does not allow us).
+   * on the LAN or a Bluetooth link (its priority port), never through the hub (too slow). Resolves with
+   * the answer's status once the body ends, or at once when the device refuses (403 when it does not
+   * allow us).
    */
   async streamPost(deviceId: string, path: string, contentType: string, body: Readable, signal?: AbortSignal): Promise<number> {
     const id = this.resolveDeviceId(deviceId);
     const t = this.trustSource.get(id);
     if (!t) throw new Error('That device is not paired.');
     const route = await this.route(id);
-    if (route.kind !== 'lan') throw new Error('Live sound works when both devices are on the same Wi-Fi.');
-    const tr = this.transportFor(route, { deviceId: id, publicKey: createPublicKey(t.publicKeyPem) }, 0);
+    if (route.kind !== 'lan') throw new Error('Live sound works when both devices are on the same Wi-Fi or linked over Bluetooth.');
+    const live: Route = route.priorityPort ? { ...route, port: route.priorityPort } : route;
+    const tr = this.transportFor(live, { deviceId: id, publicKey: createPublicKey(t.publicKeyPem) }, 0);
     const r = await tr.request('POST', `/mesh/v1/stream/${path}`, body, { 'content-type': contentType }, { timeoutMs: 30_000, ...(signal ? { signal } : {}) });
     return r.status;
   }
