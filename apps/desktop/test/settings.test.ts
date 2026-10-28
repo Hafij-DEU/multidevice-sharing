@@ -53,4 +53,17 @@ describe('SettingsStore', () => {
     expect(s.get().alias).toBe('pc');
     expect(s.set({ port: 0 }).port).toBe(0);
   });
+
+  it('No Wi-Fi (M14): Bluetooth on and mobile data off by default; per-device modes are checked', () => {
+    const dir = tmpDir();
+    const s = new SettingsStore(join(dir, 's.json'), defaultSettings({ alias: 'pc', inbox: dir }));
+    expect(s.get()).toMatchObject({ bluetooth: true, allBluetooth: false, deviceLinks: {}, tetherNoData: true });
+    const id = 'a'.repeat(64);
+    expect(s.set({ deviceLinks: { [id]: 'bt' }, allBluetooth: true }).deviceLinks).toEqual({ [id]: 'bt' });
+    expect(() => s.set({ deviceLinks: { [id]: 'usb' as never } })).toThrow(SettingsError);
+    expect(() => s.set({ deviceLinks: { nothex: 'wifi' } })).toThrow(SettingsError);
+    expect(() => s.set({ deviceLinks: [] as never })).toThrow(SettingsError);
+    expect(() => s.set({ tetherNoData: 1 as never })).toThrow(SettingsError);
+    expect(s.get().deviceLinks).toEqual({ [id]: 'bt' });
+  });
 });

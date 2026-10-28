@@ -36,6 +36,10 @@ export function defaultSettings(over: Partial<Settings> = {}): Settings {
     sortInbox: false,
     sendReceipts: true,
     cleanupDays: 0,
+    bluetooth: true,
+    allBluetooth: false,
+    deviceLinks: {},
+    tetherNoData: true,
     ...over,
   };
 }
@@ -78,7 +82,14 @@ function validate(s: Settings): void {
   if (!Array.isArray(s.remoteFrom) || s.remoteFrom.length > 64 || s.remoteFrom.some((d) => typeof d !== 'string' || !/^[0-9a-f]{64}$/.test(d))) {
     throw new SettingsError('Invalid list of devices that may control this PC.');
   }
-  for (const k of ['discovery', 'autostart', 'startHidden', 'closeToTray', 'clipboardReceive', 'clipboardSync', 'notifications', 'openLinks', 'phoneNotifications', 'printFromDevices', 'sortInbox', 'sendReceipts'] as const) {
+  const links = s.deviceLinks;
+  if (
+    typeof links !== 'object' || links === null || Array.isArray(links) || Object.keys(links).length > 256 ||
+    Object.entries(links).some(([id, m]) => !/^[0-9a-f]{64}$/.test(id) || (m !== 'auto' && m !== 'wifi' && m !== 'bt'))
+  ) {
+    throw new SettingsError('Invalid connection choice for a device.');
+  }
+  for (const k of ['discovery', 'autostart', 'startHidden', 'closeToTray', 'clipboardReceive', 'clipboardSync', 'notifications', 'openLinks', 'phoneNotifications', 'printFromDevices', 'sortInbox', 'sendReceipts', 'bluetooth', 'allBluetooth', 'tetherNoData'] as const) {
     if (typeof s[k] !== 'boolean') throw new SettingsError(`Invalid value for ${k}.`);
   }
 }

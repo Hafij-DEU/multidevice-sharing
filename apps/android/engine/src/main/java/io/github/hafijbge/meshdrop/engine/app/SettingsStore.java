@@ -101,6 +101,28 @@ public final class SettingsStore {
                 else s.remoteFrom = java.util.Collections.unmodifiableList(ids);
                 break;
             }
+            case "bluetooth":
+            case "allBluetooth":
+            case "tetherNoData":
+                if (!(v instanceof Boolean)) throw new SettingsError("Invalid value for " + k + ".");
+                if (k.equals("bluetooth")) s.bluetooth = (Boolean) v;
+                else if (k.equals("allBluetooth")) s.allBluetooth = (Boolean) v;
+                else s.tetherNoData = (Boolean) v;
+                break;
+            case "deviceLinks": {
+                if (!(v instanceof Map) || ((Map<?, ?>) v).size() > 256) throw new SettingsError("Invalid connection choice for a device.");
+                Map<String, String> links = new java.util.LinkedHashMap<>();
+                for (Map.Entry<?, ?> e : ((Map<?, ?>) v).entrySet()) {
+                    Object id = e.getKey();
+                    Object m = e.getValue();
+                    if (!(id instanceof String) || !((String) id).matches("^[0-9a-f]{64}$") || !(m instanceof String) || !io.github.hafijbge.meshdrop.engine.bt.LinkPolicy.isMode((String) m)) {
+                        throw new SettingsError("Invalid connection choice for a device.");
+                    }
+                    links.put((String) id, (String) m);
+                }
+                s.deviceLinks = java.util.Collections.unmodifiableMap(links);
+                break;
+            }
             case "openLinks":
             case "phoneNotifications":
             case "sendReceipts":

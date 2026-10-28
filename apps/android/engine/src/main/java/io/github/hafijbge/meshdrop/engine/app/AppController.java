@@ -1046,13 +1046,15 @@ public final class AppController {
     public synchronized Map<String, Object> setSettings(Map<String, Object> patch) throws IOException {
         Settings prev = settings.get();
         Settings next = settings.preview(patch);
-        boolean restart = !next.alias.equals(prev.alias) || next.port != prev.port || next.discovery != prev.discovery;
+        boolean restart = !next.alias.equals(prev.alias) || next.port != prev.port || next.discovery != prev.discovery || next.bluetooth != prev.bluetooth;
         Engine x = engine;
         if (restart && next.port != prev.port && next.port != 0 && (x == null || next.port != x.port()) && !portFree(next.port)) {
             throw new SettingsStore.SettingsError("Port " + next.port + " is in use by another program.");
         }
         boolean hadError = error != null;
         settings.set(patch);
+        Engine live = engine;
+        if (live != null) live.setLinkPolicy(linkPolicy(settings.get()));
         if (restart) {
             Exception failure = null;
             try {
@@ -1070,6 +1072,11 @@ public final class AppController {
         }
         changed();
         return settings.get().toMap();
+    }
+
+    /** M14: the engine's link policy from the No Wi-Fi settings. */
+    public static io.github.hafijbge.meshdrop.engine.bt.LinkPolicy linkPolicy(Settings s) {
+        return new io.github.hafijbge.meshdrop.engine.bt.LinkPolicy(s.bluetooth, s.allBluetooth, s.deviceLinks);
     }
 
     public void openInbox() {

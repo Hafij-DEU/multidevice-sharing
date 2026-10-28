@@ -51,7 +51,14 @@ const SWITCHES: [keyof S, string][] = [
   ['printFromDevices', 'Print files my devices send with "Print on PC"'],
 ];
 
-const DESKTOP_ONLY: (keyof S)[] = ['autostart', 'startHidden', 'closeToTray', 'printFromDevices', 'sortInbox'];
+/** M14 No Wi-Fi switches, shown in their own section. */
+const NO_WIFI: [keyof S, string][] = [
+  ['bluetooth', 'Use Bluetooth when there is no shared network'],
+  ['allBluetooth', 'Everything over Bluetooth (even on the same network)'],
+  ['tetherNoData', "On a phone's hotspot or USB tether, never use the phone's mobile data"],
+];
+
+const DESKTOP_ONLY: (keyof S)[] = ['autostart', 'startHidden', 'closeToTray', 'printFromDevices', 'sortInbox', 'tetherNoData'];
 
 function KeepAlive({ state, run }: { state: AppState; run: Run }) {
   const k = state.keepAlive;
@@ -74,6 +81,36 @@ function KeepAlive({ state, run }: { state: AppState; run: Run }) {
         ))}
       </ul>
     </>
+  );
+}
+
+/** How to connect without a router: Bluetooth, a phone's hotspot, or USB/Bluetooth tethering. */
+function NoWifiHelp({ android }: { android: boolean }) {
+  return (
+    <details className="help">
+      <summary>How to connect with no Wi-Fi router</summary>
+      <ul>
+        <li>
+          <b>Bluetooth</b>: pair the devices once in the {android ? "phone's" : "system's"} Bluetooth settings. Paired MeshDrop devices then connect by
+          themselves when they share no network. Files, clipboard, remote control, media keys, notifications and sound work over Bluetooth; the camera needs
+          Wi-Fi. Choose Auto, Wi-Fi only or Bluetooth only per device under Paired devices.
+        </li>
+        <li>
+          <b>Phone hotspot</b>: start a hotspot on a phone and join it from the other devices. MeshDrop finds them as on any network; if it does not,
+          add the device by its address (Send → Add a device).
+        </li>
+        <li>
+          <b>USB tethering</b>: plug the phone into the PC and turn on Settings → Network → Hotspot &amp; tethering → USB tethering.{' '}
+          <b>Bluetooth tethering</b> works the same way over a paired phone. Both give a small network between the phone and the PC.
+        </li>
+        {!android && (
+          <li>
+            With "never use the phone's mobile data" on, this PC keeps its internet and DNS off a phone's hotspot or tether: MeshDrop works over it, nothing
+            else does.
+          </li>
+        )}
+      </ul>
+    </details>
   );
 }
 
@@ -173,6 +210,13 @@ export function Settings({ state, run }: { state: AppState; run: Run }) {
           <input type="checkbox" checked={draft[k] as boolean} onChange={(e) => set(k, e.target.checked as never)} /> {label}
         </label>
       ))}
+      <h2>No Wi-Fi</h2>
+      {NO_WIFI.filter(([k]) => !(android && DESKTOP_ONLY.includes(k))).map(([k, label]) => (
+        <label key={k} className="toggle">
+          <input type="checkbox" checked={draft[k] as boolean} disabled={k === 'allBluetooth' && !draft.bluetooth} onChange={(e) => set(k, e.target.checked as never)} /> {label}
+        </label>
+      ))}
+      <NoWifiHelp android={android} />
       <div className="row">
         <button className="primary" disabled={!dirty} onClick={() => void save()}>
           Save

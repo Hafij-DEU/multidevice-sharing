@@ -7,7 +7,7 @@ public final class EngineDevice {
     /** hub | member (mesh devices), paired (manually) | nearby (untrusted). */
     public final String role;
     public final boolean trusted;
-    /** lan | hub (reachable through the hub) | offline */
+    /** lan | bt (over a Bluetooth link, M14) | hub (reachable through the hub) | offline */
     public final String reach;
     public final String deviceType;
     public final long lastSeen;

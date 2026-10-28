@@ -35,6 +35,12 @@ public final class Settings implements Cloneable {
     public boolean printFromDevices = true;
     public boolean sortInbox = false;
     public int cleanupDays = 0;
+    /** M14 No Wi-Fi: Bluetooth links when there is no shared network, everything over Bluetooth, and per device auto/wifi/bt (never changed in place). */
+    public boolean bluetooth = true;
+    public boolean allBluetooth = false;
+    public Map<String, String> deviceLinks = java.util.Collections.emptyMap();
+    /** M14 (a PC setting; kept for the shared shape). */
+    public boolean tetherNoData = true;
 
     public static Settings defaults(String alias) {
         Settings s = new Settings();
@@ -73,6 +79,10 @@ public final class Settings implements Cloneable {
         m.put("printFromDevices", printFromDevices);
         m.put("sortInbox", sortInbox);
         m.put("cleanupDays", (long) cleanupDays);
+        m.put("bluetooth", bluetooth);
+        m.put("allBluetooth", allBluetooth);
+        m.put("deviceLinks", new LinkedHashMap<String, Object>(deviceLinks));
+        m.put("tetherNoData", tetherNoData);
         return m;
     }
 }

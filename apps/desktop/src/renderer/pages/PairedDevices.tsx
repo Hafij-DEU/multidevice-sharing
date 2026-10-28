@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import type { AppState } from '../../shared/api.ts';
+import type { AppState, LinkMode } from '../../shared/api.ts';
 import type { Run } from '../App.tsx';
 import { DeviceCard } from '../components/DeviceCard.tsx';
 
@@ -26,6 +26,7 @@ export function PairedDevices({ state, run }: { state: AppState; run: Run }) {
           {trusted.map((d) => (
             <li key={d.deviceId} className="row space" data-paired={d.deviceId}>
               <DeviceCard d={d} checked={false} />
+              {state.settings.bluetooth && <Connection id={d.deviceId} alias={d.alias} state={state} run={run} />}
               {d.role === 'paired' ? (
                 <button className={confirming === d.deviceId ? 'danger' : ''} onClick={() => unpair(d.deviceId, d.alias)}>
                   {confirming === d.deviceId ? 'Tap again to unpair' : 'Unpair'}
@@ -39,6 +40,36 @@ export function PairedDevices({ state, run }: { state: AppState; run: Run }) {
       )}
       {window.meshdrop.setupPhones && <PhoneSetup run={run} />}
     </section>
+  );
+}
+
+const MODES: [LinkMode, string][] = [
+  ['auto', 'Auto'],
+  ['wifi', 'Wi-Fi only'],
+  ['bt', 'Bluetooth only'],
+];
+
+/** M14: how this device is reached: the network, else Bluetooth (Auto), only the network, or only Bluetooth. */
+function Connection({ id, alias, state, run }: { id: string; alias: string; state: AppState; run: Run }) {
+  const s = state.settings;
+  const mode: LinkMode = s.allBluetooth ? 'bt' : (s.deviceLinks[id] ?? 'auto');
+  const choose = (m: LinkMode) => {
+    const next = { ...s.deviceLinks };
+    if (m === 'auto') delete next[id];
+    else next[id] = m;
+    void run(() => window.meshdrop.setSettings({ deviceLinks: next }));
+  };
+  return (
+    <label className="row" title={s.allBluetooth ? 'Everything goes over Bluetooth (Settings → No Wi-Fi)' : undefined}>
+      <span className="muted">Connection</span>
+      <select aria-label={`Connection for ${alias}`} value={mode} disabled={s.allBluetooth} onChange={(e) => choose(e.target.value as LinkMode)}>
+        {MODES.map(([m, label]) => (
+          <option key={m} value={m}>
+            {label}
+          </option>
+        ))}
+      </select>
+    </label>
   );
 }
 

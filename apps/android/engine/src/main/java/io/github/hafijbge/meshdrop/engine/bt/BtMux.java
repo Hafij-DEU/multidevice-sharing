@@ -67,11 +67,11 @@ public final class BtMux {
 
     /** Push-style reader for tests and callers that get bytes in arbitrary pieces. */
     public static final class Reader {
-        private final ByteArrayOutputStream buf = new ByteArrayOutputStream();
+        private final ByteArrayOutputStream pending = new ByteArrayOutputStream();
 
         public java.util.List<Frame> push(byte[] chunk) throws IOException {
-            buf.write(chunk, 0, chunk.length);
-            byte[] all = buf.toByteArray();
+            pending.write(chunk, 0, chunk.length);
+            byte[] all = pending.toByteArray();
             java.util.List<Frame> out = new java.util.ArrayList<>();
             int at = 0;
             while (all.length - at >= HEADER) {
@@ -85,8 +85,8 @@ public final class BtMux {
                 out.add(new Frame(type, u32(all, at + 1), p));
                 at += HEADER + (int) len;
             }
-            buf.reset();
-            buf.write(all, at, all.length - at);
+            pending.reset();
+            pending.write(all, at, all.length - at);
             return out;
         }
     }

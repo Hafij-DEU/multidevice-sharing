@@ -85,6 +85,9 @@ export interface ScheduledView {
   print?: boolean;
 }
 
+/** M14: how a device is reached. */
+export type LinkMode = 'auto' | 'wifi' | 'bt';
+
 export interface Settings {
   alias: string;
   inbox: string;
@@ -113,6 +116,14 @@ export interface Settings {
   sendReceipts: boolean;
   /** M11 smart inbox clean-up: received files older than this many days are deleted (0: never). */
   cleanupDays: number;
+  /** M14 No Wi-Fi: Bluetooth links to trusted devices when there is no shared network (default on). */
+  bluetooth: boolean;
+  /** M14: every device over Bluetooth, even on the same network. */
+  allBluetooth: boolean;
+  /** M14 per device: Auto (network, else Bluetooth), Wi-Fi only, or Bluetooth only; missing: Auto. */
+  deviceLinks: Record<string, LinkMode>;
+  /** M14: on a phone's hotspot or USB/Bluetooth tether, never use the phone's mobile data (no default route, no DNS). */
+  tetherNoData: boolean;
   /** Android: the devices this phone forwards its notifications to. */
   notifyTo?: string[];
 }

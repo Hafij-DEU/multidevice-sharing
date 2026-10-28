@@ -51,6 +51,17 @@ public final class EngineConfig {
         io.github.hafijbge.meshdrop.engine.sync.SyncFolder open(String folder) throws java.io.IOException;
     }
 
+    /** Bluetooth links (M14): the platform's RFCOMM sockets; null: no Bluetooth. */
+    public io.github.hafijbge.meshdrop.engine.bt.BtPlatform bt;
+    public io.github.hafijbge.meshdrop.engine.bt.LinkPolicy btPolicy = io.github.hafijbge.meshdrop.engine.bt.LinkPolicy.DEFAULT;
+    /** Background link pass interval (0: tests drive it). */
+    public long btTickMs = 10_000;
+    public long btIdleMs = 60_000;
+    public long[] btBackoffMs = {10_000, 120_000};
+    public long btPingMs = 15_000;
+    /** How long a send waits for an on-demand Bluetooth dial. */
+    public long btDialTimeoutMs = 8_000;
+
     /** The LAN guest server's port (plain HTTP; 0: any free port, tests); -1: no guest server. */
     public int guestPort = 53320;
 

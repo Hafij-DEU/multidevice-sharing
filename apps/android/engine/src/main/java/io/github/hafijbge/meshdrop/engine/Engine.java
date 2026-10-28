@@ -1,5 +1,6 @@
 package io.github.hafijbge.meshdrop.engine;
 
+import io.github.hafijbge.meshdrop.engine.bt.LinkPolicy;
 import io.github.hafijbge.meshdrop.engine.disc.Discovery;
 import io.github.hafijbge.meshdrop.engine.hub.HubClient;
 import io.github.hafijbge.meshdrop.engine.identity.Identity;
@@ -279,6 +280,7 @@ public final class Engine {
         exec.execute(this::reprobeManual);
         startHub();
         startGuestServer();
+        startBt();
         ticker = java.util.concurrent.Executors.newSingleThreadScheduledExecutor(r -> {
             Thread t = new Thread(r, "meshdrop-ticker");
             t.setDaemon(true);
@@ -609,6 +611,9 @@ public final class Engine {
         server = null;
         for (Sender.Control c : controls) c.pause();
         stopHub();
+        io.github.hafijbge.meshdrop.engine.bt.BtLinks bl = btLinks;
+        btLinks = null;
+        if (bl != null) bl.stop();
         endGuest(false);
         io.github.hafijbge.meshdrop.engine.guest.GuestServer gs = guestServer;
         guestServer = null;
@@ -1268,6 +1273,7 @@ public final class Engine {
         Map<String, HubClient.DirectoryEntry> dir = new LinkedHashMap<>();
         for (HubClient.DirectoryEntry e : directory()) dir.put(e.deviceId, e);
         boolean viaHub = hubOnline();
+        Set<String> bt = new java.util.HashSet<>(btLinked());
         List<EngineDevice> out = new ArrayList<>();
         Set<String> seen = new LinkedHashSet<>();
         seen.add(identity.deviceId());
@@ -1277,20 +1283,27 @@ public final class Engine {
                 if (!seen.add(x.deviceId)) continue;
                 Discovery.PeerInfo p = peers.get(x.deviceId);
                 HubClient.DirectoryEntry e = dir.get(x.deviceId);
-                String reach = p != null ? "lan" : viaHub && e != null && e.online ? "hub" : "offline";
+                String reach = reach(x.deviceId, p != null, bt, viaHub && e != null && e.online);
                 out.add(new EngineDevice(x.deviceId, x.alias, x.role, true, reach, p != null ? p.deviceType : null, p != null ? p.lastSeen : e != null ? e.lastSeen : 0));
             }
         }
         for (TrustStore.Device t : trust.list()) {
             if (!seen.add(t.deviceId) || !trustSource.isTrusted(t.deviceId)) continue;
             Discovery.PeerInfo p = peers.get(t.deviceId);
-            out.add(new EngineDevice(t.deviceId, t.alias, "paired", true, p != null ? "lan" : "offline", p != null ? p.deviceType : null, p != null ? p.lastSeen : 0));
+            out.add(new EngineDevice(t.deviceId, t.alias, "paired", true, reach(t.deviceId, p != null, bt, false), p != null ? p.deviceType : null, p != null ? p.lastSeen : 0));
         }
         for (Discovery.PeerInfo p : peers.values()) {
             if (!seen.add(p.deviceId)) continue;
             out.add(new EngineDevice(p.deviceId, p.alias, "nearby", false, "lan", p.deviceType, p.lastSeen, p.host, p.port));
         }
         return out;
+    }
+
+    private String reach(String deviceId, boolean onLan, Set<String> bt, boolean onHub) {
+        String mode = linkMode(deviceId);
+        if (!mode.equals(LinkPolicy.BT) && onLan) return "lan";
+        if (!mode.equals(LinkPolicy.WIFI) && bt.contains(deviceId)) return "bt";
+        return !mode.equals(LinkPolicy.BT) && onHub ? "hub" : "offline";
     }
 
     /**
@@ -1384,15 +1397,32 @@ public final class Engine {
 
     /** How a target is reached now (engine.ts Route). */
     static final class Route {
-        static final Route RELAY = new Route("relay", null);
-        static final Route HELD = new Route("held", null);
-        static final Route UNREACHABLE = new Route("unreachable", null);
+        static final Route RELAY = new Route("relay", null, 0, 0, false);
+        static final Route HELD = new Route("held", null, 0, 0, false);
+        static final Route UNREACHABLE = new Route("unreachable", null, 0, 0, false);
         final String kind;
-        final Discovery.PeerInfo peer;
+        /** "lan": where to connect (a Bluetooth link's local port when `bt`). */
+        final String host;
+        final int port;
+        /** Over Bluetooth: the link's priority port, for live streams. */
+        final int priorityPort;
+        final boolean bt;
 
-        Route(String kind, Discovery.PeerInfo peer) {
+        Route(String kind, String host, int port, int priorityPort, boolean bt) {
             this.kind = kind;
-            this.peer = peer;
+            this.host = host;
+            this.port = port;
+            this.priorityPort = priorityPort;
+            this.bt = bt;
+        }
+
+        static Route lan(Discovery.PeerInfo p) {
+            return new Route("lan", p.host, p.port, 0, false);
+        }
+
+        /** A Bluetooth route is a LAN route to the link's local port, so every caller works unchanged. */
+        static Route bt(io.github.hafijbge.meshdrop.engine.bt.BtLink l) {
+            return new Route("lan", "127.0.0.1", l.normalPort(), l.priorityPort(), true);
         }
     }
 
@@ -1400,7 +1430,97 @@ public final class Engine {
      * LAN if discovery knows the device (or one of its directory addresses answers), else the hub
      * relay if it is online there, else held on the hub, else unreachable.
      */
-    // ---- live streams (M10b): LAN only, pinned TLS ------------------------------------------
+    // ---- Bluetooth links (M14) ------------------------------------------------------------------
+
+    private static final String CAMERA_NEEDS_WIFI = "The camera needs Wi-Fi: Bluetooth is too slow for video. Sound, files and remote control work over Bluetooth.";
+    private volatile io.github.hafijbge.meshdrop.engine.bt.BtLinks btLinks;
+    private volatile LinkPolicy btPolicy;
+
+    private static boolean isCameraPath(String path) {
+        return path.equals("camera") || path.startsWith("camera/") || path.startsWith("camera?");
+    }
+
+    private void startBt() {
+        if (cfg.bt == null || btLinks != null) return;
+        if (btPolicy == null) btPolicy = cfg.btPolicy;
+        io.github.hafijbge.meshdrop.engine.bt.BtLinks.Options o = new io.github.hafijbge.meshdrop.engine.bt.BtLinks.Options();
+        o.platform = cfg.bt;
+        o.selfId = identity.deviceId();
+        o.meshPort = () -> port;
+        o.isTrusted = trustSource::isTrusted;
+        o.trustedIds = this::trustedIds;
+        o.onLan = id -> {
+            Discovery d = discovery;
+            return d != null && d.peer(id) != null;
+        };
+        o.file = new File(cfg.home, "bt-peers.json");
+        o.tickMs = cfg.btTickMs;
+        o.idleMs = cfg.btIdleMs;
+        o.backoffMs = cfg.btBackoffMs;
+        o.pingMs = cfg.btPingMs;
+        o.listener = new io.github.hafijbge.meshdrop.engine.bt.BtLinks.Listener() {
+            @Override
+            public void onUp(String deviceId) {
+                emit("bt", "up", deviceData(deviceId));
+                maybeAutoResume(deviceId);
+            }
+
+            @Override
+            public void onDown(String deviceId) {
+                emit("bt", "down", deviceData(deviceId));
+            }
+        };
+        io.github.hafijbge.meshdrop.engine.bt.BtLinks links = new io.github.hafijbge.meshdrop.engine.bt.BtLinks(o);
+        links.setPolicy(btPolicy);
+        try {
+            links.start();
+            btLinks = links;
+        } catch (IOException | RuntimeException e) {
+            links.stop(); // no adapter, or Bluetooth off: the LAN and hub paths still work
+        }
+    }
+
+    private static Map<String, Object> deviceData(String deviceId) {
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("deviceId", deviceId);
+        return m;
+    }
+
+    /** The link policy (No Wi-Fi settings): Bluetooth on/off, everything over Bluetooth, per-device mode. */
+    public void setLinkPolicy(LinkPolicy p) {
+        btPolicy = p;
+        io.github.hafijbge.meshdrop.engine.bt.BtLinks bl = btLinks;
+        if (bl != null) bl.setPolicy(p);
+    }
+
+    public LinkPolicy linkPolicy() {
+        LinkPolicy p = btPolicy;
+        return p != null ? p : cfg.btPolicy;
+    }
+
+    /** How a device may be reached: "wifi" whenever this engine has no Bluetooth. */
+    public String linkMode(String deviceId) {
+        io.github.hafijbge.meshdrop.engine.bt.BtLinks bl = btLinks;
+        return bl == null ? LinkPolicy.WIFI : bl.mode(deviceId);
+    }
+
+    /** Whether the device is reached over Bluetooth right now (live sound picks Opus then). May dial. */
+    public boolean viaBluetooth(String deviceId) {
+        return route(resolveDeviceId(deviceId)).bt;
+    }
+
+    /** Devices with a Bluetooth link up now. */
+    public List<String> btLinked() {
+        io.github.hafijbge.meshdrop.engine.bt.BtLinks bl = btLinks;
+        return bl == null ? java.util.Collections.<String>emptyList() : bl.linked();
+    }
+
+    /** Whether Bluetooth links run (a platform was given and it started). */
+    public boolean btAvailable() {
+        return btLinks != null;
+    }
+
+    // ---- live streams (M10b): LAN or Bluetooth, pinned TLS ------------------------------------
 
     /** A live stream to or from a device on the LAN: read `in` (GET) or write `out` (POST); close() ends it. */
     public static final class Stream implements java.io.Closeable {
@@ -1424,11 +1544,13 @@ public final class Engine {
         }
     }
 
-    private javax.net.ssl.SSLSocket streamSocket(String deviceId) throws IOException {
+    private javax.net.ssl.SSLSocket streamSocket(String deviceId, String path) throws IOException {
         Route r = route(deviceId);
         Sender.Target t = target(deviceId, r);
-        if (t == null || t.host == null) throw new IOException("That device is not on this network: live sound and camera work on the same Wi-Fi.");
-        javax.net.ssl.SSLSocket s = Tls.connect(Tls.pinnedClient(identity, deviceId), t.host, t.port, 5_000);
+        if (t == null || t.host == null) throw new IOException("That device is not on this network or a Bluetooth link: live sound and camera need one.");
+        if (r.bt && isCameraPath(path)) throw new IOException(CAMERA_NEEDS_WIFI);
+        // Over Bluetooth, live streams take the priority port so a file transfer does not starve them.
+        javax.net.ssl.SSLSocket s = Tls.connect(Tls.pinnedClient(identity, deviceId), t.host, r.bt && r.priorityPort > 0 ? r.priorityPort : t.port, 5_000);
         s.setSoTimeout(30_000);
         s.setTcpNoDelay(true); // live sound and frames go out as written
         return s;
@@ -1436,7 +1558,7 @@ public final class Engine {
 
     /** GET /mesh/v1/stream/<path>: the body as it comes (HTTP/1.0, so it is never chunked). */
     public Stream streamFrom(String deviceId, String path) throws IOException {
-        javax.net.ssl.SSLSocket s = streamSocket(deviceId);
+        javax.net.ssl.SSLSocket s = streamSocket(deviceId, path);
         try {
             java.io.OutputStream o = s.getOutputStream();
             o.write(("GET /mesh/v1/stream/" + path + " HTTP/1.0\r\nHost: meshdrop\r\n\r\n").getBytes(StandardCharsets.US_ASCII));
@@ -1457,7 +1579,7 @@ public final class Engine {
 
     /** POST /mesh/v1/stream/<path>: what is written to `out` goes as chunks until close(). */
     public Stream streamTo(String deviceId, String path, String contentType) throws IOException {
-        javax.net.ssl.SSLSocket s = streamSocket(deviceId);
+        javax.net.ssl.SSLSocket s = streamSocket(deviceId, path);
         s.setSoTimeout(0);
         java.io.OutputStream raw = new java.io.BufferedOutputStream(s.getOutputStream(), 64 * 1024);
         raw.write(("POST /mesh/v1/stream/" + path + " HTTP/1.1\r\nHost: meshdrop\r\nContent-Type: " + contentType + "\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n").getBytes(StandardCharsets.US_ASCII));
@@ -1530,10 +1652,11 @@ public final class Engine {
     }
 
     private Route route(String deviceId) {
+        String mode = linkMode(deviceId);
         Discovery d = discovery;
-        Discovery.PeerInfo p = d == null ? null : d.peer(deviceId);
         HubClient.DirectoryEntry dir = directoryEntry(deviceId);
-        if (p == null && dir != null && d != null && cfg.probeDirectoryAddrs) {
+        Discovery.PeerInfo p = d == null || mode.equals(LinkPolicy.BT) ? null : d.peer(deviceId);
+        if (p == null && !mode.equals(LinkPolicy.BT) && dir != null && d != null && cfg.probeDirectoryAddrs) {
             for (HubClient.LanAddr a : dir.lanAddrs) {
                 try {
                     d.probe(a.host, a.port, REPROBE_TIMEOUT_MS);
@@ -1544,17 +1667,23 @@ public final class Engine {
                 if (p != null) break;
             }
         }
-        if (p != null) return new Route("lan", p);
+        if (p != null) return Route.lan(p);
+        io.github.hafijbge.meshdrop.engine.bt.BtLinks bl = btLinks;
+        if (!mode.equals(LinkPolicy.WIFI) && bl != null) {
+            io.github.hafijbge.meshdrop.engine.bt.BtLink l = bl.link(deviceId);
+            if (l == null) l = bl.ensure(deviceId, cfg.btDialTimeoutMs);
+            if (l != null && l.normalPort() > 0) return Route.bt(l);
+        }
         MembershipStore m = mesh;
         // Only mesh members are reachable through the hub.
-        if (m != null && m.isTrusted(deviceId) && hubOnline()) return dir != null && dir.online ? Route.RELAY : Route.HELD;
+        if (!mode.equals(LinkPolicy.BT) && m != null && m.isTrusted(deviceId) && hubOnline()) return dir != null && dir.online ? Route.RELAY : Route.HELD;
         return Route.UNREACHABLE;
     }
 
     private Sender.Target target(String deviceId, Route r) {
         TrustStore.Device t = trustSource.get(deviceId);
         if (t == null || r.kind.equals("unreachable")) return null;
-        return r.peer != null ? new Sender.Target(deviceId, r.peer.host, r.peer.port, t.key) : new Sender.Target(deviceId, null, 0, t.key);
+        return r.host != null ? new Sender.Target(deviceId, r.host, r.port, t.key) : new Sender.Target(deviceId, null, 0, t.key);
     }
 
     /** A trusted device with no way to reach it now (its send waits in the outbox). */
@@ -1579,11 +1708,15 @@ public final class Engine {
 
     /** A LAN target, or (mesh members while the hub link is up) one without an address that goes through the hub. */
     private Sender.Target target(String deviceId) {
+        String mode = linkMode(deviceId);
         Discovery d = discovery;
-        Discovery.PeerInfo p = d == null ? null : d.peer(deviceId);
-        if (p != null) return target(deviceId, new Route("lan", p));
+        Discovery.PeerInfo p = d == null || mode.equals(LinkPolicy.BT) ? null : d.peer(deviceId);
+        if (p != null) return target(deviceId, Route.lan(p));
+        io.github.hafijbge.meshdrop.engine.bt.BtLinks bl = btLinks;
+        io.github.hafijbge.meshdrop.engine.bt.BtLink l = bl == null || mode.equals(LinkPolicy.WIFI) ? null : bl.link(deviceId);
+        if (l != null) return target(deviceId, Route.bt(l));
         MembershipStore m = mesh;
-        if (m != null && m.isTrusted(deviceId) && hubOnline()) return target(deviceId, Route.RELAY);
+        if (!mode.equals(LinkPolicy.BT) && m != null && m.isTrusted(deviceId) && hubOnline()) return target(deviceId, Route.RELAY);
         return null;
     }
 
@@ -1732,8 +1865,9 @@ public final class Engine {
         List<String> targets = new ArrayList<>();
         if (ids == null) {
             Set<String> present = new java.util.HashSet<>();
-            for (Discovery.PeerInfo p : d.peers()) present.add(p.deviceId);
-            if (hubOnline()) for (HubClient.DirectoryEntry x : directory()) if (x.online) present.add(x.deviceId);
+            for (Discovery.PeerInfo p : d.peers()) if (!linkMode(p.deviceId).equals(LinkPolicy.BT)) present.add(p.deviceId);
+            if (hubOnline()) for (HubClient.DirectoryEntry x : directory()) if (x.online && !linkMode(x.deviceId).equals(LinkPolicy.BT)) present.add(x.deviceId);
+            present.addAll(btLinked());
             for (String id : trustedIds()) if (present.contains(id)) targets.add(id);
         } else {
             for (String q : ids) {
@@ -1782,6 +1916,7 @@ public final class Engine {
                         SendResult r = sent.get(i);
                         MembershipStore m = mesh;
                         if (!r.status.equals("failed") || !hubOnline() || m == null || !m.isTrusted(r.deviceId) || control.paused()) continue;
+                        if (linkMode(r.deviceId).equals(LinkPolicy.BT)) continue; // Bluetooth only: never the hub
                         String was = routes.get(r.deviceId).kind;
                         boolean lanHiccup = was.equals("lan") && Sender.isTransientError(r.error);
                         boolean relayGone = was.equals("relay") && "http-503 offline".equals(r.error);

@@ -13,6 +13,7 @@ import { CHUNK_SIZE } from '@meshdrop/core/src/chunk.ts';
 import { Engine, liveListener, type EngineEvent, type EngineOptions, type SendItem } from '@meshdrop/core/src/engine.ts';
 import { loadOrCreateIdentity } from '@meshdrop/core/src/identity.ts';
 import { writeFileAtomic } from '@meshdrop/core/src/trust.ts';
+import type { BtPlatform, LinkPolicy } from '@meshdrop/core/src/bt/links.ts';
 import { BUTTONS, KEYSYMS, charKeysym } from './keys.ts';
 import { ensureDir, land } from '@meshdrop/core/src/guest/uploads.ts';
 import { cleanHandoff, handoffUrl, type HandoffState } from '@meshdrop/core/src/handoff.ts';
@@ -145,9 +146,14 @@ export interface ControllerOptions {
   history: HistoryStore;
   platform: Platform;
   engineOptions?: Partial<EngineOptions>;
+  /** M14: this PC's Bluetooth (BlueZ); none: no Bluetooth links. */
+  bt?: BtPlatform;
   /** Tests: shorter M11 timings (burn after reading, the sweep, the time-capsule threshold). */
   timing?: { burnAfterOpenMs?: number; tickMs?: number; scheduleMinMs?: number };
 }
+
+/** M14: the engine's link policy from the No Wi-Fi settings. */
+const linkPolicy = (s: Settings): LinkPolicy => ({ bluetooth: s.bluetooth, allBluetooth: s.allBluetooth, deviceLinks: s.deviceLinks });
 
 /** Minimum gap between two 'state' events (so at most 10 progress updates per second). */
 const STATE_INTERVAL_MS = 100;
@@ -163,7 +169,7 @@ const MAX_CLIP_FILES_SYNC = 100 * 1024 * 1024;
 type ClipNow = { sig: string } & ({ kind: 'text'; text: string } | { kind: 'files'; files: string[] } | { kind: 'image'; png: () => Buffer });
 const MAX_RECOVERY_BYTES = 1024 * 1024;
 /** Settings the engine is created with: changing one restarts it. */
-const ENGINE_KEYS = ['alias', 'inbox', 'port', 'discovery'] as const;
+const ENGINE_KEYS = ['alias', 'inbox', 'port', 'discovery', 'bluetooth'] as const;
 
 interface Transfer extends TransferView {
   /** Per-file bytes done (out: plaintext bytes; in: estimated from chunks). */
@@ -238,6 +244,7 @@ export class AppController extends EventEmitter {
   readonly #history: HistoryStore;
   readonly #platform: Platform;
   readonly #engineOptions: Partial<EngineOptions>;
+  readonly #bt: BtPlatform | undefined;
   #engine: Engine | null = null;
   #mode: AppState['mode'] = 'serving';
   #ownsPid = false;
@@ -283,6 +290,7 @@ export class AppController extends EventEmitter {
     this.#history = opts.history;
     this.#platform = opts.platform;
     this.#engineOptions = opts.engineOptions ?? {};
+    this.#bt = opts.bt;
     this.#timing = opts.timing ?? {};
   }
 
@@ -321,6 +329,8 @@ export class AppController extends EventEmitter {
       autoResume: true,
       clientDiscovery: true,
       ...(s.discovery ? {} : { discovery: false as const }),
+      // Only the serving engine owns the radio; Bluetooth off leaves it alone entirely.
+      ...(serve && this.#bt && s.bluetooth ? { bt: { platform: this.#bt, policy: linkPolicy(s) } } : {}),
       ...this.#engineOptions,
     };
   }
@@ -1401,6 +1411,7 @@ export class AppController extends EventEmitter {
     }
     const hadError = this.#error !== undefined;
     this.#settings.set(patch);
+    this.#engine?.setLinkPolicy(linkPolicy(this.#settings.get()));
     if (restart) {
       let failure: unknown;
       try {

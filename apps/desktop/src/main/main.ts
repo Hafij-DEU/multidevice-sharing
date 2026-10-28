@@ -301,11 +301,12 @@ const sendOpts = (x: unknown): { burn?: boolean; print?: boolean; at?: number } 
   if (o.at !== undefined && (typeof o.at !== 'number' || !Number.isFinite(o.at))) throw new ArgError('invalid time');
   return { ...(o.burn === true ? { burn: true } : {}), ...(o.print === true ? { print: true } : {}), ...(typeof o.at === 'number' ? { at: o.at } : {}) };
 };
-const SETTING_TYPES: Record<keyof Settings, 'string' | 'number' | 'boolean' | 'string[]' | null> = {
+const SETTING_TYPES: Record<keyof Settings, 'string' | 'number' | 'boolean' | 'string[]' | 'links' | null> = {
   alias: 'string', inbox: 'string', port: 'number', discovery: 'boolean', autostart: 'boolean',
   startHidden: 'boolean', closeToTray: 'boolean', clipboardReceive: 'boolean', clipboardSync: 'boolean', notifications: 'boolean',
   guestMinutes: 'number', remoteFrom: 'string[]', openLinks: 'boolean', phoneNotifications: 'boolean', notifyTo: null,
   printFromDevices: 'boolean', sortInbox: 'boolean', sendReceipts: 'boolean', cleanupDays: 'number',
+  bluetooth: 'boolean', allBluetooth: 'boolean', deviceLinks: 'links', tetherNoData: 'boolean',
 };
 const settingsPatch = (x: unknown): Partial<Settings> => {
   if (typeof x !== 'object' || x === null || Array.isArray(x)) throw new ArgError('invalid argument');
@@ -314,6 +315,11 @@ const settingsPatch = (x: unknown): Partial<Settings> => {
     const t = SETTING_TYPES[k as keyof Settings];
     if (t === 'string[]') {
       out[k] = strs(v, 64);
+      continue;
+    }
+    if (t === 'links') {
+      if (typeof v !== 'object' || v === null || Array.isArray(v)) throw new ArgError(`invalid setting ${k}`);
+      out[k] = { ...v }; // ids and modes are checked by the settings store
       continue;
     }
     if (t === undefined || t === null || typeof v !== t) throw new ArgError(`invalid setting ${k}`);
