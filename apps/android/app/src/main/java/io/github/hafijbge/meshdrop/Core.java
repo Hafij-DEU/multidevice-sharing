@@ -36,6 +36,8 @@ public final class Core {
             c.multicastHooks = platform.multicastHooks();
             c.resolver = platform.resolver();
             c.activity = platform.transferLocks();
+            if (s.bluetooth) c.bt = new AndroidBt(app); // M14: links to paired devices without Wi-Fi
+            c.btPolicy = AppController.linkPolicy(s);
             c.syncFolders = folder -> folder.startsWith("content://")
                     ? new SafSyncFolder(app, android.net.Uri.parse(folder))
                     : new io.github.hafijbge.meshdrop.engine.sync.PathSyncFolder(java.nio.file.Paths.get(folder));

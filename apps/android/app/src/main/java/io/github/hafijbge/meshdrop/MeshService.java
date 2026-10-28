@@ -28,6 +28,7 @@ public final class MeshService extends Service {
     private ConnectivityManager.NetworkCallback netCallback;
     /** Screen off: background work slows down (sync, backup, re-probing); receiving stays as it is. */
     private android.content.BroadcastReceiver screen;
+    private android.content.BroadcastReceiver btState;
 
     static void start(Context ctx) {
         ctx.startForegroundService(new Intent(ctx, MeshService.class));
@@ -90,6 +91,15 @@ public final class MeshService extends Service {
             }
         };
         cm.registerNetworkCallback(new NetworkRequest.Builder().addTransportType(NetworkCapabilities.TRANSPORT_WIFI).build(), netCallback);
+        btState = new android.content.BroadcastReceiver() {
+            @Override
+            public void onReceive(Context c, Intent i) {
+                int st = i.getIntExtra(android.bluetooth.BluetoothAdapter.EXTRA_STATE, -1);
+                if (st != android.bluetooth.BluetoothAdapter.STATE_ON && st != android.bluetooth.BluetoothAdapter.STATE_OFF) return;
+                if (core.started()) new Thread(core.controller::bluetoothChanged, "meshdrop-bt-state").start();
+            }
+        };
+        registerReceiver(btState, new android.content.IntentFilter(android.bluetooth.BluetoothAdapter.ACTION_STATE_CHANGED));
         screen = new android.content.BroadcastReceiver() {
             @Override
             public void onReceive(Context c, Intent i) {
@@ -146,6 +156,7 @@ public final class MeshService extends Service {
         live = null;
         if (netCallback != null) getSystemService(ConnectivityManager.class).unregisterNetworkCallback(netCallback);
         if (screen != null) unregisterReceiver(screen);
+        if (btState != null) unregisterReceiver(btState);
         super.onDestroy();
     }
 

@@ -249,6 +249,17 @@ public final class AppController {
         if (x != null) x.restartNetworking();
     }
 
+    /** The current settings (read-only copy). */
+    public Settings settingsSnapshot() {
+        return settings.get();
+    }
+
+    /** Bluetooth turned on or off, or the app was allowed to use it. */
+    public void bluetoothChanged() {
+        Engine x = engine;
+        if (x != null) x.restartBluetooth();
+    }
+
     // ---- state ----------------------------------------------------------------------------------
 
     public Map<String, Object> state() {

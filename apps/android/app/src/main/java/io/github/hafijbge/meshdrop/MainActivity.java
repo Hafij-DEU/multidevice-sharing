@@ -31,9 +31,16 @@ public final class MainActivity extends Activity {
             }
         }, "meshdrop-start").start();
         MeshService.start(this);
+        java.util.List<String> ask = new java.util.ArrayList<>();
         if (android.os.Build.VERSION.SDK_INT >= 33 && checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
-            requestPermissions(new String[] {android.Manifest.permission.POST_NOTIFICATIONS}, 7);
+            ask.add(android.Manifest.permission.POST_NOTIFICATIONS);
         }
+        // M14: Bluetooth links (No Wi-Fi), only while that setting is on
+        if (android.os.Build.VERSION.SDK_INT >= 31 && core.controller.settingsSnapshot().bluetooth
+                && checkSelfPermission(android.Manifest.permission.BLUETOOTH_CONNECT) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            ask.add(android.Manifest.permission.BLUETOOTH_CONNECT);
+        }
+        if (!ask.isEmpty()) requestPermissions(ask.toArray(new String[0]), 7);
         pickers = new Pickers(this, core.platform);
         bridge = new Bridge(this, core, pickers);
         web = WebUi.create(this, bridge, null);
@@ -139,6 +146,17 @@ public final class MainActivity extends Activity {
     @Override
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         if (!pickers.onResult(requestCode, resultCode, data)) super.onActivityResult(requestCode, resultCode, data);
+    }
+
+    @Override
+    public void onRequestPermissionsResult(int code, String[] perms, int[] results) {
+        super.onRequestPermissionsResult(code, perms, results);
+        for (int i = 0; i < perms.length && i < results.length; i++) {
+            if (android.Manifest.permission.BLUETOOTH_CONNECT.equals(perms[i]) && results[i] == android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                Core core = ((MeshApp) getApplication()).core();
+                if (core.started()) new Thread(core.controller::bluetoothChanged, "meshdrop-bt-allowed").start();
+            }
+        }
     }
 
     @Override

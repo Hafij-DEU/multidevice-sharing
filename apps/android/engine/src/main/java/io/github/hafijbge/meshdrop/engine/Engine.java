@@ -1486,6 +1486,14 @@ public final class Engine {
         return m;
     }
 
+    /** Bluetooth turned on or off, or the app may now use it: drops the links and starts them again. */
+    public synchronized void restartBluetooth() {
+        io.github.hafijbge.meshdrop.engine.bt.BtLinks bl = btLinks;
+        btLinks = null;
+        if (bl != null) bl.stop();
+        if (server != null) startBt();
+    }
+
     /** The link policy (No Wi-Fi settings): Bluetooth on/off, everything over Bluetooth, per-device mode. */
     public void setLinkPolicy(LinkPolicy p) {
         btPolicy = p;
