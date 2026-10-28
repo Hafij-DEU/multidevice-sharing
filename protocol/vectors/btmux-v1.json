@@ -1,0 +1,86 @@
+{
+  "description": [
+    "MeshDrop Bluetooth link multiplexer (btmux v1) wire vectors. Both engines must encode each frame byte-for-byte and decode each back.",
+    "Frame: u8 type | u32 stream (big-endian) | u32 len (big-endian) | payload[len]; len <= 16384.",
+    "Types: 0 HELLO, 1 OPEN (u8 flags, bit0 = priority), 2 DATA, 3 END (half-close), 4 CREDIT (u32), 5 PING, 6 PONG, 7 RESET.",
+    "concatHex is every frame in order; a reader fed it in any split must yield the same frames.",
+    "invalid frames must be rejected by the reader (the link is then closed)."
+  ],
+  "maxPayload": 16384,
+  "frames": [
+    {
+      "name": "hello",
+      "type": 0,
+      "stream": 0,
+      "payloadHex": "7b2276223a312c226964223a2261616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161227d",
+      "frameHex": "00000000000000004f7b2276223a312c226964223a2261616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161227d"
+    },
+    {
+      "name": "open-normal",
+      "type": 1,
+      "stream": 1,
+      "payloadHex": "00",
+      "frameHex": "01000000010000000100"
+    },
+    {
+      "name": "open-priority",
+      "type": 1,
+      "stream": 2,
+      "payloadHex": "01",
+      "frameHex": "01000000020000000101"
+    },
+    {
+      "name": "data",
+      "type": 2,
+      "stream": 1,
+      "payloadHex": "474554202f6d6573682f76312f696e666f20485454502f312e310d0a",
+      "frameHex": "02000000010000001c474554202f6d6573682f76312f696e666f20485454502f312e310d0a"
+    },
+    {
+      "name": "end",
+      "type": 3,
+      "stream": 1,
+      "payloadHex": "",
+      "frameHex": "030000000100000000"
+    },
+    {
+      "name": "credit",
+      "type": 4,
+      "stream": 1,
+      "payloadHex": "00040000",
+      "frameHex": "04000000010000000400040000"
+    },
+    {
+      "name": "ping",
+      "type": 5,
+      "stream": 0,
+      "payloadHex": "",
+      "frameHex": "050000000000000000"
+    },
+    {
+      "name": "pong",
+      "type": 6,
+      "stream": 0,
+      "payloadHex": "",
+      "frameHex": "060000000000000000"
+    },
+    {
+      "name": "reset",
+      "type": 7,
+      "stream": 4294967295,
+      "payloadHex": "",
+      "frameHex": "07ffffffff00000000"
+    }
+  ],
+  "concatHex": "00000000000000004f7b2276223a312c226964223a2261616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161227d010000000100000001000100000002000000010102000000010000001c474554202f6d6573682f76312f696e666f20485454502f312e310d0a0300000001000000000400000001000000040004000005000000000000000006000000000000000007ffffffff00000000",
+  "invalid": [
+    {
+      "name": "unknown-type",
+      "frameHex": "080000000000000000"
+    },
+    {
+      "name": "oversized-len",
+      "frameHex": "020000000100004001"
+    }
+  ]
+}

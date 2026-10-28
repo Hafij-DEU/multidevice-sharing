@@ -691,11 +691,47 @@ What the M4b Java engine implements of M2 (the phone is a **member only**):
 - **Invite links**: `meshdrop://join?…` is an intent filter; opening one only pre-fills the join box, the
   user confirms. There is no in-app QR scanner.
 
+## Bluetooth links (btmux v1, M14)
+
+When two trusted devices share no network, they can talk over one Bluetooth RFCOMM connection (service
+UUID `6d657368-6472-6f70-0001-000000000001`, secure/bonded sockets only). The link carries a byte-stream
+multiplexer. Each side opens two local TCP listeners on `127.0.0.1:<ephemeral>` per link (normal and
+priority). A connection to either becomes a mux stream; the far side connects that stream to its own
+mTLS mesh port and nothing else (never the guest, LocalSend, hub ingress or handoff ports). Everything
+inside the stream is the normal pinned-mTLS mesh protocol, so trust is decided exactly as on the LAN.
+
+Frame (big-endian): `u8 type | u32 stream | u32 len | payload[len]`, `len <= 16384`. A reader closes the
+link on an unknown type or an oversized frame.
+
+| type | name | payload |
+|---|---|---|
+| 0 | HELLO | UTF-8 JSON `{"v":1,"id":"<deviceId>"}`; each side sends it once, as its first frame |
+| 1 | OPEN | `u8 flags` (bit0 = priority) |
+| 2 | DATA | bytes |
+| 3 | END | empty; half-close: the sender sends no more DATA on this stream |
+| 4 | CREDIT | `u32` bytes the receiver has written to its local socket |
+| 5 | PING | empty; answered with PONG |
+| 6 | PONG | empty |
+| 7 | RESET | empty; abort the stream both ways at once (no RESET is sent back) |
+
+- Stream ids: the side that dialled the RFCOMM link uses odd ids, the other side even ids, starting at 1
+  and 2. An OPEN with the wrong parity, id 0, or an id in use closes the link. Frames for an unknown
+  stream are ignored.
+- A stream is gone when both sides have sent END, or after a RESET.
+- Flow control: a sender may have at most 256 KiB of DATA per stream not yet returned by CREDIT.
+- Writer order: control frames (HELLO, OPEN, CREDIT, RESET, PING, PONG) first, then priority streams,
+  then the other streams round-robin. DATA frames carry at most 4 KiB so live sound interleaves with a
+  running transfer. END follows the stream's queued DATA.
+- Keepalive: PING every 15 s; a link with nothing received for 45 s is closed.
+- HELLO `id` must be 64 lowercase hex characters. It is an unauthenticated claim, used only to map the
+  Bluetooth address to a device; the link manager closes a link whose id is not a trusted device.
+- When two links to the same device exist, the one dialled by the device with the lower deviceId stays.
+
 ## Test vectors
 
 Frozen files in `protocol/vectors/`. A conforming engine must reproduce `hpke-auth-p256.json`,
 `chunk-v1.json`, `canonical-v1.json`, `envelope-v1.json` (except the randomized signatures, which must verify),
-`membership-v1.json`, `invite-v1.json` and `recovery-v1.json` byte for byte. `x509-v1.json` pins only the certificate profile the Node engine emits (a
+`membership-v1.json`, `invite-v1.json`, `recovery-v1.json` and `btmux-v1.json` byte for byte. `x509-v1.json` pins only the certificate profile the Node engine emits (a
 regression test for this implementation); other engines need not emit it, only accept it (see Identity).
 
 | File | Pins | Checked by |
@@ -707,6 +743,7 @@ regression test for this implementation); other engines need not emit it, only a
 | `envelope-v1.json` | A relay envelope: fixed sender key, canonical unsigned header, frame bytes, a verifying signature | `packages/core/test/envelope.test.ts` |
 | `invite-v1.json` | An invite URI and the join proof for fixed values | `packages/core/test/invite.test.ts` |
 | `recovery-v1.json` | A recovery file with fixed salt/nonce and production scrypt parameters, its NFC and NFD passphrases and plaintext | `packages/core/test/recovery.test.ts` |
+| `btmux-v1.json` | Bluetooth link frames: each frame type encoded byte for byte, their concatenation (decoded in any split) and two frames a reader must reject | `packages/core/test/btmux.test.ts`, `BtLinkTest.java` |
 | `x509-v1.json` | The Node engine's certificate profile: the TBSCertificate bytes for a fixed key, serial and CN (the ECDSA signature is randomized, so only the TBS is pinned). Informative for other engines | `packages/core/test/identity.test.ts` |
 
 Provenance of `hpke-auth-p256.json`: the two entries with `mode == 2 && kem_id == 16 && kdf_id == 1 &&

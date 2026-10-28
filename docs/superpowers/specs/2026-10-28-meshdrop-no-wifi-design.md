@@ -62,9 +62,10 @@ Frame (big-endian): `u8 type | u32 stream | u32 len | payload[len]`, len <= 1638
 | 0 | HELLO | JSON `{"v":1,"id":"<deviceId>"}` (each side once, first frame) |
 | 1 | OPEN | `u8 flags` (bit0 = priority) |
 | 2 | DATA | bytes |
-| 3 | CLOSE | empty (stream done both ways) |
+| 3 | END | empty (half-close: no more data from the sender; the stream is gone once both sides sent END) |
 | 4 | CREDIT | `u32` bytes the receiver consumed |
 | 5 | PING / 6 PONG | empty |
+| 7 | RESET | empty (abort the stream at once, both ways) |
 
 - Stream ids: the side that dialled the RFCOMM link uses odd ids, the other even ids.
 - Flow control: each stream may have 256 KiB unacknowledged; the receiver returns CREDIT as its local
