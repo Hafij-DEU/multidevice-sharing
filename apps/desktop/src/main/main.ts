@@ -21,6 +21,7 @@ import { setupPhones } from './phonesetup.ts';
 import { onReplaced } from './selfupdate.ts';
 import { startHandoffServer } from './handoff.ts';
 import { SettingsStore, defaultSettings } from './settings.ts';
+import { bluezPlatform } from './bluetooth.ts';
 
 const execFileP = promisify(execFile);
 const TEST = process.env.MESHDROP_TEST === '1';
@@ -514,7 +515,9 @@ async function startController(): Promise<void> {
   // MESHDROP_INGRESS_PORT moves the hub's tunnel ingress off 53319 (e2e: 0, next to a real hub).
   const ingress = process.env.MESHDROP_INGRESS_PORT !== undefined ? Number(process.env.MESHDROP_INGRESS_PORT) : undefined;
   if (ingress !== undefined && Number.isInteger(ingress) && ingress >= 0 && ingress <= 65535) engineOptions.hub = { ingressPort: ingress };
-  controller = new AppController({ home: HOME, settings: settings!, history, platform, engineOptions });
+  // M14: Bluetooth links through BlueZ (Linux; e2e tests run without a radio)
+  const bt = WIN || TEST ? undefined : bluezPlatform({ script: app.isPackaged ? join(process.resourcesPath, 'meshdrop-bt.py') : join(__dirname, '../../build/meshdrop-bt.py') });
+  controller = new AppController({ home: HOME, settings: settings!, history, platform, engineOptions, ...(bt ? { bt } : {}) });
   if (TEST) {
     // Test-only hooks, reachable from Playwright's app.evaluate (main process), never from the page.
     (globalThis as { __meshdropTest?: unknown }).__meshdropTest = {

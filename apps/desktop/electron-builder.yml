@@ -30,6 +30,8 @@ linux:
       to: meshdrop
     - from: build/meshdrop-input.py
       to: meshdrop-input.py
+    - from: build/meshdrop-bt.py
+      to: meshdrop-bt.py
   category: Network;FileTransfer
   executableName: meshdrop-desktop
   icon: build/icons
@@ -80,7 +82,7 @@ deb:
   afterInstall: build/after-install.tpl
   afterRemove: build/after-remove.tpl
   # optional helpers, installed with MeshDrop by default: adb (Set up a phone), python3-gi (remote
-  # control through the desktop portal), PipeWire and GStreamer tools (sound, camera, microphone), lp
+  # control through the desktop portal, Bluetooth links through BlueZ), PipeWire and GStreamer tools (sound, camera, microphone), lp
   recommends:
     - libappindicator3-1
     - adb
