@@ -88,6 +88,8 @@ export function connectPinned(
       rejectUnauthorized: false,
       checkServerIdentity: () => undefined,
     });
+    // live sound and camera frames go out as written, not held back to fill a packet
+    sock.setNoDelay(true);
 
     let settled = false;
     const cleanup = () => {

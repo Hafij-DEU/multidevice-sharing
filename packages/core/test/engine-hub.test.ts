@@ -2,12 +2,13 @@ import { execFile } from 'node:child_process';
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { afterAll, describe, expect, it } from 'vitest';
 import { Engine, type EngineEvent, type EngineOptions } from '../src/engine.ts';
 
 const run = promisify(execFile);
-const CLI = new URL('../src/cli.ts', import.meta.url).pathname;
+const CLI = fileURLToPath(new URL('../src/cli.ts', import.meta.url));
 const tmps: string[] = [];
 function tmpDir(): string {
   const d = mkdtempSync(join(tmpdir(), 'md-enghub-'));

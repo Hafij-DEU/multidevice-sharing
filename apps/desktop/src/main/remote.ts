@@ -203,10 +203,10 @@ export function mediaPlatform(): Required<Pick<Platform, 'captureAudio' | 'camer
   const label = (s: string) => s.replace(/[^\p{L}\p{N} ._-]/gu, '').slice(0, 40) || 'Phone';
   return {
     // what the speakers play (the default sink's monitor)
-    captureAudio: () => mediaPipe('pw-record', ['--raw', '-P', '{ stream.capture.sink=true node.name=meshdrop-cast }', '--format', 's16', '--rate', '48000', '--channels', '2', '-'], 'out'),
+    captureAudio: () => mediaPipe('pw-record', ['--raw', '--latency', '20ms', '-P', '{ stream.capture.sink=true node.name=meshdrop-cast }', '--format', 's16', '--rate', '48000', '--channels', '2', '-'], 'out'),
     // another device's sound (s16le 48 kHz stereo) -> this PC's speakers
     speakerSink: (name) =>
-      mediaPipe('pw-cat', ['--playback', '--raw', '--format', 's16', '--rate', '48000', '--channels', '2', '-P', `{ node.name=meshdrop-sound media.name="Sound from ${label(name)}" }`, '-'], 'in'),
+      mediaPipe('pw-cat', ['--playback', '--raw', '--latency', '20ms', '--format', 's16', '--rate', '48000', '--channels', '2', '-P', `{ node.name=meshdrop-sound media.name="Sound from ${label(name)}" }`, '-'], 'in'),
     // back-to-back JPEG frames -> a PipeWire video source that browsers and call apps can pick
     cameraSink: (name) =>
       mediaPipe('gst-launch-1.0', [
@@ -220,7 +220,7 @@ export function mediaPlatform(): Required<Pick<Platform, 'captureAudio' | 'camer
         '--capture-props', 'media.class=Audio/Sink node.name=meshdrop-mic-in node.description="MeshDrop mic input" audio.position=[MONO]',
         '--playback-props', `media.class=Audio/Source node.name=meshdrop-mic node.description="${label(name)} microphone (MeshDrop)" audio.position=[MONO]`,
       ], { stdio: 'ignore' });
-      const cat = mediaPipe('pw-cat', ['--playback', '--raw', '--target', 'meshdrop-mic-in', '--format', 's16', '--rate', '48000', '--channels', '1', '-'], 'in');
+      const cat = mediaPipe('pw-cat', ['--playback', '--raw', '--latency', '20ms', '--target', 'meshdrop-mic-in', '--format', 's16', '--rate', '48000', '--channels', '1', '-'], 'in');
       return {
         in: cat.in!,
         stop: () => {

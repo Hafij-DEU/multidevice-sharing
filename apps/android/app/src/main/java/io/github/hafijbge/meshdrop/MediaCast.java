@@ -42,6 +42,8 @@ import java.util.function.BooleanSupplier;
  */
 final class MediaCast {
     static final int RATE = 48_000;
+    /** Most sound a player keeps queued (120 ms): more is a backlog from a network stall. */
+    private static final int LIVE_FRAMES = RATE * 120 / 1000;
     private static final int WIDTH = 1280;
     private static final int HEIGHT = 720;
     private static final int JPEG_QUALITY = 70;
@@ -142,19 +144,37 @@ final class MediaCast {
         AudioTrack t = new AudioTrack.Builder()
                 .setAudioAttributes(new AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_MEDIA).setContentType(AudioAttributes.CONTENT_TYPE_MUSIC).build())
                 .setAudioFormat(new AudioFormat.Builder().setSampleRate(RATE).setEncoding(AudioFormat.ENCODING_PCM_16BIT).setChannelMask(AudioFormat.CHANNEL_OUT_STEREO).build())
-                .setBufferSizeInBytes(Math.max(min, RATE * 4 / 5)) // 200 ms
+                .setBufferSizeInBytes(Math.max(min, RATE * 4 * 150 / 1000)) // 150 ms: a little over LIVE_FRAMES
                 .setTransferMode(AudioTrack.MODE_STREAM)
                 .build();
         try {
             t.play();
             byte[] buf = new byte[4096];
             int carry = 0;
+            // live: once playing, sound queued beyond LIVE_FRAMES (a burst after a Wi-Fi stall) is dropped,
+            // or the stall's delay would last for the rest of the stream
+            int written = 0, lastHead = 0;
+            long headMoved = -1000;
             while (!stop.getAsBoolean()) {
                 int n = in.read(buf, carry, buf.length - carry);
                 if (n < 0) break;
                 n += carry;
                 int whole = n - n % 4; // whole stereo frames only
-                if (whole > 0) t.write(buf, 0, whole);
+                int from = 0;
+                int head = t.getPlaybackHeadPosition();
+                long now = android.os.SystemClock.uptimeMillis();
+                if (head != lastHead) {
+                    lastHead = head;
+                    headMoved = now;
+                }
+                if (now - headMoved < 300) { // playing (a starting or refilling track must fill up first)
+                    int room = Math.max(0, LIVE_FRAMES - (written - head)) * 4;
+                    if (whole > room) from = whole - room;
+                }
+                if (whole > from) {
+                    int w = t.write(buf, from, whole - from);
+                    if (w > 0) written += w / 4;
+                }
                 carry = n - whole;
                 if (carry > 0) System.arraycopy(buf, whole, buf, 0, carry);
             }

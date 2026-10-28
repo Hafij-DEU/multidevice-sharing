@@ -1430,6 +1430,7 @@ public final class Engine {
         if (t == null || t.host == null) throw new IOException("That device is not on this network: live sound and camera work on the same Wi-Fi.");
         javax.net.ssl.SSLSocket s = Tls.connect(Tls.pinnedClient(identity, deviceId), t.host, t.port, 5_000);
         s.setSoTimeout(30_000);
+        s.setTcpNoDelay(true); // live sound and frames go out as written
         return s;
     }
 

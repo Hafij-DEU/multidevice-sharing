@@ -19,6 +19,7 @@ import { cleanHandoff, handoffUrl, type HandoffState } from '@meshdrop/core/src/
 import type { AppState, StreamKind, DeviceStatus, ReceivedRecord, DeviceView, PhoneNote, RemoteEvent, ScheduledView, SendOptions, GuestView, LinkCreateInput, LinkView, ReachInput, ReachView, SendItemInput, Settings, SyncView, TransferView } from '../shared/api.ts';
 import type { HistoryStore } from './history.ts';
 import { SettingsError, type SettingsStore } from './settings.ts';
+import { liveAudio } from './liveaudio.ts';
 
 export interface Platform {
   notify(title: string, body: string, onClick?: () => void): void;
@@ -1225,7 +1226,9 @@ export class AppController extends EventEmitter {
       s.res.writeHead(200, { 'content-type': 'audio/L16; rate=48000; channels=2', 'cache-control': 'no-store' });
       pipe.out!.pipe(s.res);
     } else {
-      s.req.pipe(pipe.in! as NodeJS.WritableStream);
+      // sound and microphone stay live: audio that piled up behind a Wi-Fi stall is dropped
+      const live = kind === 'sound' ? liveAudio(192_000, 4) : kind === 'mic' ? liveAudio(96_000, 2) : null;
+      (live ? s.req.pipe(live) : s.req).pipe(pipe.in! as NodeJS.WritableStream);
       s.req.on('end', () => {
         if (!s.res.headersSent) s.res.writeHead(200, { 'content-type': 'application/json' });
         s.res.end('{"ok":true}');
