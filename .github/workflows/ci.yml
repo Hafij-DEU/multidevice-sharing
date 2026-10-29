@@ -17,7 +17,7 @@ jobs:
     name: Node engine + desktop
     runs-on: ubuntu-24.04
     timeout-minutes: 30
-    strategy: { fail-fast: false, matrix: { n: [1, 2] } }
+    strategy: { fail-fast: false, matrix: { ev: ['42.11.18', '43.8.4', '41.10.7'] } }
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -26,6 +26,7 @@ jobs:
           node-version: 24
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @meshdrop/desktop add -D electron@${{ matrix.ev }} && pnpm --filter @meshdrop/desktop exec electron --version
       - name: Desktop e2e (Electron under Xvfb)
         env:
           # Ubuntu 24.04 runners forbid the unprivileged user namespaces Chromium's sandbox needs.
@@ -39,7 +40,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: diag-${{ matrix.n }}
+          name: diag-${{ matrix.ev }}
           path: |
             apps/desktop/test-results
             /tmp/md-diag-*.log
