@@ -17,7 +17,7 @@ jobs:
     name: Node engine + desktop
     runs-on: ubuntu-24.04
     timeout-minutes: 30
-    strategy: { fail-fast: false, matrix: { n: [1, 2] } }
+    strategy: { fail-fast: false, matrix: { n: [1, 2, 3, 4] } }
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -30,6 +30,7 @@ jobs:
         env:
           # Ubuntu 24.04 runners forbid the unprivileged user namespaces Chromium's sandbox needs.
           ELECTRON_DISABLE_SANDBOX: '1'
+          MD_PROF: ${{ matrix.n % 2 }}
         run: |
           pnpm --filter @meshdrop/desktop build
           (while true; do { date -u +%T.%3N; head -1 /proc/loadavg; free -m | sed -n 2,3p; ps -eo pid,ppid,pcpu,rss,etimes,args --sort=-pcpu | head -12 | cut -c1-220; echo; } >> /tmp/md-ps.log; sleep 2; done) &

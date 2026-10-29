@@ -37,6 +37,7 @@ if (TEST) {
   process.on('unhandledRejection', (e) => w('unhandled', [e]));
   let last = performance.now();
   setInterval(() => { const now = performance.now(); if (now - last > 700) w('lag', [`${Math.round(now - last - 200)} ms`]); last = now; }, 200).unref();
+  if (process.env.MD_PROF === '1') {
   const insp = require('node:inspector') as typeof import('node:inspector');
   const ses = new insp.Session();
   ses.connect();
@@ -48,6 +49,7 @@ if (TEST) {
       ses.post('Profiler.start');
     });
   }, 20_000).unref();
+  }
 }
 const WIN = process.platform === 'win32';
 const APP_ID = 'io.github.hafijbge.meshdrop';
