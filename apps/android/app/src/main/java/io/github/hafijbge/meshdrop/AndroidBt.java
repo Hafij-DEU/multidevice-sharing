@@ -57,6 +57,7 @@ final class AndroidBt implements BtPlatform {
     }
 
     /** Phones and computers, or anything already advertising MeshDrop: never poke headphones or watches. */
+    @SuppressLint("MissingPermission") // only called inside bonded()'s catch (SecurityException)
     private static boolean candidate(BluetoothDevice d) {
         ParcelUuid[] uuids = d.getUuids();
         if (uuids != null) {
