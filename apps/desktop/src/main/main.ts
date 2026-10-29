@@ -22,6 +22,7 @@ import { onReplaced } from './selfupdate.ts';
 import { startHandoffServer } from './handoff.ts';
 import { SettingsStore, defaultSettings } from './settings.ts';
 import { bluezPlatform } from './bluetooth.ts';
+import { NetMan, run as nmRun } from './netman.ts';
 
 const execFileP = promisify(execFile);
 const TEST = process.env.MESHDROP_TEST === '1';
@@ -441,6 +442,10 @@ function wireIpc(): void {
     if (kind !== 'sound') throw new ArgError('unknown stream');
     return ctl().streamStart(str(id, 64), 'sound');
   });
+  handle('hotspotStart', (_e, leave) => ctl().hotspotStart(leave === true));
+  handle('hotspotJoin', (_e, ssid, psk, hosts, leave) =>
+    ctl().hotspotJoin(str(ssid, 64), str(psk, 64), Array.isArray(hosts) ? hosts.slice(0, 4).map((h) => str(h, 64)) : [], leave === true));
+  handle('hotspotStop', () => ctl().hotspotStop());
   handle('noteDismiss', (_e, k) => ctl().noteDismiss(k === undefined ? undefined : str(k, 300)));
   handle('addByAddress', (_e, h, p, a, id) => ctl().addByAddress(str(h, 255), int(p), str(a, 64), id === undefined ? undefined : str(id, 128)));
   handle('scanSubnet', (_e) => ctl().scanSubnet());
@@ -517,7 +522,9 @@ async function startController(): Promise<void> {
   if (ingress !== undefined && Number.isInteger(ingress) && ingress >= 0 && ingress <= 65535) engineOptions.hub = { ingressPort: ingress };
   // M14: Bluetooth links through BlueZ (Linux; e2e tests run without a radio)
   const bt = WIN || TEST ? undefined : bluezPlatform({ script: app.isPackaged ? join(process.resourcesPath, 'meshdrop-bt.py') : join(__dirname, '../../build/meshdrop-bt.py') });
-  controller = new AppController({ home: HOME, settings: settings!, history, platform, engineOptions, ...(bt ? { bt } : {}) });
+  // M14: hotspots and the tether guard through NetworkManager (Linux desktops)
+  const net = process.platform === 'linux' && !TEST ? (onChange: () => void) => new NetMan(nmRun, onChange) : undefined;
+  controller = new AppController({ home: HOME, settings: settings!, history, platform, engineOptions, ...(bt ? { bt } : {}), ...(net ? { net } : {}) });
   if (TEST) {
     // Test-only hooks, reachable from Playwright's app.evaluate (main process), never from the page.
     (globalThis as { __meshdropTest?: unknown }).__meshdropTest = {

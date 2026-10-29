@@ -11,6 +11,7 @@ import { PassThrough } from 'node:stream';
 import { AppController, toPrims, type InputPrim, type MediaPipe, type Platform } from '../src/main/controller.ts';
 import { HistoryStore } from '../src/main/history.ts';
 import { SettingsStore, defaultSettings } from '../src/main/settings.ts';
+import { NetMan, type Run } from '../src/main/netman.ts';
 import type { AppState, Settings } from '../src/shared/api.ts';
 
 const tmps: string[] = [];
@@ -101,7 +102,7 @@ function fakePlatform(): FakePlatform {
   return p;
 }
 
-async function make(alias: string, over: Partial<Settings> = {}, home = tmpDir()): Promise<{ c: AppController; p: FakePlatform; home: string; inbox: string }> {
+async function make(alias: string, over: Partial<Settings> = {}, home = tmpDir(), net?: (onChange: () => void) => NetMan): Promise<{ c: AppController; p: FakePlatform; home: string; inbox: string }> {
   const inbox = join(home, 'inbox');
   const settings = new SettingsStore(join(home, 'desktop-settings.json'), defaultSettings({ alias, inbox, port: 0, discovery: false, ...over }));
   const p = fakePlatform();
@@ -112,6 +113,7 @@ async function make(alias: string, over: Partial<Settings> = {}, home = tmpDir()
     platform: p,
     engineOptions: { hub: { ingressPort: 0 }, hubBackoffMs: [50, 100], allowLoopbackHubUrls: true, guest: { port: 0 } },
     timing: { burnAfterOpenMs: 300, tickMs: 100, scheduleMinMs: 200 },
+    ...(net ? { net } : {}),
   });
   ctls.push(c);
   await c.start();
@@ -534,6 +536,45 @@ describe('AppController internet access', () => {
 
     expect(await A.c.appSend(bId, { kind: 'status' })).toMatchObject({ status: 200, body: { battery: { level: 42 } } });
     expect(A.c.state().deviceStatus?.[bId]).toMatchObject({ battery: { level: 42, charging: true } });
+  });
+
+  it('M14: a shared hotspot is joined when the Wi-Fi is free, offered when not; hosting asks before leaving a network', async () => {
+    let network = '';
+    const calls: string[][] = [];
+    const nmcli: Run = async (_c, args) => {
+      calls.push(args);
+      if (args[0] !== '-t') return '';
+      return `GENERAL.DEVICE:wlan0\nGENERAL.TYPE:wifi\nGENERAL.STATE:${network ? 100 : 30} (x)\nGENERAL.CONNECTION:${network || '--'}\nGENERAL.METERED:no\nGENERAL.DRIVER:iwlwifi\n`;
+    };
+    const A = await make('alpha');
+    const B = await make('beta', {}, tmpDir(), (onChange) => new NetMan(nmcli, onChange, 'me'));
+    await pair(A.c, B.c);
+    const bId = B.c.state().self.deviceId;
+    expect(A.c.state().noWifi).toBeUndefined(); // no NetworkManager there
+    expect(B.c.state().noWifi).toEqual({ guarded: [] });
+
+    expect(await A.c.appSend(bId, { kind: 'hotspot', ssid: 'PhoneAP', psk: 'short' })).toMatchObject({ status: 400 });
+    expect(await A.c.appSend(bId, { kind: 'hotspot', ssid: 'PhoneAP', psk: 'secret123', hosts: ['127.0.0.1:1', 'evil'] })).toMatchObject({ status: 200 });
+    await until(() => B.c.state().noWifi?.hotspot?.role === 'joined');
+    expect(B.c.state().noWifi?.hotspot).toEqual({ role: 'joined', ssid: 'PhoneAP' });
+    expect(calls.some((a) => a[0] === 'connection' && a[1] === 'up')).toBe(true);
+    expect(calls.flat()).not.toContain('secret123');
+
+    await B.c.hotspotStop();
+    expect(calls.at(-1)).toEqual(['connection', 'delete', 'id', 'MeshDrop join']);
+    network = 'Home';
+    await A.c.appSend(bId, { kind: 'hotspot', ssid: 'PhoneAP', psk: 'secret123', hosts: [] });
+    await until(() => B.c.state().noWifi?.offer?.ssid === 'PhoneAP');
+    expect(B.c.state().noWifi?.hotspot).toBeUndefined(); // the Wi-Fi stays on Home
+    await expect(B.c.hotspotJoin('PhoneAP', 'secret123')).rejects.toThrow('wifi-busy:Home');
+
+    await expect(B.c.hotspotStart()).rejects.toThrow('wifi-busy:Home');
+    await B.c.hotspotStart(true);
+    const h = B.c.state().noWifi?.hotspot;
+    expect(h).toMatchObject({ role: 'host', ssid: expect.stringMatching(/^MeshDrop-/) });
+    expect(h?.qrSvg).toContain('<svg');
+    expect(B.c.state().noWifi?.offer).toBeUndefined();
+    expect(calls.some((a) => a[2] === 'hotspot' && a.includes(h!.ssid))).toBe(true);
   });
 
   it('toPrims types text and keys with modifiers', () => {

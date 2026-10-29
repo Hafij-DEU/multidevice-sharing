@@ -42,6 +42,7 @@
     'removeOutbox', 'pairProbe', 'addByAddress', 'appSend', 'ringStop', 'noteDismiss', 'handoffPull', 'watchCreate', 'watchResolve', 'watchOpen', 'watchEnd', 'streamStop', 'streamStart', 'scheduleCancel', 'saveBlob', 'scanSubnet', 'hubInit', 'setHubUrls', 'relaysSet', 'createInvite', 'join', 'revoke', 'exportRecovery',
     'importRecovery', 'setSettings', 'openInbox', 'reveal', 'registerClipboardShortcut', 'openConfigFolder', 'takeSharedItems',
     'keepAliveAction', 'guestStart', 'guestEnd', 'guestShare', 'guestUnshare', 'guestAccept', 'guestReject', 'linkCreate', 'linkRevoke', 'openFile', 'thumb', 'unpair', 'syncPut', 'syncRemove', 'syncNow', 'backupSet', 'backupPermission',
+    'hotspotStart', 'hotspotJoin', 'hotspotStop',
   ]) {
     api[m] = call(m);
   }

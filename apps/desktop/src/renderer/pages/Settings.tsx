@@ -114,6 +114,87 @@ function NoWifiHelp({ android }: { android: boolean }) {
   );
 }
 
+/** M14: host a hotspot (devices linked over Bluetooth get its password) or join one, where this device can. */
+function Hotspot({ state, run }: { state: AppState; run: Run }) {
+  const [ssid, setSsid] = useState('');
+  const [psk, setPsk] = useState('');
+  const [ask, setAsk] = useState<{ network: string; go: () => Promise<void> } | null>(null);
+  const nw = state.noWifi;
+  const api = window.meshdrop;
+  if (!nw || !api.hotspotStart || !api.hotspotJoin || !api.hotspotStop) return null;
+  const { hotspotStart, hotspotJoin, hotspotStop } = api;
+  // the Wi-Fi is on a network: say so and go on only when the user agrees
+  const leaving = (go: (leave: boolean) => Promise<void>) => async () => {
+    try {
+      await go(false);
+    } catch (e) {
+      const m = /wifi-busy:(.*)$/.exec(e instanceof Error ? e.message : String(e));
+      if (m) setAsk({ network: m[1]!, go: () => go(true) });
+      else await run(() => Promise.reject(e));
+    }
+  };
+  const h = nw.hotspot;
+  const offer = nw.offer;
+  return (
+    <>
+      {nw.guarded && nw.guarded.length > 0 && <p className="muted">Not using the phone's mobile data on: {nw.guarded.join(', ')}.</p>}
+      {ask && (
+        <div className="sync-folder">
+          <p>This device's Wi-Fi is on "{ask.network}". It leaves that network until the hotspot is stopped.</p>
+          <div className="row">
+            <button className="primary" onClick={() => { const go = ask.go; setAsk(null); void run(go); }}>Continue</button>
+            <button onClick={() => setAsk(null)}>Cancel</button>
+          </div>
+        </div>
+      )}
+      {h?.role === 'host' && (
+        <div className="sync-folder">
+          <p>
+            Hotspot <b>{h.ssid}</b> is on. Password: <b>{h.psk}</b>
+          </p>
+          {h.qrSvg && <img className="qr" src={`data:image/svg+xml;base64,${btoa(h.qrSvg)}`} alt="Wi-Fi QR code" width={180} height={180} />}
+          <p className="muted">Devices linked over Bluetooth got the password and join on their own. Others scan the code or type it.</p>
+          <button onClick={() => void run(hotspotStop)}>Stop hotspot</button>
+        </div>
+      )}
+      {h?.role === 'joined' && (
+        <div className="row space">
+          <span>On hotspot <b>{h.ssid}</b>.</span>
+          <button onClick={() => void run(hotspotStop)}>Leave</button>
+        </div>
+      )}
+      {!h && offer && (
+        <div className="sync-folder">
+          <p>
+            {offer.alias ?? 'A device'} shares hotspot <b>{offer.ssid}</b>.
+          </p>
+          {offer.error && <p className="error-text">{offer.error}</p>}
+          <div className="row">
+            <button className="primary" disabled={offer.joining} onClick={() => void leaving((leave) => hotspotJoin(offer.ssid, offer.psk, offer.hosts, leave))()}>
+              {offer.joining ? 'Joining…' : 'Join'}
+            </button>
+            <button onClick={() => void run(hotspotStop)}>Dismiss</button>
+          </div>
+        </div>
+      )}
+      {!h && (
+        <>
+          <div className="row">
+            <button onClick={() => void leaving((leave) => hotspotStart(leave))()}>Start a hotspot here</button>
+          </div>
+          <div className="row">
+            <input placeholder="Hotspot name" value={ssid} maxLength={32} onChange={(e) => setSsid(e.target.value)} />
+            <input placeholder="Password" type="password" value={psk} maxLength={63} onChange={(e) => setPsk(e.target.value)} />
+            <button disabled={ssid === '' || psk.length < 8} onClick={() => void leaving((leave) => hotspotJoin(ssid, psk, [], leave))()}>
+              Join hotspot
+            </button>
+          </div>
+        </>
+      )}
+    </>
+  );
+}
+
 /** About: who made MeshDrop and where to find them. */
 function About() {
   const link = (href: string, text = href) => (
@@ -216,6 +297,7 @@ export function Settings({ state, run }: { state: AppState; run: Run }) {
           <input type="checkbox" checked={draft[k] as boolean} disabled={k === 'allBluetooth' && !draft.bluetooth} onChange={(e) => set(k, e.target.checked as never)} /> {label}
         </label>
       ))}
+      <Hotspot state={state} run={run} />
       <NoWifiHelp android={android} />
       <div className="row">
         <button className="primary" disabled={!dirty} onClick={() => void save()}>

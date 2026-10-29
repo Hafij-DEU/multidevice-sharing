@@ -17,11 +17,12 @@ import type { BtPlatform, LinkPolicy } from '@meshdrop/core/src/bt/links.ts';
 import { BUTTONS, KEYSYMS, charKeysym } from './keys.ts';
 import { ensureDir, land } from '@meshdrop/core/src/guest/uploads.ts';
 import { cleanHandoff, handoffUrl, type HandoffState } from '@meshdrop/core/src/handoff.ts';
-import type { AppState, StreamKind, DeviceStatus, ReceivedRecord, DeviceView, PhoneNote, RemoteEvent, ScheduledView, SendOptions, GuestView, LinkCreateInput, LinkView, ReachInput, ReachView, SendItemInput, Settings, SyncView, TransferView } from '../shared/api.ts';
+import type { AppState, NoWifiView, StreamKind, DeviceStatus, ReceivedRecord, DeviceView, PhoneNote, RemoteEvent, ScheduledView, SendOptions, GuestView, LinkCreateInput, LinkView, ReachInput, ReachView, SendItemInput, Settings, SyncView, TransferView } from '../shared/api.ts';
 import type { HistoryStore } from './history.ts';
 import { SettingsError, type SettingsStore } from './settings.ts';
 import { liveAudio } from './liveaudio.ts';
 import { opusChannels, opusDecoder, opusEncoder, opusType } from './opus.ts';
+import { HOTSPOT_HOST_IP, validHotspot, wifiQr, type NetMan } from './netman.ts';
 
 export interface Platform {
   notify(title: string, body: string, onClick?: () => void): void;
@@ -149,6 +150,8 @@ export interface ControllerOptions {
   engineOptions?: Partial<EngineOptions>;
   /** M14: this PC's Bluetooth (BlueZ); none: no Bluetooth links. */
   bt?: BtPlatform;
+  /** M14: NetworkManager for hotspots and the tether guard (Linux); gets the controller's change callback. */
+  net?: (onChange: () => void) => NetMan;
   /** Tests: shorter M11 timings (burn after reading, the sweep, the time-capsule threshold). */
   timing?: { burnAfterOpenMs?: number; tickMs?: number; scheduleMinMs?: number };
 }
@@ -292,14 +295,19 @@ export class AppController extends EventEmitter {
     this.#platform = opts.platform;
     this.#engineOptions = opts.engineOptions ?? {};
     this.#bt = opts.bt;
+    this.#net = opts.net?.(() => this.#changed());
     this.#timing = opts.timing ?? {};
   }
 
   readonly #timing: NonNullable<ControllerOptions['timing']>;
+  readonly #net: NetMan | undefined;
+  #hotspot: NoWifiView['hotspot'];
+  #offer: NoWifiView['offer'];
 
   async start(): Promise<void> {
     this.#stopped = false;
     await this.#boot();
+    void this.#net?.guard.setEnabled(this.#settings.get().tetherNoData);
   }
 
   async stop(): Promise<void> {
@@ -314,6 +322,8 @@ export class AppController extends EventEmitter {
     this.#m11Timer = null;
     if (this.#ringing) void this.ringStop();
     for (const st of this.#streams.values()) st.stop();
+    this.#net?.guard.stop();
+    if (this.#hotspot) await this.#net?.stop().catch(() => undefined); // a hotspot does not outlive the app
     if (this.#timer) clearTimeout(this.#timer);
     this.#timer = null;
     await this.#halt();
@@ -491,6 +501,7 @@ export class AppController extends EventEmitter {
       sync: this.#syncView(e),
       ...(st.role === 'hub' || st.role === 'member' ? { links: this.#links.map((l) => ({ ...l })) } : {}),
       ...(this.#reachView(e) ? { reach: this.#reachView(e)! } : {}),
+      ...(this.#net ? { noWifi: { ...(this.#hotspot ? { hotspot: { ...this.#hotspot } } : {}), ...(this.#offer ? { offer: { ...this.#offer, hosts: [...this.#offer.hosts] } } : {}), guarded: this.#net.guard.guarded() } } : {}),
     };
   }
 
@@ -1190,9 +1201,92 @@ export class AppController extends EventEmitter {
         await p.openUrl(url);
         return { status: 200, body: { ok: true } };
       }
+      case 'hotspot': {
+        // M14: a Bluetooth-linked device shares its hotspot. Joined right away only when this PC's Wi-Fi is free.
+        if (!this.#net) return { status: 503, body: { error: 'hotspot-unavailable' } };
+        const { ssid, psk } = msg;
+        if (!validHotspot(ssid, psk)) return { status: 400, body: { error: 'bad-hotspot' } };
+        const hosts = (Array.isArray(msg.hosts) ? msg.hosts : []).filter((h): h is string => typeof h === 'string' && /^\d{1,3}(\.\d{1,3}){3}:\d{1,5}$/.test(h)).slice(0, 4);
+        const who = alias();
+        this.#offer = { from: peer, ...(who ? { alias: who } : {}), ssid, psk: psk as string, hosts };
+        this.#changed();
+        void (async () => {
+          const w = await this.#net!.wifi().catch(() => null);
+          if (w && w.network === '' && !this.#hotspot) await this.hotspotJoin(ssid, psk as string, hosts).catch(() => undefined);
+          else if (s.notifications) this.#platform.notify(`${who ?? 'A device'} shares a hotspot`, `Settings → No Wi-Fi: join ${ssid}.`);
+        })();
+        return { status: 200, body: { ok: true } };
+      }
       default:
         return { status: 404, body: { error: 'unknown-kind' } };
     }
+  }
+
+  // ---- M14: hotspots ------------------------------------------------------------------------------
+
+  #needNet(): NetMan {
+    if (!this.#net) throw new Error('Hotspots need NetworkManager (nmcli) on this PC.');
+    return this.#net;
+  }
+
+  /** Fails with "wifi-busy:<network>" when the Wi-Fi is on a network and the user has not agreed to leave it. */
+  async #wifiFree(net: NetMan, leaveNetwork: boolean): Promise<void> {
+    const w = await net.wifi();
+    if (!w) throw new Error('This PC has no Wi-Fi.');
+    if (w.network !== '' && !leaveNetwork) throw new Error(`wifi-busy:${w.network}`);
+  }
+
+  async hotspotStart(leaveNetwork = false): Promise<void> {
+    const net = this.#needNet();
+    await this.#wifiFree(net, leaveNetwork);
+    const h = await net.host();
+    const qrSvg = await QRCode.toString(wifiQr(h.ssid, h.psk), { type: 'svg', margin: 1, errorCorrectionLevel: 'M' });
+    this.#hotspot = { role: 'host', ssid: h.ssid, psk: h.psk, qrSvg };
+    this.#offer = undefined;
+    this.#changed();
+    const e = this.#e;
+    const msg = { kind: 'hotspot', ssid: h.ssid, psk: h.psk, hosts: [`${HOTSPOT_HOST_IP}:${e.port}`] };
+    for (const d of e.devices()) {
+      if (await e.viaBluetooth(d.deviceId).catch(() => false)) void e.appSend(d.deviceId, msg).catch(() => undefined);
+    }
+  }
+
+  async hotspotJoin(ssid: string, psk: string, hosts: string[] = [], leaveNetwork = false): Promise<void> {
+    const net = this.#needNet();
+    if (!validHotspot(ssid, psk)) throw new Error('Enter the hotspot name and its password (8 to 63 characters).');
+    await this.#wifiFree(net, leaveNetwork);
+    const offer = this.#offer?.ssid === ssid ? this.#offer : undefined;
+    if (offer) {
+      offer.joining = true;
+      delete offer.error;
+      this.#changed();
+    }
+    try {
+      await net.join(ssid, psk);
+    } catch (x) {
+      if (offer) {
+        offer.joining = false;
+        offer.error = x instanceof Error ? x.message : String(x);
+      }
+      this.#changed();
+      throw x;
+    }
+    this.#offer = undefined;
+    this.#hotspot = { role: 'joined', ssid };
+    this.#changed();
+    // multicast may be isolated on a phone hotspot: try the addresses it sent as well
+    for (const h of hosts.length > 0 ? hosts : (offer?.hosts ?? [])) {
+      const i = h.lastIndexOf(':');
+      void this.addNearby(h.slice(0, i), Number(h.slice(i + 1))).catch(() => undefined);
+    }
+  }
+
+  async hotspotStop(): Promise<void> {
+    const had = this.#hotspot !== undefined;
+    this.#hotspot = undefined;
+    this.#offer = undefined;
+    this.#changed();
+    if (had) await this.#needNet().stop();
   }
 
   /**
@@ -1428,6 +1522,7 @@ export class AppController extends EventEmitter {
     const hadError = this.#error !== undefined;
     this.#settings.set(patch);
     this.#engine?.setLinkPolicy(linkPolicy(this.#settings.get()));
+    if (next.tetherNoData !== prev.tetherNoData) void this.#net?.guard.setEnabled(next.tetherNoData);
     if (restart) {
       let failure: unknown;
       try {

@@ -110,6 +110,30 @@ public class AppControllerTest {
             replies.add(text);
             return true;
         }
+
+        final List<String> hotspotCalls = Collections.synchronizedList(new ArrayList<>());
+        volatile String joinFails;
+
+        @Override
+        public Map<String, Object> hotspotHost() {
+            hotspotCalls.add("host");
+            Map<String, Object> h = new LinkedHashMap<>();
+            h.put("ssid", "DIRECT-ab;c");
+            h.put("psk", "pass:word1");
+            h.put("ips", List.of("192.168.49.1"));
+            return h;
+        }
+
+        @Override
+        public void hotspotJoin(String ssid, String psk) throws java.io.IOException {
+            if (joinFails != null) throw new java.io.IOException(joinFails);
+            hotspotCalls.add("join " + ssid + " " + psk);
+        }
+
+        @Override
+        public void hotspotStop() {
+            hotspotCalls.add("stop");
+        }
     }
 
     static final class Node {
@@ -539,5 +563,59 @@ public class AppControllerTest {
         assertEquals(List.of(bId), sch.get(0).get("targets"));
         a.c.call("scheduleCancel", List.of(sch.get(0).get("id")));
         assertEquals(0, list(state(a.c), "scheduled").size());
+    }
+    @Test
+    @SuppressWarnings("unchecked")
+    public void m14AHotspotSharedByAnotherDeviceIsOfferedThenJoined() throws Exception {
+        Node a = make("ay");
+        Node b = make("bee");
+        pair(a.c, b.c);
+        String bId = selfId(b.c);
+        Map<String, Object> r = (Map<String, Object>) a.c.call("appSend", List.of(bId, Map.of("kind", "hotspot", "ssid", "PC", "psk", "short")));
+        assertEquals(400L, r.get("status"));
+        r = (Map<String, Object>) a.c.call("appSend", List.of(bId, Map.of("kind", "hotspot", "ssid", "MeshDrop-AB12", "psk", "abcdefgh2345",
+                "hosts", List.of("10.42.0.1:53319", "evil.example:1", "10.42.0.1:1; rm", "1.2.3.4:5", "5.6.7.8:9", "9.9.9.9:9"))));
+        assertEquals(200L, r.get("status"));
+        Map<String, Object> offer = (Map<String, Object>) ((Map<String, Object>) state(b.c).get("noWifi")).get("offer");
+        assertEquals("MeshDrop-AB12", offer.get("ssid"));
+        assertEquals("abcdefgh2345", offer.get("psk"));
+        assertEquals(List.of("10.42.0.1:53319", "1.2.3.4:5", "5.6.7.8:9", "9.9.9.9:9"), offer.get("hosts"));
+        assertEquals(selfId(a.c), offer.get("from"));
+        assertTrue(b.p.notes.stream().anyMatch(n -> n.contains("shares a hotspot")));
+        assertTrue(b.p.hotspotCalls.isEmpty()); // Android asks first: offered, not joined
+
+        b.p.joinFails = "The network was not found.";
+        try {
+            b.c.call("hotspotJoin", List.of("MeshDrop-AB12", "abcdefgh2345", List.of()));
+            fail();
+        } catch (java.io.IOException expected) {
+            // shown on the offer
+        }
+        offer = (Map<String, Object>) ((Map<String, Object>) state(b.c).get("noWifi")).get("offer");
+        assertEquals("The network was not found.", offer.get("error"));
+        assertEquals(false, offer.get("joining"));
+
+        b.p.joinFails = null;
+        b.c.call("hotspotJoin", List.of("MeshDrop-AB12", "abcdefgh2345", List.of()));
+        assertEquals(List.of("join MeshDrop-AB12 abcdefgh2345"), b.p.hotspotCalls);
+        Map<String, Object> nw = (Map<String, Object>) state(b.c).get("noWifi");
+        assertFalse(nw.containsKey("offer"));
+        assertEquals(Map.of("role", "joined", "ssid", "MeshDrop-AB12"), nw.get("hotspot"));
+        b.c.call("hotspotStop", List.of());
+        assertEquals("stop", b.p.hotspotCalls.get(b.p.hotspotCalls.size() - 1));
+        assertFalse(((Map<String, Object>) state(b.c).get("noWifi")).containsKey("hotspot"));
+        try {
+            b.c.call("hotspotJoin", List.of("x", "1234567", List.of()));
+            fail();
+        } catch (IllegalArgumentException expected) {
+            // a WPA2 password has 8 or more characters
+        }
+
+        a.c.call("hotspotStart", List.of(false));
+        Map<String, Object> hs = (Map<String, Object>) ((Map<String, Object>) state(a.c).get("noWifi")).get("hotspot");
+        assertEquals("host", hs.get("role"));
+        assertEquals("DIRECT-ab;c", hs.get("ssid"));
+        assertTrue(String.valueOf(hs.get("qrSvg")).startsWith("<svg"));
+        assertEquals("WIFI:T:WPA;S:DIRECT-ab\\;c;P:pass\\:word1;;", AppController.wifiQr("DIRECT-ab;c", "pass:word1"));
     }
 }

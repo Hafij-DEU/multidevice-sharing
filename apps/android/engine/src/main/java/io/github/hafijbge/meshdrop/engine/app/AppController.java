@@ -125,6 +125,10 @@ public final class AppController {
     private volatile List<Map<String, Object>> outbox = new ArrayList<>();
     /** The guest link's QR code (the engine keeps the rest of the session). */
     private volatile String guestQr;
+    /** M14: the hotspot this phone hosts or joined ("role", "ssid", host: "psk", "qrSvg"), or null. */
+    private volatile Map<String, Object> hotspot;
+    /** M14: a hotspot a Bluetooth-linked device shared ("from", "alias", "ssid", "psk", "hosts", "joining", "error"), or null. */
+    private volatile Map<String, Object> hotspotOffer;
     /** M10: this device rings (Find my device) until stopped or for at most a minute. */
     private volatile boolean ringing;
     private final Map<String, Object> deviceStatus = new java.util.concurrent.ConcurrentHashMap<>();
@@ -362,6 +366,17 @@ public final class AppController {
         for (Map.Entry<String, String> c : castTo.entrySet()) casting.put(c.getKey().equals("audio") ? "audioFrom" : c.getKey().equals("camera") ? "cameraTo" : c.getKey().equals("sound") ? "soundTo" : "micTo", c.getValue());
         if (castTo.containsKey("camera") && cameraBack) casting.put("cameraBack", true);
         m.put("casting", casting);
+        Map<String, Object> noWifi = new LinkedHashMap<>();
+        Map<String, Object> hs = hotspot;
+        Map<String, Object> offer = hotspotOffer;
+        if (hs != null) noWifi.put("hotspot", new LinkedHashMap<>(hs));
+        if (offer != null) {
+            Map<String, Object> o = new LinkedHashMap<>(offer);
+            o.put("hosts", new ArrayList<Object>((List<?>) offer.get("hosts")));
+            noWifi.put("offer", o);
+        }
+        noWifi.put("guarded", new ArrayList<Object>()); // the tether guard is the PC's
+        m.put("noWifi", noWifi);
         m.put("notifyAccess", platform.notificationAccess());
         m.put("deviceStatus", new LinkedHashMap<>(deviceStatus));
         if (mesh != null) {
@@ -1286,6 +1301,33 @@ public final class AppController {
                 changed();
             }
             body.put("ok", true);
+        } else if ("hotspot".equals(kind)) {
+            // M14: a Bluetooth-linked device shares its hotspot. Android asks before joining any network,
+            // so this is offered (Settings → No Wi-Fi), not joined right away.
+            Object ssid = msg.get("ssid");
+            Object psk = msg.get("psk");
+            if (!validHotspot(ssid, psk)) {
+                status = 400;
+                body.put("error", "bad-hotspot");
+            } else {
+                List<Object> hosts = new ArrayList<>();
+                if (msg.get("hosts") instanceof List) {
+                    for (Object h : (List<?>) msg.get("hosts")) {
+                        if (hosts.size() < 4 && h instanceof String && ((String) h).matches("^\\d{1,3}(\\.\\d{1,3}){3}:\\d{1,5}$")) hosts.add(h);
+                    }
+                }
+                Map<String, Object> o = new LinkedHashMap<>();
+                o.put("from", peer);
+                String who = aliasOf(peer);
+                if (who != null && !who.isEmpty()) o.put("alias", who);
+                o.put("ssid", ssid);
+                o.put("psk", psk);
+                o.put("hosts", hosts);
+                hotspotOffer = o;
+                changed();
+                if (settings.get().notifications) platform.notify((who == null || who.isEmpty() ? "A device" : who) + " shares a hotspot", "Settings → No Wi-Fi: join " + ssid + ".", null);
+                body.put("ok", true);
+            }
         } else if ("input".equals(kind) || "action".equals(kind) || "apps".equals(kind)) {
             status = 403;
             body.put("error", "remote-off"); // a phone is the remote, not the controlled device
@@ -1294,6 +1336,107 @@ public final class AppController {
             body.put("error", "unknown-kind");
         }
         return new io.github.hafijbge.meshdrop.engine.recv.MeshServer.Reply(status, Json.stringify(body).getBytes(java.nio.charset.StandardCharsets.UTF_8));
+    }
+
+    // ---- M14: hotspots ----------------------------------------------------------------------
+
+    /** A hotspot's SSID and password: SSID is 1–32 bytes, a WPA2 password 8–63 printable ASCII. */
+    static boolean validHotspot(Object ssid, Object psk) {
+        if (!(ssid instanceof String) || !(psk instanceof String)) return false;
+        String s = (String) ssid;
+        int bytes = s.getBytes(java.nio.charset.StandardCharsets.UTF_8).length;
+        return bytes > 0 && bytes <= 32 && s.indexOf('\0') < 0 && s.indexOf('\n') < 0 && s.indexOf('\r') < 0
+                && ((String) psk).matches("^[\\x20-\\x7e]{8,63}$");
+    }
+
+    /** The text of a Wi-Fi QR code (`WIFI:T:WPA;S:…;P:…;;`), which phone cameras offer to join. */
+    static String wifiQr(String ssid, String psk) {
+        return "WIFI:T:WPA;S:" + ssid.replaceAll("([\\\\;,:\"])", "\\\\$1") + ";P:" + psk.replaceAll("([\\\\;,:\"])", "\\\\$1") + ";;";
+    }
+
+    /** Starts a hotspot here and shares it with the devices linked over Bluetooth. */
+    private void hotspotStart() throws IOException {
+        Engine x = e();
+        Map<String, Object> h = platform.hotspotHost();
+        String ssid = String.valueOf(h.get("ssid"));
+        String psk = String.valueOf(h.get("psk"));
+        Map<String, Object> hs = new LinkedHashMap<>();
+        hs.put("role", "host");
+        hs.put("ssid", ssid);
+        hs.put("psk", psk);
+        hs.put("qrSvg", io.github.hafijbge.meshdrop.engine.guest.GuestPage.qrSvg(wifiQr(ssid, psk)));
+        hotspot = hs;
+        hotspotOffer = null;
+        changed();
+        List<Object> hosts = new ArrayList<>();
+        if (h.get("ips") instanceof List) {
+            for (Object ip : (List<?>) h.get("ips")) if (hosts.size() < 4) hosts.add(ip + ":" + x.port());
+        }
+        Map<String, Object> msg = new LinkedHashMap<>();
+        msg.put("kind", "hotspot");
+        msg.put("ssid", ssid);
+        msg.put("psk", psk);
+        msg.put("hosts", hosts);
+        for (String to : x.btLinked()) {
+            workers.execute(() -> {
+                try {
+                    x.appSend(to, msg, 10_000);
+                } catch (IOException | RuntimeException ignored) {
+                    // the QR and the password on screen still work
+                }
+            });
+        }
+    }
+
+    /** Joins a hotspot (Android shows its own "connect to this network?" first), then looks for devices on it. */
+    private void hotspotJoin(String ssid, String psk, List<String> hosts) throws IOException {
+        if (!validHotspot(ssid, psk)) throw new IllegalArgumentException("Enter the hotspot name and its password (8 to 63 characters).");
+        Map<String, Object> offer = hotspotOffer;
+        if (offer != null && !ssid.equals(offer.get("ssid"))) offer = null;
+        if (offer != null) {
+            offer.put("joining", true);
+            offer.remove("error");
+            changed();
+        }
+        try {
+            platform.hotspotJoin(ssid, psk);
+        } catch (IOException | RuntimeException x) {
+            if (offer != null) {
+                offer.put("joining", false);
+                offer.put("error", x.getMessage() == null ? "Could not join." : x.getMessage());
+            }
+            changed();
+            throw x;
+        }
+        List<String> tryHosts = new ArrayList<>(hosts);
+        if (tryHosts.isEmpty() && offer != null) for (Object h : (List<?>) offer.get("hosts")) tryHosts.add(String.valueOf(h));
+        hotspotOffer = null;
+        Map<String, Object> hs = new LinkedHashMap<>();
+        hs.put("role", "joined");
+        hs.put("ssid", ssid);
+        hotspot = hs;
+        changed();
+        // multicast may be isolated on a hotspot: try the addresses it sent as well
+        Engine x = e();
+        for (String h : tryHosts) {
+            int i = h.lastIndexOf(':');
+            if (i <= 0) continue;
+            workers.execute(() -> {
+                try {
+                    x.addNearby(h.substring(0, i), Integer.parseInt(h.substring(i + 1)));
+                } catch (IOException | RuntimeException ignored) {
+                    // found by multicast, or not there
+                }
+            });
+        }
+    }
+
+    private void hotspotStop() {
+        boolean had = hotspot != null;
+        hotspot = null;
+        hotspotOffer = null;
+        changed();
+        if (had) platform.hotspotStop();
     }
 
     // ---- M10b: live sound / camera / microphone --------------------------------------------
@@ -1775,6 +1918,20 @@ public final class AppController {
                 return null;
             case "streamStop":
                 streamStop(str(a0));
+                return null;
+            case "hotspotStart":
+                hotspotStart(); // a local-only hotspot leaves no network: the "leave" flag is the PC's
+                return null;
+            case "hotspotJoin": {
+                List<String> hosts = new ArrayList<>();
+                if (args.size() > 2 && args.get(2) instanceof List) {
+                    for (Object h : (List<?>) args.get(2)) if (hosts.size() < 4 && h instanceof String && ((String) h).length() <= 64) hosts.add((String) h);
+                }
+                hotspotJoin(str(a0), str(args.get(1)), hosts);
+                return null;
+            }
+            case "hotspotStop":
+                hotspotStop();
                 return null;
             case "noteDismiss":
                 return null;

@@ -282,6 +282,37 @@ ciphertext.
 
 </details>
 
+<details>
+<summary><b>📶 No Wi-Fi router</b></summary>
+
+MeshDrop works without a Wi-Fi network in three ways. Settings → *How to connect with no Wi-Fi router*
+has the same steps.
+
+**Bluetooth.** Pair the devices once in the system Bluetooth settings. Paired MeshDrop devices then
+connect over Bluetooth by themselves when they share no network. Each paired device has a link choice:
+*Auto* (Wi-Fi when there is one, else Bluetooth), *Wi-Fi only* or *Bluetooth only*. Settings → *Send
+everything over Bluetooth* turns Bluetooth on for all of them. Files, clipboard, remote control, media
+keys, notifications and sound work over Bluetooth. Sound goes as Opus (about 96 kbit/s), so it fits the
+link. The camera needs Wi-Fi. Bluetooth is slow (about 1–2 Mbit/s), so send large files on Wi-Fi.
+
+**A hotspot.** Settings → No Wi-Fi → *Start a hotspot here*. The PC uses NetworkManager. A phone uses a
+local-only hotspot: Android picks its name and password, and it never shares mobile data. Devices linked
+over Bluetooth get the name and password by themselves. Any other device can scan the QR code or type
+them in under *Join a hotspot*. A PC joins on its own when its Wi-Fi is free. A phone asks first. If the
+PC's Wi-Fi is on a network, MeshDrop asks before it leaves that network. If devices do not find each
+other on a hotspot, MeshDrop also tries the addresses the host sent.
+
+**USB or Bluetooth tethering.** Plug the phone into the PC. On the phone, turn on Settings → Network →
+Hotspot & tethering → *USB tethering*. Bluetooth tethering is in the same place and works over a paired
+phone. Either one makes a small network between the phone and the PC, and MeshDrop finds the phone on it.
+
+**No mobile data.** Settings → *Never use the phone's mobile data* (on by default, on Linux). On a phone's
+hotspot or tether, the PC then takes no internet route or DNS from the phone, so only MeshDrop uses that
+link. The change is for that connection only and is not saved to the profile. Turn the setting off, or
+reconnect, to undo it.
+
+</details>
+
 ## Reach your PC from anywhere
 
 > [!IMPORTANT]

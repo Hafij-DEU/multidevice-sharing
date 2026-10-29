@@ -134,6 +134,24 @@ public interface Platform {
         throw new java.io.IOException(io.github.hafijbge.meshdrop.engine.bt.OpusRtp.NO_CODEC);
     }
 
+    // ---- M14: hotspots, for devices with no Wi-Fi network to share ----
+
+    /**
+     * Starts a hotspot on this device for the others to join: "ssid", "psk", and "ips" (this device's
+     * addresses on it, a List of String, best first). Closed by {@link #hotspotStop}.
+     */
+    default java.util.Map<String, Object> hotspotHost() throws java.io.IOException {
+        throw new java.io.IOException("Hotspots are not available on this device.");
+    }
+
+    /** Joins another device's hotspot (returns once connected); left by {@link #hotspotStop}. */
+    default void hotspotJoin(String ssid, String psk) throws java.io.IOException {
+        throw new java.io.IOException("Hotspots are not available on this device.");
+    }
+
+    /** Ends the hotspot this device hosts, or leaves the one it joined. */
+    default void hotspotStop() {}
+
     // ---- M11 ----
 
     /** The name a picked file shows (a content:// ref has its own name). */

@@ -655,6 +655,30 @@ public class AndroidPlatform implements Platform {
         return OpusCodecs.decoder(channels);
     }
 
+    // ---- M14: hotspots ----
+
+    private Hotspots hotspots;
+
+    private synchronized Hotspots hotspots() {
+        if (hotspots == null) hotspots = new Hotspots(ctx);
+        return hotspots;
+    }
+
+    @Override
+    public Map<String, Object> hotspotHost() throws IOException {
+        return hotspots().host();
+    }
+
+    @Override
+    public void hotspotJoin(String ssid, String psk) throws IOException {
+        hotspots().join(ssid, psk);
+    }
+
+    @Override
+    public void hotspotStop() {
+        hotspots().stop();
+    }
+
     // ---- M11 ----
 
     @Override

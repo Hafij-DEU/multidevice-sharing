@@ -279,6 +279,17 @@ export interface AppState {
   scheduled?: ScheduledView[];
   /** M10b Android: what this phone streams now. */
   casting?: { audioFrom?: string; cameraTo?: string; cameraBack?: boolean; micTo?: string; soundTo?: string };
+  /** M14 No Wi-Fi hotspots (absent where this device cannot host or join one). */
+  noWifi?: NoWifiView;
+}
+
+/** M14: the hotspot this device hosts or joined, one offered by a Bluetooth-linked device, the tether guard. */
+export interface NoWifiView {
+  hotspot?: { role: 'host' | 'joined'; ssid: string; psk?: string; qrSvg?: string };
+  /** A device shared its hotspot over Bluetooth (joined on its own when this device's Wi-Fi was free). */
+  offer?: { from: string; alias?: string; ssid: string; psk: string; hosts: string[]; joining?: boolean; error?: string };
+  /** Desktop: phone links that carry no internet for this PC right now (tetherNoData). */
+  guarded?: string[];
 }
 
 /**
@@ -330,6 +341,15 @@ export interface DesktopApi {
   streamStop(id: string): Promise<void>;
   /** M10b: 'audio' plays a PC's sound here (Android); 'camera' / 'mic' send this phone's to a PC; 'sound' sends this device's sound to another device. */
   streamStart?(deviceId: string, kind: 'audio' | 'camera' | 'mic' | 'sound', camera?: 'front' | 'back'): Promise<void>;
+  /**
+   * M14: hosts a hotspot and offers it to Bluetooth-linked devices. When the Wi-Fi is on a network it
+   * fails with "wifi-busy:<network>" unless `leaveNetwork` (the UI asks first).
+   */
+  hotspotStart?(leaveNetwork?: boolean): Promise<void>;
+  /** M14: joins a hotspot (from an offer or typed in); `hosts` (ip:port) are tried as devices on it. "wifi-busy:<network>" as for hotspotStart. */
+  hotspotJoin?(ssid: string, psk: string, hosts?: string[], leaveNetwork?: boolean): Promise<void>;
+  /** M14: ends the hotspot this device hosts or leaves the joined one; drops an open offer. */
+  hotspotStop?(): Promise<void>;
   /** M10: forgets one forwarded phone notification (or all with no key). */
   noteDismiss(key?: string): Promise<void>;
   pickFiles(): Promise<string[]>;

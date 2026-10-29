@@ -115,6 +115,20 @@ public final class Bridge {
                 activity.runOnUiThread(() -> activity.requestPermissions(perms, 9));
                 return null;
             }
+            case "hotspotStart":
+            case "hotspotJoin": {
+                // M14: Android needs these before it starts or joins a hotspot
+                String[] perms = android.os.Build.VERSION.SDK_INT >= 33
+                        ? new String[] {"android.permission.NEARBY_WIFI_DEVICES"}
+                        : new String[] {android.Manifest.permission.ACCESS_FINE_LOCATION, android.Manifest.permission.ACCESS_COARSE_LOCATION};
+                if (activity.checkSelfPermission(perms[0]) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                    activity.runOnUiThread(() -> activity.requestPermissions(perms, 13));
+                    throw new IllegalStateException(android.os.Build.VERSION.SDK_INT >= 33
+                            ? "Allow MeshDrop to find nearby devices, then try again."
+                            : "Allow MeshDrop to use location (Android needs it for hotspots), then try again.");
+                }
+                return core.controller.call(method, args);
+            }
             case "takeSharedItems":
                 return new ArrayList<Object>(p.takeShared());
             case "keepAliveAction":
