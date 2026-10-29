@@ -22,6 +22,7 @@ import { onReplaced } from './selfupdate.ts';
 import { startHandoffServer } from './handoff.ts';
 import { SettingsStore, defaultSettings } from './settings.ts';
 import { bluezPlatform } from './bluetooth.ts';
+import { CLIP_HELPER_ENV, ClipReader, runClipHelper } from './cliphelper.ts';
 import { NetMan, run as nmRun } from './netman.ts';
 
 const execFileP = promisify(execFile);
@@ -30,6 +31,10 @@ const WIN = process.platform === 'win32';
 const APP_ID = 'io.github.hafijbge.meshdrop';
 const HOME = process.env.MESHDROP_HOME ?? configDir();
 const ICONS = join(__dirname, '../icons');
+/** Set in the clipboard helper this app starts for itself on Linux (its Chromium profile dir). */
+const CLIP_HELPER = process.env[CLIP_HELPER_ENV];
+/** Linux: clipboard reads go through a helper process, so a slow clipboard owner never stalls this thread. */
+const clipReader = process.platform === 'linux' && !CLIP_HELPER ? new ClipReader(ClipReader.self(join(HOME, 'clip-helper'))) : null;
 
 let win: BrowserWindow | null = null;
 let picker: BrowserWindow | null = null;
@@ -170,8 +175,8 @@ const platform: Platform = {
     n.show();
   },
   writeClipboard: (text) => clipboard.writeText(text),
-  readClipboard: () => clipboard.readText(),
-  readClipboardFiles: () => {
+  readClipboard: () => (clipReader?.usable ? clipReader.text() : clipboard.readText()),
+  readClipboardFiles: async () => {
     if (WIN) {
       // Explorer's Copy: FileNameW names the first file (Electron cannot read the full CF_HDROP list)
       return parseFileNameW(clipboard.readBuffer('FileNameW')).filter((p) => {
@@ -185,7 +190,8 @@ const platform: Platform = {
     // availableFormats() does not list these on Linux, but readBuffer finds them (empty when absent).
     for (const f of ['x-special/gnome-copied-files', 'text/uri-list']) {
       const out: string[] = [];
-      for (const line of clipboard.readBuffer(f).toString('utf8').split(/\r?\n/)) {
+      const buf = clipReader?.usable ? await clipReader.buffer(f) : clipboard.readBuffer(f);
+      for (const line of buf.toString('utf8').split(/\r?\n/)) {
         if (!line.startsWith('file://')) continue;
         try {
           const p = fileURLToPath(line.trim());
@@ -198,7 +204,11 @@ const platform: Platform = {
     }
     return [];
   },
-  readClipboardImage: () => {
+  readClipboardImage: async () => {
+    if (clipReader?.usable) {
+      const key = await clipReader.image();
+      return key === null ? null : { key, png: () => clipReader.png(key) };
+    }
     if (!clipboard.availableFormats().some((f) => f.startsWith('image/'))) return null;
     const img = clipboard.readImage();
     if (img.isEmpty()) return null;
@@ -558,10 +568,12 @@ async function startController(): Promise<void> {
 }
 
 // One MeshDrop per config home: the Chromium profile lives beside it, and so does the instance lock.
-app.setPath('userData', join(HOME, 'electron'));
+if (!CLIP_HELPER) app.setPath('userData', join(HOME, 'electron'));
 // Windows: notifications and the taskbar group under the id the installer gave the Start menu shortcut
 if (WIN) app.setAppUserModelId(APP_ID);
-if (!app.requestSingleInstanceLock()) {
+if (CLIP_HELPER) {
+  runClipHelper(CLIP_HELPER); // clipboard reads only: no window, tray or instance lock (cliphelper.ts)
+} else if (!app.requestSingleInstanceLock()) {
   app.exit(0); // the running instance got our argv through 'second-instance'
 } else {
   app.on('second-instance', (_e, argv) => {
@@ -628,6 +640,9 @@ if (!app.requestSingleInstanceLock()) {
     quitting = true;
   });
   app.on('will-quit', (e) => {
+    // Killed, not asked: a helper stuck in a clipboard read never sees its stdin close, and would
+    // outlive the app holding the fds it inherited (a launcher waiting on them waits forever).
+    clipReader?.close();
     if (!controller) return;
     e.preventDefault();
     const c = controller;

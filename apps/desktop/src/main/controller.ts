@@ -24,14 +24,17 @@ import { liveAudio } from './liveaudio.ts';
 import { opusChannels, opusDecoder, opusEncoder, opusType } from './opus.ts';
 import { HOTSPOT_HOST_IP, validHotspot, wifiQr, type NetMan } from './netman.ts';
 
+export type ClipImage = { key: string; png: () => Buffer | Promise<Buffer> };
+
 export interface Platform {
   notify(title: string, body: string, onClick?: () => void): void;
   writeClipboard(text: string): void;
-  readClipboard(): string;
+  /** Reads may be async: on Linux they run in a helper process (cliphelper.ts) and can fail or time out. */
+  readClipboard(): string | Promise<string>;
   /** Files copied in a file manager (absolute paths of regular files), or []. */
-  readClipboardFiles?(): string[];
+  readClipboardFiles?(): string[] | Promise<string[]>;
   /** A copied image: a cheap key that changes with the picture, and its PNG bytes on demand. */
-  readClipboardImage?(): { key: string; png: () => Buffer } | null;
+  readClipboardImage?(): ClipImage | null | Promise<ClipImage | null>;
   /** Puts received files on the clipboard: one image as an image, otherwise as copied files. */
   writeClipboardFiles?(paths: string[]): void;
   openPath(p: string): Promise<void>;
@@ -170,7 +173,7 @@ const MAX_CLIP_SYNC = 64 * 1024;
 const MAX_CLIP_FILES_SYNC = 100 * 1024 * 1024;
 
 /** What is on the clipboard now, as one comparable signature plus what to send. */
-type ClipNow = { sig: string } & ({ kind: 'text'; text: string } | { kind: 'files'; files: string[] } | { kind: 'image'; png: () => Buffer });
+type ClipNow = { sig: string } & ({ kind: 'text'; text: string } | { kind: 'files'; files: string[] } | { kind: 'image'; png: ClipImage['png'] });
 const MAX_RECOVERY_BYTES = 1024 * 1024;
 /** Settings the engine is created with: changing one restarts it. */
 const ENGINE_KEYS = ['alias', 'inbox', 'port', 'discovery', 'bluetooth'] as const;
@@ -270,6 +273,10 @@ export class AppController extends EventEmitter {
   #guestQr: string | undefined;
   /** Shared clipboard: the poll, and the last text seen (copied here or received), so nothing echoes back. */
   #clipTimer: NodeJS.Timeout | null = null;
+  /** A clipboard poll is reading (reads are async: a slow one is never overlapped). */
+  #clipBusy = false;
+  /** Bumped whenever MeshDrop itself writes the clipboard: a poll that read before then is stale. */
+  #clipGen = 0;
   #lastClip: string | undefined;
   /** Files handed in from outside (Files → Send with MeshDrop), waiting for takeSharedItems(). */
   #shared: SendItemInput[] = [];
@@ -422,7 +429,7 @@ export class AppController extends EventEmitter {
       this.#linkTimer.unref();
     }
     if (!this.#clipTimer) {
-      this.#clipTimer = setInterval(() => this.#clipTick(), CLIP_POLL_MS);
+      this.#clipTimer = setInterval(() => void this.#clipTick(), CLIP_POLL_MS);
       this.#clipTimer.unref();
     }
     this.#changed();
@@ -791,12 +798,15 @@ export class AppController extends EventEmitter {
     // Clipboard text is only ever placed on the clipboard: never opened, run or interpreted.
     if (ev.clipboard && ev.text !== undefined && s.clipboardReceive) {
       this.#platform.writeClipboard(ev.text);
+      this.#clipGen++;
       this.#lastClip = `t:${ev.text}`; // shared clipboard: do not send it straight back
     }
     // Copied files / an image: saved in the inbox like any file, and put on the clipboard (never opened).
     if (ev.clipboardFiles && ev.files.length > 0 && s.clipboardReceive && this.#platform.writeClipboardFiles) {
       this.#platform.writeClipboardFiles([...ev.files]);
-      this.#lastClip = this.#clipNow()?.sig;
+      const gen = ++this.#clipGen;
+      const sig = (await this.#clipNow())?.sig;
+      if (gen === this.#clipGen) this.#lastClip = sig;
     }
     if (!s.notifications) return;
     const n = ev.files.length;
@@ -873,13 +883,13 @@ export class AppController extends EventEmitter {
   }
 
   /** What is on the clipboard: copied files first, then an image, then text (null: nothing readable). */
-  #clipNow(): ClipNow | null {
+  async #clipNow(): Promise<ClipNow | null> {
     try {
-      const files = this.#platform.readClipboardFiles?.() ?? [];
+      const files = (await this.#platform.readClipboardFiles?.()) ?? [];
       if (files.length > 0) return { sig: `f:${files.join('\n')}`, kind: 'files', files };
-      const img = this.#platform.readClipboardImage?.() ?? null;
+      const img = (await this.#platform.readClipboardImage?.()) ?? null;
       if (img) return { sig: `i:${img.key}`, kind: 'image', png: img.png };
-      const text = this.#platform.readClipboard();
+      const text = await this.#platform.readClipboard();
       return { sig: `t:${text}`, kind: 'text', text };
     } catch {
       return null;
@@ -905,7 +915,7 @@ export class AppController extends EventEmitter {
   }
 
   async sendClipboard(targets: string[] | 'all'): Promise<void> {
-    const now = this.#clipNow();
+    const now = await this.#clipNow();
     if (!now || (now.kind === 'text' && now.text === '')) throw new Error('The clipboard is empty.');
     const ids = this.#targets(targets);
     const tag = randomUUID();
@@ -914,7 +924,7 @@ export class AppController extends EventEmitter {
       this.#e.sendClipboard(ids, now.text, { tag }).catch((x: unknown) => this.#failRows(rows, x));
       return;
     }
-    const files = now.kind === 'files' ? now.files : [this.#imageFile(now.png())];
+    const files = now.kind === 'files' ? now.files : [this.#imageFile(await now.png())];
     let bytes = 0;
     for (const f of files) bytes += statSync(f).size;
     const rows = this.#startRows(ids, tag, files.length, bytes);
@@ -1183,12 +1193,12 @@ export class AppController extends EventEmitter {
         // M11 shake to grab: what is copied here goes to the asking device (devices allowed to control
         // this PC, or any of my devices while the shared clipboard is on)
         if (!may && !s.clipboardSync) return { status: 403, body: { error: 'clipboard-off' } };
-        const img = p.readClipboardImage?.();
+        const img = await p.readClipboardImage?.();
         if (img) {
-          const png = img.png();
+          const png = await img.png();
           if (png.length <= 4 * 1024 * 1024) return { status: 200, body: { image: png.toString('base64') } };
         }
-        return { status: 200, body: { text: p.readClipboard().slice(0, MAX_CLIP_SYNC) } };
+        return { status: 200, body: { text: (await p.readClipboard()).slice(0, MAX_CLIP_SYNC) } };
       }
       case 'notify-removed':
         this.#phoneNotes = this.#phoneNotes.filter((n) => !(n.from === peer && n.key === msg.key));
@@ -1567,10 +1577,17 @@ export class AppController extends EventEmitter {
    * Shared clipboard: whatever is newly copied (text, an image, files from the file manager) goes to
    * every online trusted device, without rows or toasts.
    */
-  #clipTick(): void {
-    if (!this.#engine || this.#stopped) return;
-    const now = this.#clipNow();
-    if (!now) return;
+  async #clipTick(): Promise<void> {
+    if (!this.#engine || this.#stopped || this.#clipBusy) return;
+    this.#clipBusy = true;
+    const gen = this.#clipGen;
+    let now: ClipNow | null;
+    try {
+      now = await this.#clipNow();
+    } finally {
+      this.#clipBusy = false;
+    }
+    if (!now || gen !== this.#clipGen || !this.#engine || this.#stopped) return;
     const first = this.#lastClip === undefined;
     if (now.sig === this.#lastClip) return;
     this.#lastClip = now.sig;
@@ -1586,7 +1603,7 @@ export class AppController extends EventEmitter {
     }
     let files: string[];
     try {
-      files = now.kind === 'files' ? now.files : [this.#imageFile(now.png())];
+      files = now.kind === 'files' ? now.files : [this.#imageFile(await now.png())];
       let bytes = 0;
       for (const f of files) bytes += statSync(f).size;
       if (bytes > MAX_CLIP_FILES_SYNC) return; // big copies go with Send clipboard

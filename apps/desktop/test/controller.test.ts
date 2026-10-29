@@ -277,6 +277,51 @@ describe('AppController', () => {
     expect(B.p.clip).not.toContain('already there');
   }, 30_000);
 
+  it('shared clipboard with slow async reads (Linux helper): polls never overlap, and still sync', async () => {
+    const A = await make('a', { clipboardSync: true });
+    const B = await make('b', { clipboardSync: true });
+    await pair(A.c, B.c);
+    let reading = 0;
+    let most = 0;
+    A.p.readClipboard = async () => {
+      const snap = A.p.clipboardText;
+      most = Math.max(most, ++reading);
+      await sleep(2500); // slower than the 1 s poll
+      reading--;
+      return snap;
+    };
+    A.p.clipboardText = 'already there';
+    await sleep(3000);
+    A.p.clipboardText = 'copied on A (slowly)';
+    await until(() => B.p.clip.includes('copied on A (slowly)'), 15_000);
+    expect(most).toBe(1);
+  }, 30_000);
+
+  it('shared clipboard: a poll that read before received text landed does not send the old text back', async () => {
+    const A = await make('a', { clipboardSync: true });
+    const B = await make('b', { clipboardSync: true });
+    await pair(A.c, B.c);
+    B.p.clipboardText = 'old on B';
+    B.p.writeClipboard = (t) => {
+      B.p.clip.push(t);
+      B.p.clipboardText = t; // a real clipboard now holds it
+    };
+    // B's reads take most of a poll, so one is in flight when A's text arrives
+    B.p.readClipboard = async () => {
+      const snap = B.p.clipboardText;
+      await sleep(950);
+      return snap;
+    };
+    await sleep(2500); // the first look only takes note
+    A.p.clipboardText = 'copied on A';
+    await sleep(1500);
+    A.p.clipboardText = 'copied on A';
+    await until(() => B.p.clip.includes('copied on A'), 15_000);
+    await sleep(3000);
+    expect(A.p.clip).not.toContain('old on B');
+    expect(A.p.clip).toEqual([]);
+  }, 30_000);
+
   it('folder sync: set up from the app on both sides, a file travels, the state shows the round', async () => {
     const A = await make('a');
     const B = await make('b');
