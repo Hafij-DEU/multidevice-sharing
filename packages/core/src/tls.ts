@@ -88,8 +88,6 @@ export function connectPinned(
       rejectUnauthorized: false,
       checkServerIdentity: () => undefined,
     });
-    // live sound and camera frames go out as written, not held back to fill a packet
-    sock.setNoDelay(true);
 
     let settled = false;
     const cleanup = () => {
@@ -117,6 +115,9 @@ export function connectPinned(
       settled = true;
       cleanup();
       sock.on('error', (e) => socketErrors.set(sock, e));
+      // live sound and camera frames go out as written, not held back to fill a packet (set once the
+      // pinned handshake is done, never on a socket still connecting)
+      sock.setNoDelay(true);
       resolve(sock);
     };
     const timer = setTimeout(
