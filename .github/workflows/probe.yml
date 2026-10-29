@@ -1,0 +1,13 @@
+name: probe
+on: { push: { branches: [ci-probe] } }
+jobs:
+  probe:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - run: ip -4 addr; nproc; sudo iptables -S | head -40; sudo nft list ruleset | head -80 || true
+      - run: node probe.mjs
+      - name: under load
+        run: (for i in 1 2; do timeout 60 sh -c 'while :; do :; done' & done; node probe.mjs)
