@@ -6,7 +6,10 @@ import android.bluetooth.BluetoothDevice;
 import android.bluetooth.BluetoothManager;
 import android.bluetooth.BluetoothServerSocket;
 import android.bluetooth.BluetoothSocket;
+import android.Manifest;
 import android.content.Context;
+import android.content.pm.PackageManager;
+import android.os.Build;
 import android.os.ParcelUuid;
 import io.github.hafijbge.meshdrop.engine.bt.BtPlatform;
 import java.io.IOException;
@@ -75,7 +78,11 @@ final class AndroidBt implements BtPlatform {
             BluetoothAdapter a = adapter();
             if (!BluetoothAdapter.checkBluetoothAddress(address)) throw new IOException("Not a Bluetooth address.");
             s = a.getRemoteDevice(address).createRfcommSocketToServiceRecord(SERVICE);
-            a.cancelDiscovery(); // a running scan slows a connect down badly
+            // a running scan slows a connect down badly; stopping it needs BLUETOOTH_SCAN on Android 12+,
+            // which MeshDrop does not ask for, so it is stopped only where that is allowed
+            if (Build.VERSION.SDK_INT < 31 || ctx.checkSelfPermission(Manifest.permission.BLUETOOTH_SCAN) == PackageManager.PERMISSION_GRANTED) {
+                a.cancelDiscovery();
+            }
         } catch (SecurityException e) {
             throw new IOException("MeshDrop may not use Bluetooth.", e);
         }
