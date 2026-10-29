@@ -26,6 +26,18 @@ import { NetMan, run as nmRun } from './netman.ts';
 
 const execFileP = promisify(execFile);
 const TEST = process.env.MESHDROP_TEST === '1';
+// CI-DIAG (temporary): event-loop stalls and console output to /tmp/md-diag-<pid>.log
+if (TEST) {
+  const fsd = require('node:fs') as typeof import('node:fs');
+  const f = `/tmp/md-diag-${process.pid}.log`;
+  const w = (k: string, a: unknown[]) => { try { fsd.appendFileSync(f, `${new Date().toISOString()} ${k} ${a.map((x) => (x instanceof Error ? x.stack : typeof x === 'string' ? x : JSON.stringify(x))).join(' ')}\n`); } catch {} };
+  w('start', [process.env.MESHDROP_HOME ?? '']);
+  for (const k of ['log', 'warn', 'error'] as const) { const o = console[k].bind(console); console[k] = (...a: unknown[]) => { w(k, a); o(...a); }; }
+  process.on('uncaughtException', (e) => w('uncaught', [e]));
+  process.on('unhandledRejection', (e) => w('unhandled', [e]));
+  let last = performance.now();
+  setInterval(() => { const now = performance.now(); if (now - last > 700) w('lag', [`${Math.round(now - last - 200)} ms`]); last = now; }, 200).unref();
+}
 const WIN = process.platform === 'win32';
 const APP_ID = 'io.github.hafijbge.meshdrop';
 const HOME = process.env.MESHDROP_HOME ?? configDir();
