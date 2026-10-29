@@ -1432,7 +1432,7 @@ public final class Engine {
      */
     // ---- Bluetooth links (M14) ------------------------------------------------------------------
 
-    private static final String CAMERA_NEEDS_WIFI = "The camera needs Wi-Fi: Bluetooth is too slow for video. Sound, files and remote control work over Bluetooth.";
+    private static final String CAMERA_NEEDS_WIFI = "Camera needs Wi-Fi or a hotspot - this device is connected over Bluetooth.";
     private volatile io.github.hafijbge.meshdrop.engine.bt.BtLinks btLinks;
     private volatile LinkPolicy btPolicy;
 

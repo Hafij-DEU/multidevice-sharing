@@ -21,6 +21,7 @@ import type { AppState, StreamKind, DeviceStatus, ReceivedRecord, DeviceView, Ph
 import type { HistoryStore } from './history.ts';
 import { SettingsError, type SettingsStore } from './settings.ts';
 import { liveAudio } from './liveaudio.ts';
+import { opusChannels, opusDecoder, opusEncoder, opusType } from './opus.ts';
 
 export interface Platform {
   notify(title: string, body: string, onClick?: () => void): void;
@@ -1198,7 +1199,7 @@ export class AppController extends EventEmitter {
    * M10b live streams on the LAN server: GET audio (this PC's sound, for devices that may control it),
    * POST camera / mic (a phone's camera or microphone becomes a virtual device here).
    */
-  #onStream(s: { peer: string; method: string; path: string; req: import('node:http').IncomingMessage; res: import('node:http').ServerResponse }): boolean {
+  #onStream(s: { peer: string; method: string; path: string; query?: URLSearchParams; req: import('node:http').IncomingMessage; res: import('node:http').ServerResponse }): boolean {
     const p = this.#platform;
     const alias = this.#e.devices().find((d) => d.deviceId === s.peer)?.alias;
     const deny = (status: number, error: string) => {
@@ -1210,6 +1211,11 @@ export class AppController extends EventEmitter {
     if (!kind) return false;
     // this PC's sound, and sound played out of its speakers: only for devices allowed on the Remote page
     if ((kind === 'audio' || kind === 'sound') && !this.#settings.get().remoteFrom.includes(s.peer)) return deny(403, 'remote-off');
+    // M14: video does not fit a Bluetooth link (the sender refuses first; this covers older ones)
+    if (kind === 'camera' && this.#e.devices().find((d) => d.deviceId === s.peer)?.reach === 'bt') return deny(409, 'camera-needs-wifi');
+    // M14: over Bluetooth sound goes as Opus: the phone asks for it (GET ?codec=opus) or sends it
+    const opusOut = kind === 'audio' && s.query?.get('codec') === 'opus';
+    const opusIn = kind === 'sound' || kind === 'mic' ? opusChannels(s.req.headers['content-type']) : null;
     const make = kind === 'audio' ? p.captureAudio : kind === 'camera' ? p.cameraSink : kind === 'mic' ? p.micSink : p.speakerSink;
     if (!make) return deny(501, 'unsupported');
     let pipe: MediaPipe;
@@ -1218,27 +1224,34 @@ export class AppController extends EventEmitter {
     } catch (e) {
       return deny(503, e instanceof Error ? e.message : 'unavailable');
     }
+    const codec = opusOut ? opusEncoder(2) : opusIn ? opusDecoder(opusIn) : null;
     const id = randomUUID();
     let ended = false;
     const end = () => {
       if (ended) return;
       ended = true;
       pipe.stop();
+      codec?.destroy();
       this.#streams.delete(id);
       if (!s.res.writableEnded) s.res.destroy();
       this.#changed();
     };
+    codec?.on('error', end);
     this.#streams.set(id, { kind, peer: s.peer, ...(alias ? { alias } : {}), stop: end });
     pipe.onExit(end);
-    s.req.on('close', end);
-    s.res.on('close', end);
+    // a finished Opus upload still has its tail in the decoder: that ends once the sink has it
+    const flushing = () => opusIn !== null && s.req.complete;
+    s.req.on('close', () => flushing() || end());
+    s.res.on('close', () => flushing() || end());
+    if (opusIn) pipe.in?.on('finish', end);
     if (kind === 'audio') {
-      s.res.writeHead(200, { 'content-type': 'audio/L16; rate=48000; channels=2', 'cache-control': 'no-store' });
-      pipe.out!.pipe(s.res);
+      s.res.writeHead(200, { 'content-type': codec ? opusType(2) : 'audio/L16; rate=48000; channels=2', 'cache-control': 'no-store' });
+      (codec ? pipe.out!.pipe(codec) : pipe.out!).pipe(s.res);
     } else {
       // sound and microphone stay live: audio that piled up behind a Wi-Fi stall is dropped
       const live = kind === 'sound' ? liveAudio(192_000, 4) : kind === 'mic' ? liveAudio(96_000, 2) : null;
-      (live ? s.req.pipe(live) : s.req).pipe(pipe.in! as NodeJS.WritableStream);
+      const pcm = codec ? s.req.pipe(codec) : s.req;
+      (live ? pcm.pipe(live) : pcm).pipe(pipe.in! as NodeJS.WritableStream);
       s.req.on('end', () => {
         if (!s.res.headersSent) s.res.writeHead(200, { 'content-type': 'application/json' });
         s.res.end('{"ok":true}');
@@ -1266,6 +1279,8 @@ export class AppController extends EventEmitter {
     if (!p.captureAudio) throw new Error("This PC's sound cannot be captured here.");
     if ([...this.#streams.values()].some((s) => s.kind === 'sound-out' && s.peer === deviceId)) return;
     const alias = this.#e.devices().find((d) => d.deviceId === deviceId)?.alias;
+    // M14: Opus over a Bluetooth link (raw PCM needs 1.5 Mbit/s)
+    const codec = (await this.#e.viaBluetooth(deviceId)) ? opusEncoder(2) : null;
     const pipe = p.captureAudio();
     const abort = new AbortController();
     const id = randomUUID();
@@ -1274,6 +1289,7 @@ export class AppController extends EventEmitter {
       if (ended) return;
       ended = true;
       pipe.stop();
+      codec?.destroy();
       abort.abort();
       this.#streams.delete(id);
       this.#changed();
@@ -1282,7 +1298,7 @@ export class AppController extends EventEmitter {
     pipe.onExit(end);
     this.#changed();
     const done = this.#e
-      .streamPost(deviceId, 'sound', 'audio/L16; rate=48000; channels=2', pipe.out as import('node:stream').Readable, abort.signal)
+      .streamPost(deviceId, 'sound', codec ? opusType(2) : 'audio/L16; rate=48000; channels=2', codec ? pipe.out!.pipe(codec) : (pipe.out as import('node:stream').Readable), abort.signal)
       .then((status) => (status === 403 ? `${alias ?? 'That device'} does not let this PC play there: on it, tick this PC on the Remote page.` : status === 501 ? `${alias ?? 'That device'} cannot play sound.` : null))
       .catch((e: unknown) => (ended ? null : e instanceof Error ? e.message : String(e)))
       .finally(end);

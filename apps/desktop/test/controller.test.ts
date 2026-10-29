@@ -572,6 +572,31 @@ describe('AppController internet access', () => {
     expect(Buffer.concat(B.p.camera)).toEqual(jpeg);
   });
 
+  it.skipIf(spawnSync('gst-launch-1.0', ['--version']).status !== 0)('M14: sound sent as Opus (a Bluetooth link) plays as PCM', async () => {
+    const { LanTransport } = await import('@meshdrop/core/src/transfer/transport.ts');
+    const { loadOrCreateIdentity } = await import('@meshdrop/core/src/identity.ts');
+    const { opusEncoder, opusType } = await import('../src/main/opus.ts');
+    const A = await make('ay');
+    const B = await make('bee');
+    await pair(A.c, B.c);
+    await B.c.setSettings({ remoteFrom: [A.c.state().self.deviceId] });
+    const enc = opusEncoder(2);
+    const chunks: Buffer[] = [];
+    enc.on('data', (c: Buffer) => chunks.push(c));
+    const done = new Promise((r) => enc.on('end', r));
+    enc.end(Buffer.alloc(48_000 * 4 / 2)); // half a second of silence
+    await done;
+    const opus = Buffer.concat(chunks);
+    const idA = await loadOrCreateIdentity(A.home);
+    const lan = new LanTransport(idA, { deviceId: B.c.state().self.deviceId, host: '127.0.0.1', port: B.c.state().self.port });
+    const r = await lan.request('POST', '/mesh/v1/stream/sound', opus, { 'content-type': opusType(2) }, { timeoutMs: 10_000 });
+    expect(r.status).toBe(200);
+    // decoded PCM arrives (the live filter keeps ~120 ms of a burst), then the stream closes
+    await until(() => Buffer.concat(B.p.speaker).length >= 48_000 * 4 / 20);
+    expect(Buffer.concat(B.p.speaker).length).toBeGreaterThan(opus.length);
+    await until(() => (B.c.state().streams ?? []).length === 0);
+  });
+
   it("one PC's sound plays on another PC that allows it; refused otherwise; Stop ends it on both", async () => {
     const A = await make('ay');
     const B = await make('bee');

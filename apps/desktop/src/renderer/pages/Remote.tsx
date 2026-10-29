@@ -267,6 +267,8 @@ function SoundTo({ state, run, to, label }: { state: AppState; run: Run; to: str
   );
 }
 
+const CAMERA_NEEDS_WIFI = 'Camera needs Wi-Fi or a hotspot - this device is connected over Bluetooth.';
+
 const PANELS = ['Touchpad', 'Keyboard', 'Media', 'Presenter', 'PC'] as const;
 
 /** Control another device (a PC) from this one: touchpad, keyboard, media keys, slides, PC actions. */
@@ -506,14 +508,16 @@ function AndroidExtras({ state, run, trusted }: { state: AppState; run: Run; tru
         </button>
       )}
       <h2>Sound, camera and microphone</h2>
-      <p className="muted">On the same Wi-Fi. Sound goes either way only with devices ticked on that PC ("Devices that may control this PC"); your camera and microphone show up on the PC as a webcam and a microphone for video calls.</p>
-      {pcs.filter((d) => d.reach === 'lan').map((d) => {
+      <p className="muted">On the same Wi-Fi or a Bluetooth link. Sound goes either way only with devices ticked on that PC ("Devices that may control this PC"); your camera and microphone show up on the PC as a webcam and a microphone for video calls.</p>
+      {pcs.filter((d) => d.reach === 'lan' || d.reach === 'bt').map((d) => {
         const c = state.casting ?? {};
+        // M14: Bluetooth carries sound (Opus) but not video
+        const bt = d.reach === 'bt';
         const on = (k: 'audio' | 'camera' | 'mic') => (k === 'audio' ? c.audioFrom : k === 'camera' ? c.cameraTo : c.micTo) === d.deviceId;
         const toggle = (k: 'audio' | 'camera' | 'mic') => void run(() => (on(k) ? window.meshdrop.streamStop(k) : window.meshdrop.streamStart!(d.deviceId, k)));
         return (
           <div key={d.deviceId} className="row wrap">
-            <Peer text={d.alias} />
+            <Peer text={bt ? `${d.alias} (Bluetooth)` : d.alias} />
             <button aria-pressed={on('audio')} onClick={() => toggle('audio')}>{on('audio') ? 'Stop PC sound' : 'Play PC sound here'}</button>
             {on('camera') ? (
               <>
@@ -524,12 +528,13 @@ function AndroidExtras({ state, run, trusted }: { state: AppState; run: Run; tru
               </>
             ) : (
               <>
-                <button onClick={() => toggle('camera')}>Use as webcam</button>
-                <button onClick={() => void run(() => window.meshdrop.streamStart!(d.deviceId, 'camera', 'back'))}>Webcam with the back camera</button>
+                <button disabled={bt} title={bt ? CAMERA_NEEDS_WIFI : undefined} onClick={() => toggle('camera')}>Use as webcam</button>
+                <button disabled={bt} title={bt ? CAMERA_NEEDS_WIFI : undefined} onClick={() => void run(() => window.meshdrop.streamStart!(d.deviceId, 'camera', 'back'))}>Webcam with the back camera</button>
               </>
             )}
             <button aria-pressed={on('mic')} onClick={() => toggle('mic')}>{on('mic') ? 'Stop microphone' : 'Use as microphone'}</button>
             <SoundTo state={state} run={run} to={d.deviceId} label="Play phone sound on PC" />
+            {bt && <p className="muted">{CAMERA_NEEDS_WIFI}</p>}
           </div>
         );
       })}
