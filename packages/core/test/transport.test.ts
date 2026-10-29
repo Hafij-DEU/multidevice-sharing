@@ -201,6 +201,12 @@ describe('sender transports', () => {
     });
     await stop;
     expect(first.status).toBe('cancelled');
+    // A relay chunk already on its way when the send was cancelled still lands: let it, so the LAN
+    // leg starts from what B really holds (else that chunk races the resume and is sent twice).
+    for (let n = -1; n !== b.writes.length; ) {
+      n = b.writes.length;
+      await new Promise((r) => setTimeout(r, 300));
+    }
     const stored = b.writes.length;
     const lanTarget: Target = { ...targetB(), host: '127.0.0.1', port: b.lanPort! };
     const second = await sendTo(A, lanTarget, [{ kind: 'file', srcPath: f.path }], { ...fast, outbox, transport: (t) => new LanTransport(A, t) });

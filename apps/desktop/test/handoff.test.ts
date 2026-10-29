@@ -1,4 +1,5 @@
 import { readFileSync } from 'node:fs';
+import type { AddressInfo } from 'node:net';
 import { describe, expect, it } from 'vitest';
 import { handoffUrl, cleanHandoff } from '@meshdrop/core/src/handoff.ts';
 import { startHandoffServer } from '../src/main/handoff.ts';
@@ -19,7 +20,7 @@ describe('the extension door', () => {
   it('answers browser extensions only; polls get commands', async () => {
     const got: unknown[] = [];
     let release: (c: Record<string, unknown>) => void = () => {};
-    const port = 43000 + Math.floor(Math.random() * 1000);
+    // Port 0: a fixed or random pick can sit in the ephemeral range, held by some outgoing socket.
     const srv = await startHandoffServer(
       {
         state: (s) => void got.push(s),
@@ -27,10 +28,11 @@ describe('the extension door', () => {
         devices: () => [{ deviceId: 'p'.repeat(64), alias: 'Phone' }],
         send: async () => true,
       },
-      port,
+      0,
     );
+    expect(srv).not.toBeNull();
     try {
-      const base = `http://127.0.0.1:${port}`;
+      const base = `http://127.0.0.1:${(srv!.address() as AddressInfo).port}`;
       const ext = { origin: 'chrome-extension://abcdefghijklmnop', 'content-type': 'application/json' };
       expect((await fetch(`${base}/status`)).status).toBe(403); // no extension origin (curl, a web page)
       expect((await fetch(`${base}/status`, { headers: { origin: 'https://evil.example' } })).status).toBe(403);
