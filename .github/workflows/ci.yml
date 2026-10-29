@@ -17,7 +17,7 @@ jobs:
     name: Node engine + desktop
     runs-on: ubuntu-24.04
     timeout-minutes: 30
-    strategy: { fail-fast: false, matrix: { n: [1, 2, 3, 4] } }
+    strategy: { fail-fast: false, matrix: { n: [1, 2] } }
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -30,10 +30,11 @@ jobs:
         env:
           # Ubuntu 24.04 runners forbid the unprivileged user namespaces Chromium's sandbox needs.
           ELECTRON_DISABLE_SANDBOX: '1'
-          MD_PROF: ${{ (matrix.n == 1 || matrix.n == 3) && '1' || '0' }}
         run: |
           pnpm --filter @meshdrop/desktop build
           (while true; do { date -u +%T.%3N; head -1 /proc/loadavg; free -m | sed -n 2,3p; ps -eo pid,ppid,pcpu,rss,etimes,args --sort=-pcpu | head -12 | cut -c1-220; echo; } >> /tmp/md-ps.log; sleep 2; done) &
+          (command -v gdb || (sudo apt-get update -q && sudo apt-get install -yq gdb)) >/dev/null 2>&1
+          sudo python3 .github/sampler.py > /tmp/md-sampler.log 2>&1 &
           xvfb-run -a pnpm --filter @meshdrop/desktop e2e
       - uses: actions/upload-artifact@v4
         if: always()
@@ -43,6 +44,7 @@ jobs:
             apps/desktop/test-results
             /tmp/md-diag-*.log
             /tmp/md-ps.log
+            /tmp/md-sampler.log
             /tmp/md-prof-*.cpuprofile
           if-no-files-found: ignore
 
