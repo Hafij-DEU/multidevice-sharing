@@ -32,7 +32,8 @@ jobs:
           ELECTRON_DISABLE_SANDBOX: '1'
         run: |
           pnpm --filter @meshdrop/desktop build
-          xvfb-run -a pnpm --filter @meshdrop/desktop e2e e2e/mesh.spec.ts e2e/remote.spec.ts e2e/send.spec.ts
+          (while true; do { date -u +%T.%3N; head -1 /proc/loadavg; free -m | sed -n 2,3p; ps -eo pid,ppid,pcpu,rss,etimes,args --sort=-pcpu | head -12 | cut -c1-220; echo; } >> /tmp/md-ps.log; sleep 2; done) &
+          xvfb-run -a pnpm --filter @meshdrop/desktop e2e
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -40,6 +41,7 @@ jobs:
           path: |
             apps/desktop/test-results
             /tmp/md-diag-*.log
+            /tmp/md-ps.log
             /tmp/md-prof-*.cpuprofile
           if-no-files-found: ignore
 
