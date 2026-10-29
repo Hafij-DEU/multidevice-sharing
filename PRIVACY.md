@@ -10,6 +10,10 @@ MeshDrop is made by Md. Hafijur Rahman and has no server of its own.
 - **Pairing comes first.** Remote input (touchpad, keyboard, media keys), notification mirroring, the
   camera, microphone and sound streams, and folder sync work only between devices you have paired,
   and only after you allow them on the device being controlled or read.
+- **No Wi-Fi mode** uses Bluetooth and Wi-Fi hotspots only to reach your own devices. On a phone,
+  Android asks for the nearby-devices permission (location on Android 12 and older) to start or join
+  a hotspot; MeshDrop does not use or store your location. A hotspot's name and password go only to
+  your paired devices.
 - **Guests** (the QR link) can send or receive only what you accept in the moment.
 - **Optional internet access** uses services you choose and set up yourself (for example your own
   Tailscale or Cloudflare account, or a port-forward). Those services have their own privacy
