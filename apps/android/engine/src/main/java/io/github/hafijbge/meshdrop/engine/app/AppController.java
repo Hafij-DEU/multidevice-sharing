@@ -1310,13 +1310,25 @@ public final class AppController {
         streamStop(kind);
         platform.mediaStarting(kind);
         io.github.hafijbge.meshdrop.engine.Engine.Stream s;
+        // M14: over a Bluetooth link sound goes as Opus (raw PCM needs 1.5 Mbit/s); the camera is refused there
+        int ch = kind.equals("mic") ? 1 : 2;
+        io.github.hafijbge.meshdrop.engine.bt.OpusRtp.Codec codec = null;
         try {
-            s = kind.equals("audio") ? e().streamFrom(deviceId, "audio")
-                    : e().streamTo(deviceId, kind, kind.equals("camera") ? "multipart/x-mixed-replace" : kind.equals("sound") ? "audio/L16; rate=48000; channels=2" : "audio/L16; rate=48000; channels=1");
-        } catch (IOException x) {
+            if (!kind.equals("camera") && e().viaBluetooth(deviceId)) {
+                codec = kind.equals("audio") ? platform.opusDecoder(ch) : platform.opusEncoder(ch, io.github.hafijbge.meshdrop.engine.bt.OpusRtp.bitrate(ch));
+            }
+            String pcm = "audio/L16; rate=48000; channels=" + ch;
+            String type = codec != null ? io.github.hafijbge.meshdrop.engine.bt.OpusRtp.contentType(ch) : pcm;
+            s = kind.equals("audio") ? e().streamFrom(deviceId, codec != null ? "audio?codec=opus" : "audio")
+                    : e().streamTo(deviceId, kind, kind.equals("camera") ? "multipart/x-mixed-replace" : type);
+        } catch (IOException | RuntimeException x) {
+            if (codec != null) codec.close();
             platform.mediaStopped(kind);
             throw x;
         }
+        final io.github.hafijbge.meshdrop.engine.bt.OpusRtp.Codec opus = codec;
+        final java.io.InputStream sin = opus != null && s.in != null && kind.equals("audio") ? io.github.hafijbge.meshdrop.engine.bt.OpusRtp.decoding(s.in, opus) : s.in;
+        final java.io.OutputStream sout = opus != null && s.out != null ? io.github.hafijbge.meshdrop.engine.bt.OpusRtp.encoding(s.out, opus, ch) : s.out;
         casts.put(kind, s);
         castTo.put(kind, deviceId);
         if (kind.equals("camera")) cameraBack = back;
@@ -1324,18 +1336,19 @@ public final class AppController {
         Thread t = new Thread(() -> {
             java.util.function.BooleanSupplier stop = () -> casts.get(kind) != s;
             try {
-                if (kind.equals("audio")) platform.playAudio(s.in, stop);
-                else if (kind.equals("camera")) platform.captureCamera(s.out, stop, back);
-                else if (kind.equals("sound")) platform.captureSound(s.out, stop);
-                else platform.captureMic(s.out, stop);
+                if (kind.equals("audio")) platform.playAudio(sin, stop);
+                else if (kind.equals("camera")) platform.captureCamera(sout, stop, back);
+                else if (kind.equals("sound")) platform.captureSound(sout, stop);
+                else platform.captureMic(sout, stop);
             } catch (IOException | RuntimeException ignored) {
                 // the PC went away or the stream was stopped
             } finally {
                 try {
-                    if (s.out != null) s.out.close();
-                } catch (IOException ignored) {
+                    if (sout != null) sout.close();
+                } catch (IOException | RuntimeException ignored) {
                     // closing anyway
                 }
+                if (opus != null) opus.close();
                 s.close();
                 if (casts.remove(kind, s)) castTo.remove(kind);
                 platform.mediaStopped(kind);

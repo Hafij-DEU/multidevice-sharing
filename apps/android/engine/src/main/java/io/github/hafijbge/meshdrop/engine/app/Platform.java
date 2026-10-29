@@ -122,6 +122,18 @@ public interface Platform {
         throw new java.io.IOException("Not available on this device.");
     }
 
+    // ---- M14: sound over a Bluetooth link goes as Opus ----
+
+    /** An Opus encoder: 20 ms of s16le 48 kHz PCM in, Opus packets out. */
+    default io.github.hafijbge.meshdrop.engine.bt.OpusRtp.Codec opusEncoder(int channels, int bitrate) throws java.io.IOException {
+        throw new java.io.IOException(io.github.hafijbge.meshdrop.engine.bt.OpusRtp.NO_CODEC);
+    }
+
+    /** An Opus decoder: one Opus packet in, s16le 48 kHz PCM out. */
+    default io.github.hafijbge.meshdrop.engine.bt.OpusRtp.Codec opusDecoder(int channels) throws java.io.IOException {
+        throw new java.io.IOException(io.github.hafijbge.meshdrop.engine.bt.OpusRtp.NO_CODEC);
+    }
+
     // ---- M11 ----
 
     /** The name a picked file shows (a content:// ref has its own name). */

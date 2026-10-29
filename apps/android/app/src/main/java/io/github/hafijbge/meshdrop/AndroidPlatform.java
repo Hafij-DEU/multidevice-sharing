@@ -645,6 +645,16 @@ public class AndroidPlatform implements Platform {
         cast().sound(out, stop);
     }
 
+    @Override
+    public io.github.hafijbge.meshdrop.engine.bt.OpusRtp.Codec opusEncoder(int channels, int bitrate) throws java.io.IOException {
+        return OpusCodecs.encoder(channels, bitrate);
+    }
+
+    @Override
+    public io.github.hafijbge.meshdrop.engine.bt.OpusRtp.Codec opusDecoder(int channels) throws java.io.IOException {
+        return OpusCodecs.decoder(channels);
+    }
+
     // ---- M11 ----
 
     @Override

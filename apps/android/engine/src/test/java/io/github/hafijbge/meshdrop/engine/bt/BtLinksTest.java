@@ -222,7 +222,7 @@ public class BtLinksTest {
             a.e.streamTo(bId, "camera", "video/x-jpeg-frames");
             throw new AssertionError("camera over Bluetooth");
         } catch (IOException e) {
-            assertTrue(e.getMessage(), e.getMessage().contains("camera needs Wi-Fi"));
+            assertTrue(e.getMessage(), e.getMessage().contains("Camera needs Wi-Fi"));
         }
 
         Object peers = Json.parse(new String(Files.readAllBytes(new File(a.home, "bt-peers.json").toPath()), StandardCharsets.UTF_8));
