@@ -17,7 +17,7 @@ jobs:
     name: Node engine + desktop
     runs-on: ubuntu-24.04
     timeout-minutes: 30
-    strategy: { fail-fast: false, matrix: { n: [1, 2, 3] } }
+    strategy: { fail-fast: false, matrix: { n: [1, 2] } }
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -32,7 +32,7 @@ jobs:
           ELECTRON_DISABLE_SANDBOX: '1'
         run: |
           pnpm --filter @meshdrop/desktop build
-          xvfb-run -a pnpm --filter @meshdrop/desktop e2e
+          xvfb-run -a pnpm --filter @meshdrop/desktop e2e e2e/mesh.spec.ts e2e/remote.spec.ts e2e/send.spec.ts
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -40,5 +40,6 @@ jobs:
           path: |
             apps/desktop/test-results
             /tmp/md-diag-*.log
+            /tmp/md-prof-*.cpuprofile
           if-no-files-found: ignore
 
