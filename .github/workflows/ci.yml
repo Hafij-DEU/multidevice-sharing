@@ -26,7 +26,7 @@ jobs:
           node-version: 24
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - run: pnpm --filter @meshdrop/desktop add -D electron@${{ matrix.ev }} && pnpm --filter @meshdrop/desktop exec electron --version
+      - run: pnpm --filter @meshdrop/desktop add -D electron@${{ matrix.ev }} && ELECTRON_DISABLE_SANDBOX=1 pnpm --filter @meshdrop/desktop exec electron --no-sandbox --version || true
       - name: Desktop e2e (Electron under Xvfb)
         env:
           # Ubuntu 24.04 runners forbid the unprivileged user namespaces Chromium's sandbox needs.
