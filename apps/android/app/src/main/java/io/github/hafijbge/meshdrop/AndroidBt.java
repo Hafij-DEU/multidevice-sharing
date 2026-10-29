@@ -1,14 +1,13 @@
 package io.github.hafijbge.meshdrop;
 
+import android.annotation.SuppressLint;
 import android.bluetooth.BluetoothAdapter;
 import android.bluetooth.BluetoothClass;
 import android.bluetooth.BluetoothDevice;
 import android.bluetooth.BluetoothManager;
 import android.bluetooth.BluetoothServerSocket;
 import android.bluetooth.BluetoothSocket;
-import android.Manifest;
 import android.content.Context;
-import android.content.pm.PackageManager;
 import android.os.Build;
 import android.os.ParcelUuid;
 import io.github.hafijbge.meshdrop.engine.bt.BtPlatform;
@@ -78,11 +77,7 @@ final class AndroidBt implements BtPlatform {
             BluetoothAdapter a = adapter();
             if (!BluetoothAdapter.checkBluetoothAddress(address)) throw new IOException("Not a Bluetooth address.");
             s = a.getRemoteDevice(address).createRfcommSocketToServiceRecord(SERVICE);
-            // a running scan slows a connect down badly; stopping it needs BLUETOOTH_SCAN on Android 12+,
-            // which MeshDrop does not ask for, so it is stopped only where that is allowed
-            if (Build.VERSION.SDK_INT < 31 || ctx.checkSelfPermission(Manifest.permission.BLUETOOTH_SCAN) == PackageManager.PERMISSION_GRANTED) {
-                a.cancelDiscovery();
-            }
+            stopScan(a);
         } catch (SecurityException e) {
             throw new IOException("MeshDrop may not use Bluetooth.", e);
         }
@@ -93,6 +88,15 @@ final class AndroidBt implements BtPlatform {
             throw e instanceof IOException ? (IOException) e : new IOException("MeshDrop may not use Bluetooth.", e);
         }
         return wrap(s);
+    }
+
+    /**
+     * A running scan slows a connect down badly. Stopping it needs BLUETOOTH_SCAN on Android 12+, which
+     * MeshDrop does not ask for, so it is stopped only on older phones (BLUETOOTH_ADMIN, up to API 30).
+     */
+    @SuppressLint("MissingPermission")
+    private static void stopScan(BluetoothAdapter a) {
+        if (Build.VERSION.SDK_INT < 31) a.cancelDiscovery();
     }
 
     @Override
