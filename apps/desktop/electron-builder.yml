@@ -4,6 +4,9 @@
 appId: io.github.hafijbge.meshdrop
 productName: MeshDrop
 copyright: Copyright © 2026 Md. Hafijur Rahman
+# The UI is English only: ship only Chromium's en-US locale (the other 54 add ~46 MB installed).
+electronLanguages:
+  - en-US
 directories:
   buildResources: build
 files:

@@ -11,7 +11,8 @@ export default defineConfig({
     outDir: 'dist/main',
     emptyOutDir: true,
     target: 'node24',
-    minify: false,
+    // Smaller main.cjs parses faster at startup; the maps (not packaged) keep stack traces readable.
+    minify: true,
     sourcemap: true,
     rollupOptions: {
       input: { main: 'src/main/main.ts', preload: 'src/main/preload.ts' },
