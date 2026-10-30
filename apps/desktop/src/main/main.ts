@@ -19,7 +19,7 @@ import { Laser, mediaPlatform, remotePlatform } from './remote.ts';
 import { gtkToAccelerator, parseFileNameW, printWin, savedShortcut, saveShortcut, winRemotePlatform, writeClipboardFilesWin } from './windows.ts';
 import { setupPhones } from './phonesetup.ts';
 import { onReplaced } from './selfupdate.ts';
-import { startHandoffServer } from './handoff.ts';
+import { HANDOFF_PORT, startHandoffServer } from './handoff.ts';
 import { SettingsStore, defaultSettings } from './settings.ts';
 import { bluezPlatform } from './bluetooth.ts';
 import { CLIP_HELPER_ENV, ClipReader, runClipHelper } from './cliphelper.ts';
@@ -35,6 +35,9 @@ const ICONS = join(__dirname, '../icons');
 const CLIP_HELPER = process.env[CLIP_HELPER_ENV];
 /** Linux: clipboard reads go through a helper process, so a slow clipboard owner never stalls this thread. */
 const clipReader = process.platform === 'linux' && !CLIP_HELPER ? new ClipReader(ClipReader.self(join(HOME, 'clip-helper'))) : null;
+
+// A stray rejected background promise is logged, not left to Node's default (which would end the app).
+process.on('unhandledRejection', (e) => console.error('meshdrop: unhandled rejection:', e));
 
 let win: BrowserWindow | null = null;
 let picker: BrowserWindow | null = null;
@@ -277,7 +280,7 @@ const platform: Platform = {
     // received files are absolute paths in the inbox (never an option to lp)
     if (WIN) return isAbsolute(p) ? printWin(p) : Promise.reject(new Error('bad path'));
     if (!p.startsWith('/')) throw new Error('bad path');
-    await promisify(execFile)('lp', [p], { timeout: 30_000 });
+    await execFileP('lp', [p], { timeout: 30_000 });
   },
 };
 
@@ -562,7 +565,7 @@ async function startController(): Promise<void> {
         devices: () => c.handoffDevices(),
         send: (to, s) => c.handoffSend(to, s).catch(() => false),
       },
-      Number(process.env.MESHDROP_HANDOFF_PORT ?? 53321),
+      Number(process.env.MESHDROP_HANDOFF_PORT ?? HANDOFF_PORT),
     );
   }
 }
@@ -649,6 +652,7 @@ if (CLIP_HELPER) {
     controller = null;
     // Sends in flight end 'cancelled' and stay in the outbox (auto-resumed next time). A second
     // app.quit() after preventDefault() here is ignored by Electron: exit once stopped.
-    void c.stop().finally(() => app.exit(0));
+    // A stop stuck on a slow helper (nmcli waits up to 60 s) must not hang the quit: 5 s, then exit.
+    void Promise.race([c.stop(), new Promise((r) => setTimeout(r, 5000).unref())]).finally(() => app.exit(0));
   });
 }

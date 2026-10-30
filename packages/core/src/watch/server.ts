@@ -17,7 +17,7 @@ import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { CODE_RE, WatchError, type WatchRooms } from './rooms.ts';
 
-export const MAX_UPLOAD = 8 * 1024 ** 3;
+const MAX_UPLOAD = 8 * 1024 ** 3;
 const MEMBER_RE = /^[A-Za-z0-9_-]{8,40}$/;
 const MISS_WINDOW_MS = 60_000;
 const MAX_MISSES = 20;

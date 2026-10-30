@@ -79,12 +79,12 @@ export const READ_KEYBINDINGS = ['gsettings', 'get', MEDIA_KEYS, 'custom-keybind
 
 export const NAUTILUS_SCRIPT = 'Send with MeshDrop';
 
-export function nautilusScriptsDir(): string {
+function nautilusScriptsDir(): string {
   return join(process.env.XDG_DATA_HOME || join(homedir(), '.local', 'share'), 'nautilus', 'scripts');
 }
 
 /** Files → right-click → Scripts → Send with MeshDrop: hands the selection to the running app. */
-export function nautilusScript(execPath: Exec): string {
+function nautilusScript(execPath: Exec): string {
   const sh = (s: string) => `'${s.replace(/'/g, `'\\''`)}'`;
   return ['#!/bin/sh', '# Installed by MeshDrop: right-click files in Files, then Scripts → Send with MeshDrop.', `exec ${(typeof execPath === 'string' ? [execPath] : execPath).map(sh).join(' ')} --send "$@"`, ''].join('\n');
 }

@@ -120,6 +120,13 @@ export class Laser {
     if (this.#hide) clearTimeout(this.#hide);
     this.#hide = setTimeout(() => this.#win?.hide(), 3000); // no news from the phone: the dot goes
   }
+
+  close(): void {
+    if (this.#hide) clearTimeout(this.#hide);
+    this.#hide = null;
+    if (this.#win && !this.#win.isDestroyed()) this.#win.destroy();
+    this.#win = null;
+  }
 }
 
 /** Applications in the app grid (.desktop files that are shown), by id. */
@@ -154,7 +161,7 @@ function appDirs(): string[] {
 }
 
 /** This PC's battery (if it has one) and the free space where received files go. */
-export function pcStatus(inboxDir: string): Omit<DeviceStatus, 'at'> {
+function pcStatus(inboxDir: string): Omit<DeviceStatus, 'at'> {
   const s: Omit<DeviceStatus, 'at'> = {};
   try {
     const bat = readdirSync('/sys/class/power_supply').find((n) => n.startsWith('BAT'));
@@ -237,7 +244,7 @@ export function mediaPlatform(): Required<Pick<Platform, 'captureAudio' | 'camer
 }
 
 /** The M10 part of the Electron platform. */
-export function remotePlatform(opts: { home: string; script: string; inbox: () => string; openUrl: (u: string) => Promise<void> }): Required<Pick<Platform, 'input' | 'laser' | 'pcAction' | 'apps' | 'openApp' | 'ring' | 'openUrl' | 'status'>> {
+export function remotePlatform(opts: { home: string; script: string; inbox: () => string; openUrl: (u: string) => Promise<void> }): Required<Pick<Platform, 'input' | 'laser' | 'pcAction' | 'apps' | 'openApp' | 'ring' | 'openUrl' | 'status' | 'dispose'>> {
   const input = new InputHelper(opts.script, join(opts.home, 'input-token'));
   const laser = new Laser();
   let ringing: ChildProcess | null = null;
@@ -279,5 +286,12 @@ export function remotePlatform(opts: { home: string; script: string; inbox: () =
     },
     openUrl: opts.openUrl,
     status: async () => pcStatus(opts.inbox()),
+    dispose: () => {
+      input.stop();
+      laser.close();
+      ringLoop = false;
+      ringing?.kill();
+      ringing = null;
+    },
   };
 }

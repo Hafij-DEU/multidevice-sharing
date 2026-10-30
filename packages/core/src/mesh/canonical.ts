@@ -48,7 +48,7 @@ export class CanonicalError extends Error {
 }
 
 /** Maximum nesting depth accepted by canonicalJson. */
-export const MAX_DEPTH = 64;
+const MAX_DEPTH = 64;
 
 function isPlain(o: object): boolean {
   const p = Object.getPrototypeOf(o) as unknown;

@@ -27,7 +27,7 @@ const B64_RE = /^[A-Za-z0-9+/]+={0,2}$/;
 const PENDING_FILE = 'mesh-pending.json';
 const JOIN_TIMEOUT_MS = 15_000;
 
-export class JoinError extends Error {
+class JoinError extends Error {
   constructor(message: string) {
     super(message);
     this.name = 'JoinError';

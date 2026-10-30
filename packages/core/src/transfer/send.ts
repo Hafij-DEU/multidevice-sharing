@@ -83,12 +83,12 @@ export interface SendOptions {
 }
 
 export const DEFAULT_RETRY_DELAYS_MS: readonly number[] = Object.freeze([500, 1000, 2000]);
-export const DEFAULT_CONCURRENCY = 3;
+const DEFAULT_CONCURRENCY = 3;
 const DEFAULT_TIMEOUT_MS = 30_000;
 const DEFAULT_FINALIZE_TIMEOUT_MS = 10 * 60_000;
 const DEFAULT_CONNECT_TIMEOUT_MS = 10_000;
 /** Connect and request timeout of the best-effort `cancel`. */
-export const CANCEL_TIMEOUT_MS = 3000;
+const CANCEL_TIMEOUT_MS = 3000;
 const HASH_BUF = 1024 * 1024;
 const SESSION_ID_RE = /^[A-Za-z0-9_-]{22}$/;
 const DEVICE_ID_RE = /^[0-9a-f]{64}$/;
@@ -99,7 +99,7 @@ const MALFORMED_REPLY = /^(invalid JSON in application\/json response|response b
 // ---- errors ------------------------------------------------------------------------------------
 
 /** A non-2xx reply. 5xx is transient (retried); everything else fails the session. */
-export class HttpStatusError extends Error {
+class HttpStatusError extends Error {
   readonly status: number;
   readonly code: string;
   constructor(status: number, code: string) {
@@ -111,7 +111,7 @@ export class HttpStatusError extends Error {
 }
 /** A source file changed (size/mtime) after the manifest was built. Never retried. */
 /** A name in the items cannot be sent as is (too deep, too long, reserved, unsafe characters). */
-export class LocalPathError extends Error {
+class LocalPathError extends Error {
   readonly path: string;
   constructor(path: string, reason: string) {
     super(`cannot send ${JSON.stringify(path)}: ${reason}`);
@@ -120,7 +120,7 @@ export class LocalPathError extends Error {
   }
 }
 
-export class SourceChangedError extends Error {
+class SourceChangedError extends Error {
   constructor(path: string) {
     super(`source changed: ${path}`);
     this.name = 'SourceChangedError';

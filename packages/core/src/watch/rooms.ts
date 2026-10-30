@@ -8,9 +8,9 @@ import type { ServerResponse } from 'node:http';
 import { join } from 'node:path';
 
 /** No 0/O, 1/I/L: a code read aloud or from a screen is typed right. */
-export const CODE_ALPHABET = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
+const CODE_ALPHABET = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
 export const CODE_RE = /^[ABCDEFGHJKMNPQRSTUVWXYZ23456789]{6}$/;
-export const MAX_ROOMS = 20;
+const MAX_ROOMS = 20;
 export const MAX_MEMBERS = 50;
 const MAX_CHAT = 200;
 const ROOM_IDLE_MS = 6 * 3_600_000;
@@ -106,7 +106,7 @@ interface Member extends WatchMember {
 }
 
 /** One room. */
-export class WatchRoom {
+class WatchRoom {
   readonly code: string;
   readonly name: string;
   readonly hostToken: string;

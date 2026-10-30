@@ -11,13 +11,13 @@ import { LINK_CHUNK, keyHash, linkChunkCount, newLinkId, newLinkKey, sealChunk, 
 const scrypt = promisify(scryptCb) as (pw: string, salt: Buffer, len: number, opts: object) => Promise<Buffer>;
 const SCRYPT = { N: 1 << 15, r: 8, p: 1, maxmem: 64 * 1024 * 1024 };
 
-export const DEFAULT_LINK_QUOTA_BYTES = 10 * 1024 ** 3;
-export const MIN_LINK_TTL_MS = 3_600_000;
-export const MAX_LINK_TTL_MS = 30 * 24 * 3_600_000;
-export const DEFAULT_LINK_TTL_MS = 7 * 24 * 3_600_000;
+const DEFAULT_LINK_QUOTA_BYTES = 10 * 1024 ** 3;
+const MIN_LINK_TTL_MS = 3_600_000;
+const MAX_LINK_TTL_MS = 30 * 24 * 3_600_000;
+const DEFAULT_LINK_TTL_MS = 7 * 24 * 3_600_000;
 export const LINK_SESSION_MS = 3_600_000;
 /** Open visitor sessions kept at most (the oldest go first); expired ones are dropped on each open. */
-export const MAX_LINK_SESSIONS = 5000;
+const MAX_LINK_SESSIONS = 5000;
 const MAX_TRIES = 5;
 const TRY_WINDOW_MS = 600_000;
 const ID_RE = /^[A-Za-z0-9_-]{22}$/;

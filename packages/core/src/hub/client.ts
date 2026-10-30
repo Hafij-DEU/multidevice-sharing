@@ -16,10 +16,10 @@ import { verifySigned, type SignedMembership } from '../mesh/membership.ts';
 import type { Invite } from '../mesh/invite.ts';
 import { CLOSE_REVOKED, HUB_AUTH_DOMAIN, HUB_CTL_DOMAIN, HUB_PATH, MAX_FRAME_BYTES, type DirectoryEntry, type LanAddr } from './server.ts';
 
-export const DEFAULT_BACKOFF_MS: readonly number[] = Object.freeze([1000, 2000, 5000, 10000, 30000, 60000]);
-export const DEFAULT_PING_MS = 240_000;
+const DEFAULT_BACKOFF_MS: readonly number[] = Object.freeze([1000, 2000, 5000, 10000, 30000, 60000]);
+const DEFAULT_PING_MS = 240_000;
 /** An online link that lasts this long resets the backoff. */
-export const STABLE_LINK_MS = 60_000;
+const STABLE_LINK_MS = 60_000;
 const HANDSHAKE_TIMEOUT_MS = 15_000;
 /** Answers kept for repeats; they are small JSON bodies (chunk PUTs answer 204 with no body). */
 const ANSWER_CACHE_MAX = 1024;
@@ -30,7 +30,7 @@ export class HubOfflineError extends Error {
     this.name = 'HubOfflineError';
   }
 }
-export class RelayTimeoutError extends Error {
+class RelayTimeoutError extends Error {
   constructor() {
     super('relay request timed out');
     this.name = 'RelayTimeoutError';
@@ -60,8 +60,8 @@ export interface HubClientOptions {
   drainMs?: number;
 }
 
-export const DEFAULT_FAILBACK_MS = 300_000;
-export const DEFAULT_DRAIN_MS = 600_000;
+const DEFAULT_FAILBACK_MS = 300_000;
+const DEFAULT_DRAIN_MS = 600_000;
 /** A drain link closes after this long without traffic (or after DRAIN_MAX_MS). */
 const DRAIN_IDLE_MS = 15_000;
 const DRAIN_MAX_MS = 120_000;
@@ -90,6 +90,10 @@ export class HubClient extends EventEmitter {
   #lastRx = 0;
   #ws: WebSocket | null = null;
   #stopped = true;
+  /** Bumped by start() and stop(): a connect loop or handshake from an older run must not go online. */
+  #run = 0;
+  /** Sockets still in the handshake, so stop() can cut them before a late welcome lands. */
+  #handshakes = new Set<WebSocket>();
   #attempt = 0;
   #retry: NodeJS.Timeout | null = null;
   #ping: NodeJS.Timeout | null = null;
@@ -130,11 +134,15 @@ export class HubClient extends EventEmitter {
   start(): void {
     if (this.#state === 'revoked' || !this.#stopped) return;
     this.#stopped = false;
+    this.#run++;
     void this.#connect();
   }
 
   async stop(): Promise<void> {
     this.#stopped = true;
+    this.#run++;
+    for (const h of this.#handshakes) h.terminate();
+    this.#handshakes.clear();
     this.#clearTimers();
     for (const t of [this.#failback, this.#drain]) if (t) clearInterval(t);
     this.#failback = this.#drain = null;
@@ -256,12 +264,13 @@ export class HubClient extends EventEmitter {
 
   async #connect(): Promise<void> {
     if (this.#stopped || this.#state === 'revoked') return;
+    const run = this.#run;
     this.#state = 'connecting';
     // The main hub first; only when none of its addresses answers, a relay hub.
     for (const t of [...this.#targets(), ...this.#relayTargets()]) {
-      if (this.#stopped) return;
+      if (this.#stopped || run !== this.#run) return;
       const ok = await this.#tryTarget(t);
-      if (ok || this.#stopped || (this.#state as HubClientState) === 'revoked') return;
+      if (ok || this.#stopped || run !== this.#run || (this.#state as HubClientState) === 'revoked') return;
     }
     this.#scheduleRetry();
   }
@@ -304,12 +313,14 @@ export class HubClient extends EventEmitter {
   #tryTarget(t: Target, drain = false): Promise<boolean> {
     const { id, members } = this.#o;
     const hubId = members.list().hub.deviceId;
+    const run = this.#run;
     return new Promise<boolean>((resolve) => {
       let settled = false;
       const done = (ok: boolean) => {
         if (settled) return;
         settled = true;
         clearTimeout(timer);
+        this.#handshakes.delete(ws);
         resolve(ok);
       };
       const ws = new WebSocket(t.url, {
@@ -321,6 +332,7 @@ export class HubClient extends EventEmitter {
         maxPayload: MAX_FRAME_BYTES,
         handshakeTimeout: HANDSHAKE_TIMEOUT_MS,
       });
+      this.#handshakes.add(ws);
       const timer = setTimeout(() => { ws.terminate(); done(false); }, HANDSHAKE_TIMEOUT_MS);
       const myNonce = randomBytes(32).toString('base64');
       let authed = false;
@@ -376,6 +388,10 @@ export class HubClient extends EventEmitter {
           const hubPub = this.#pubOf(helloHub);
           if (!hubPub || typeof m.sig !== 'string' || !verifyDomain(HUB_AUTH_DOMAIN, `hub\0${id.deviceId}\0${myNonce}`, m.sig, hubPub)) {
             return ws.terminate();
+          }
+          if (this.#stopped || run !== this.#run) {
+            ws.terminate();
+            return done(false);
           }
           authed = true;
           if (m.membership) this.#applyMembership(m.membership as SignedMembership);

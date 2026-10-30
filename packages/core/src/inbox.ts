@@ -54,9 +54,9 @@ export interface InboxOptions { fs?: typeof nodeFs }
 export const PARTIAL_DIR = '.meshdrop-partial';
 /** Tombstones of finished sessions live in <root>/.meshdrop-partial/.finished/<sessionId>.json. */
 const FINISHED_DIR = '.finished';
-export const FINISHED_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+const FINISHED_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 /** Partial sessions not touched for this long are removed by prune() (default). */
-export const PARTIAL_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+const PARTIAL_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const LOG = 'progress.log';
 /** Compact the log once it holds more than LOG_SLACK x its live records (+ LOG_MIN_LINES). */
 const LOG_SLACK = 4;

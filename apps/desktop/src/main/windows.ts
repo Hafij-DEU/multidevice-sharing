@@ -17,7 +17,7 @@ const POWERSHELL = join(SYSTEM_ROOT, 'System32', 'WindowsPowerShell', 'v1.0', 'p
 const RING_SOUND = join(SYSTEM_ROOT, 'Media', 'Alarm01.wav');
 
 /** powershell.exe running `command`; values go in through `env` (never spliced into the command). */
-export function powershell(command: string, env: Record<string, string> = {}, timeout = 30_000): Promise<string> {
+function powershell(command: string, env: Record<string, string> = {}, timeout = 30_000): Promise<string> {
   return run(POWERSHELL, ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', command], {
     timeout,
     windowsHide: true,
@@ -26,7 +26,7 @@ export function powershell(command: string, env: Record<string, string> = {}, ti
 }
 
 /** The input helper (build/meshdrop-input.ps1): started on first use, kept running; reset after a failure. */
-export class WinInputHelper {
+class WinInputHelper {
   #proc: ChildProcess | null = null;
   #ready: Promise<void> | null = null;
   readonly script: string;
@@ -82,7 +82,7 @@ export class WinInputHelper {
 }
 
 /** The Start menu folders (all users, then this user). */
-export function startMenuDirs(): string[] {
+function startMenuDirs(): string[] {
   const programData = process.env.ProgramData || 'C:\\ProgramData';
   const appData = process.env.APPDATA || join(homedir(), 'AppData', 'Roaming');
   return [join(programData, 'Microsoft', 'Windows', 'Start Menu', 'Programs'), join(appData, 'Microsoft', 'Windows', 'Start Menu', 'Programs')];
@@ -121,7 +121,7 @@ export function parseBattery(out: string): DeviceStatus['battery'] | undefined {
   return { level: level!, charging: ![1, 4, 5].includes(status!) };
 }
 
-export async function winStatus(inboxDir: string): Promise<Omit<DeviceStatus, 'at'>> {
+async function winStatus(inboxDir: string): Promise<Omit<DeviceStatus, 'at'>> {
   const s: Omit<DeviceStatus, 'at'> = {};
   try {
     const out = await powershell('$b = Get-CimInstance Win32_Battery | Select-Object -First 1; if ($b) { "$($b.EstimatedChargeRemaining) $($b.BatteryStatus)" }', {}, 15_000);
@@ -228,7 +228,7 @@ export function gtkToAccelerator(binding: string): string {
   return [...parts, key.length === 1 ? key.toUpperCase() : key[0]!.toUpperCase() + key.slice(1)].join('+');
 }
 
-export function shortcutFile(home: string): string {
+function shortcutFile(home: string): string {
   return join(home, 'clipboard-shortcut');
 }
 

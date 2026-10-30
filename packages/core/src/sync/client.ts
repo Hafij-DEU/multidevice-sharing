@@ -14,9 +14,9 @@ import { fileState, SYNC_SLICE } from './server.ts';
 import type { SyncStore } from './store.ts';
 
 /** Where 0.3.0–0.3.2 put removed files (hidden, per round, emptied after 30 days); still emptied, no longer filled. */
-export const TRASH_DIR = '.meshdrop-trash';
+const TRASH_DIR = '.meshdrop-trash';
 export const PARTIAL_DIR = '.meshdrop-partial';
-export const TRASH_DAYS = 30;
+const TRASH_DAYS = 30;
 const HASH_RE = /^[0-9a-f]{64}$/;
 const REQ_TIMEOUT_MS = 60_000;
 
@@ -73,7 +73,7 @@ async function toDeleted(folder: string, rel: string): Promise<void> {
 }
 
 /** Empties rounds of the old hidden trash (0.3.0–0.3.2) older than TRASH_DAYS. */
-export async function pruneTrash(folder: string, now: number): Promise<void> {
+async function pruneTrash(folder: string, now: number): Promise<void> {
   const dir = join(folder, TRASH_DIR);
   let names: string[];
   try {

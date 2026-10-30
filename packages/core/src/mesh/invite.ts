@@ -12,7 +12,7 @@ export const INVITE_TTL_MS = 300_000;
 export const INVITE_GROUP_TTL_MS = 900_000;
 export const INVITE_GROUP_USES = 20;
 export const INVITE_MAX_ATTEMPTS = 5;
-export const JOIN_DOMAIN = 'meshdrop-join-v1';
+const JOIN_DOMAIN = 'meshdrop-join-v1';
 const SECRET_BYTES = 16;
 
 export interface Invite {

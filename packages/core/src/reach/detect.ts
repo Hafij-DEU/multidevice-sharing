@@ -4,7 +4,7 @@
 // work and a tunnel is the way.
 import { NatError, defaultGateway, igdFromLocation, pmpExternalIp, ssdpDiscover, upnpExternalIp, type Igd } from './nat.ts';
 
-export const DEFAULT_PUBLIC_IP_URLS = ['https://api.ipify.org', 'https://ifconfig.me/ip'];
+const DEFAULT_PUBLIC_IP_URLS = ['https://api.ipify.org', 'https://ifconfig.me/ip'];
 const IPV4 = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/;
 
 export function isShared(ip: string): boolean {

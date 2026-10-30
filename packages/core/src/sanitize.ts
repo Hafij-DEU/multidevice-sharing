@@ -10,13 +10,13 @@ export class UnsafePathError extends Error {
   }
 }
 
-export const MAX_PATH_SEGMENTS = 32;
+const MAX_PATH_SEGMENTS = 32;
 /** Max UTF-8 bytes per segment: 255 (NAME_MAX) minus room for the " (nnn)" suffix uniqueName adds. */
-export const MAX_SEGMENT_BYTES = 240;
+const MAX_SEGMENT_BYTES = 240;
 /** Keep a trailing ".ext" when truncating only if it is at most this many bytes. */
 const MAX_EXT_BYTES = 16;
 /** Max UTF-8 bytes for the whole relative path (PATH_MAX is 4096 on Linux, leaving room for the root). */
-export const MAX_PATH_BYTES = 3072;
+const MAX_PATH_BYTES = 3072;
 const LONE_SURROGATE = /\p{Surrogate}/gu;
 const byteLen = (s: string): number => Buffer.byteLength(s, 'utf8');
 

@@ -1,6 +1,22 @@
 import { execFileSync } from 'node:child_process';
 import { describe, expect, it } from 'vitest';
-import { opusBitrate, opusChannels, opusDecoder, opusEncoder, opusType, rfc4571Split } from '../src/main/opus.ts';
+import { opusBitrate, opusChannels, opusDecoder, opusEncoder, opusType } from '../src/main/opus.ts';
+
+/**
+ * Splits an RFC 4571 byte stream into RTP packets (the Android side has its own in Java).
+ * Returns the packets and the bytes left over.
+ */
+function rfc4571Split(buf: Buffer): { packets: Buffer[]; rest: Buffer } {
+  const packets: Buffer[] = [];
+  let off = 0;
+  while (buf.length - off >= 2) {
+    const len = buf.readUInt16BE(off);
+    if (buf.length - off - 2 < len) break;
+    packets.push(buf.subarray(off + 2, off + 2 + len));
+    off += 2 + len;
+  }
+  return { packets, rest: buf.subarray(off) };
+}
 
 const hasGst = (() => {
   try {

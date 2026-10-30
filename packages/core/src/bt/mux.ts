@@ -8,11 +8,11 @@ import type { Duplex } from 'node:stream';
 
 export const FT = { HELLO: 0, OPEN: 1, DATA: 2, END: 3, CREDIT: 4, PING: 5, PONG: 6, RESET: 7 } as const;
 
-export const MAX_PAYLOAD = 16 * 1024;
+const MAX_PAYLOAD = 16 * 1024;
 /** DATA frames carry at most this much, so live sound interleaves with a running file transfer. */
-export const DATA_SLICE = 4 * 1024;
+const DATA_SLICE = 4 * 1024;
 /** Unacknowledged bytes a stream may have in flight before its sender pauses. */
-export const STREAM_WINDOW = 256 * 1024;
+const STREAM_WINDOW = 256 * 1024;
 const HEADER = 9;
 
 export interface Frame { type: number; stream: number; payload: Buffer }

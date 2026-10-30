@@ -13,7 +13,7 @@ import { join } from 'node:path';
 import { ensureDir, land } from '../guest/uploads.ts';
 import { safeRelPath } from '../sanitize.ts';
 
-export const LS_PREFIX = '/api/localsend/v2/';
+const LS_PREFIX = '/api/localsend/v2/';
 const MAX_JSON = 1024 * 1024;
 const MAX_FILES = 1000;
 const MAX_TEXT = 64 * 1024;
@@ -58,7 +58,7 @@ class LsError extends Error {
 const same = (a: string, b: string) => a.length === b.length && timingSafeEqual(Buffer.from(a), Buffer.from(b));
 const str = (v: unknown, max: number) => (typeof v === 'string' && v.length <= max ? v : undefined);
 
-export function peerOf(info: unknown): LsPeer {
+function peerOf(info: unknown): LsPeer {
   const i = (typeof info === 'object' && info !== null ? info : {}) as Record<string, unknown>;
   const alias = str(i.alias, 128);
   const fingerprint = str(i.fingerprint, 256);

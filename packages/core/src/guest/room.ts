@@ -14,9 +14,9 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import { join } from 'node:path';
 import { pipeline } from 'node:stream/promises';
 
-export const MAX_ROOM_FILE = 200 * 1024 * 1024;
-export const MAX_ROOM_BYTES = 4 * 1024 ** 3;
-export const MAX_ROOM_POSTS = 1000;
+const MAX_ROOM_FILE = 200 * 1024 * 1024;
+const MAX_ROOM_BYTES = 4 * 1024 ** 3;
+const MAX_ROOM_POSTS = 1000;
 const TOKEN_RE = /^[A-Za-z0-9_-]{22}$/;
 const ID_RE = /^[A-Za-z0-9_-]{12}$/;
 const IMAGE_RE = /\.(jpe?g|png|gif|webp|avif|bmp)$/i;
@@ -38,7 +38,7 @@ function send(res: ServerResponse, status: number, body: string | Buffer, type: 
 const json = (res: ServerResponse, status: number, v: unknown) => send(res, status, JSON.stringify(v), 'application/json; charset=utf-8');
 
 /** A clean display name: no path, no control characters, at most 120 characters. */
-export function roomName(s: string, fallback: string): string {
+function roomName(s: string, fallback: string): string {
   const n = s.replace(/[\u0000-\u001f\u007f/\\]/g, '_').replace(/^\.+/, '_').trim().slice(0, 120);
   return n || fallback;
 }

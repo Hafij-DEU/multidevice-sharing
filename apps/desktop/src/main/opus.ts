@@ -21,7 +21,7 @@ export const opusBitrate = (channels: 1 | 2): number => (channels === 2 ? 96_000
 const RTP_CAPS = 'application/x-rtp-stream,media=audio,clock-rate=48000,encoding-name=OPUS,payload=96';
 
 /** gst-launch arguments: s16le 48 kHz PCM in, RFC 4571 Opus RTP out. */
-export function encodeArgs(channels: 1 | 2, bitrate = opusBitrate(channels)): string[] {
+function encodeArgs(channels: 1 | 2, bitrate = opusBitrate(channels)): string[] {
   return [
     '-q', 'fdsrc', 'fd=0', '!',
     'rawaudioparse', 'format=pcm', 'pcm-format=s16le', 'sample-rate=48000', `num-channels=${channels}`, '!',
@@ -34,7 +34,7 @@ export function encodeArgs(channels: 1 | 2, bitrate = opusBitrate(channels)): st
 }
 
 /** gst-launch arguments: RFC 4571 Opus RTP in, s16le 48 kHz PCM out. */
-export function decodeArgs(channels: 1 | 2): string[] {
+function decodeArgs(channels: 1 | 2): string[] {
   return [
     '-q', 'fdsrc', 'fd=0', '!',
     RTP_CAPS, '!',
@@ -68,20 +68,4 @@ export function opusEncoder(channels: 1 | 2, cmd?: string): Duplex {
 /** Opus RTP (RFC 4571) in, PCM out. */
 export function opusDecoder(channels: 1 | 2, cmd?: string): Duplex {
   return gst(decodeArgs(channels), cmd);
-}
-
-/**
- * Splits an RFC 4571 byte stream into RTP packets (tests; the Android side has its own in Java).
- * Returns the packets and the bytes left over.
- */
-export function rfc4571Split(buf: Buffer): { packets: Buffer[]; rest: Buffer } {
-  const packets: Buffer[] = [];
-  let off = 0;
-  while (buf.length - off >= 2) {
-    const len = buf.readUInt16BE(off);
-    if (buf.length - off - 2 < len) break;
-    packets.push(buf.subarray(off + 2, off + 2 + len));
-    off += 2 + len;
-  }
-  return { packets, rest: buf.subarray(off) };
 }

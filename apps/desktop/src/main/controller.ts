@@ -26,6 +26,9 @@ import { HOTSPOT_HOST_IP, validHotspot, wifiQr, type NetMan } from './netman.ts'
 
 export type ClipImage = { key: string; png: () => Buffer | Promise<Buffer> };
 
+/** A background tick that threw: logged, and the timer keeps running. */
+const tickFailed = (e: unknown) => console.error('meshdrop: background tick failed:', e);
+
 export interface Platform {
   notify(title: string, body: string, onClick?: () => void): void;
   writeClipboard(text: string): void;
@@ -65,6 +68,8 @@ export interface Platform {
   micSink?(name: string): MediaPipe;
   /** Another device's sound (s16le 48 kHz stereo) out of this PC's speakers, until stop(). */
   speakerSink?(name: string): MediaPipe;
+  /** Ends helpers the platform started (remote-input helper, laser window): called by stop(). */
+  dispose?(): void;
 }
 
 /** A media helper process: read from `out` or write to `in`; stop() ends it. */
@@ -89,7 +94,7 @@ const BURN_UNOPENED_MS = 7 * 86_400_000;
 const M11_TICK_MS = 15_000;
 
 /** M11 smart inbox: the folder a received file goes in. */
-export function inboxCategory(name: string): string {
+function inboxCategory(name: string): string {
   const ext = /\.([^.]+)$/.exec(name)?.[1]?.toLowerCase() ?? '';
   const of: [string, string[]][] = [
     ['Images', ['jpg', 'jpeg', 'png', 'gif', 'webp', 'heic', 'heif', 'bmp', 'svg', 'tif', 'tiff', 'avif']],
@@ -236,7 +241,7 @@ async function measure(items: SendItemInput[]): Promise<{ files: number; bytes: 
 
 /** Files that would run as a program when opened (by name, or by the executable bit). */
 const RUNNABLE_EXT = /\.(desktop|sh|bash|zsh|run|bin|appimage|deb|rpm|snap|flatpak|exe|msi|bat|cmd|com|scr|ps1|vbs|js|jar|py|pl|rb|apk|lnk)$/i;
-export function runnable(p: string): boolean {
+function runnable(p: string): boolean {
   if (RUNNABLE_EXT.test(p)) return true;
   try {
     return (statSync(p).mode & 0o111) !== 0;
@@ -329,6 +334,7 @@ export class AppController extends EventEmitter {
     this.#m11Timer = null;
     if (this.#ringing) void this.ringStop();
     for (const st of this.#streams.values()) st.stop();
+    this.#platform.dispose?.();
     this.#net?.guard.stop();
     if (this.#hotspot) await this.#net?.stop().catch(() => undefined); // a hotspot does not outlive the app
     if (this.#timer) clearTimeout(this.#timer);
@@ -364,9 +370,9 @@ export class AppController extends EventEmitter {
     }
     if (!this.#m11Timer) {
       this.#loadScheduled();
-      this.#m11Timer = setInterval(() => void this.#m11Tick(), this.#timing.tickMs ?? M11_TICK_MS);
+      this.#m11Timer = setInterval(() => this.#m11Tick().catch(tickFailed), this.#timing.tickMs ?? M11_TICK_MS);
       this.#m11Timer.unref();
-      void this.#m11Tick();
+      this.#m11Tick().catch(tickFailed);
     }
     try {
       await e.start();
@@ -419,7 +425,7 @@ export class AppController extends EventEmitter {
     if (l) {
       this.#mode = 'client-only';
       this.#engine = await this.#run(this.#engineOpts(false, l.port)); // invites carry the service's port
-      this.#recheck = setInterval(() => void this.#checkListener(), LISTENER_RECHECK_MS);
+      this.#recheck = setInterval(() => this.#checkListener().catch(tickFailed), LISTENER_RECHECK_MS);
       this.#recheck.unref();
     }
     void this.#refreshOutbox();

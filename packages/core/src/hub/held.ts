@@ -10,8 +10,8 @@ import * as nodeFs from 'node:fs/promises';
 import { randomBytes } from 'node:crypto';
 import { decodeFrame, encodeFrame, type Envelope } from '../mesh/envelope.ts';
 
-export const DEFAULT_HELD_QUOTA_BYTES = 20 * 1024 ** 3;
-export const DEFAULT_HELD_TTL_MS = 7 * 24 * 3600 * 1000;
+const DEFAULT_HELD_QUOTA_BYTES = 20 * 1024 ** 3;
+const DEFAULT_HELD_TTL_MS = 7 * 24 * 3600 * 1000;
 const NOTICES = '.notices';
 
 export interface HeldReply { status: number; body: object | undefined }

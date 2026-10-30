@@ -7,7 +7,7 @@ import { deviceIdOf, type Identity } from './identity.ts';
 /** Default time allowed for TCP connect + TLS handshake + pin check. */
 export const DEFAULT_CONNECT_TIMEOUT_MS = 10_000;
 /** Default idle timeout for a pinnedRequest (resets on any socket activity). */
-export const DEFAULT_REQUEST_IDLE_TIMEOUT_MS = 30_000;
+const DEFAULT_REQUEST_IDLE_TIMEOUT_MS = 30_000;
 /**
  * Errors that hit a pinned socket between connectPinned() and pinnedRequest(). Without a listener
  * a peer RST in that gap would be an unhandled 'error' event and crash the process.

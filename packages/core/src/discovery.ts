@@ -54,13 +54,13 @@ export interface ProbeOptions {
   timeoutMs?: number;
 }
 
-export const DEFAULT_GROUP = '224.0.0.168';
+const DEFAULT_GROUP = '224.0.0.168';
 /** UDP announce port. */
-export const DEFAULT_DISCOVERY_PORT = 53318;
+const DEFAULT_DISCOVERY_PORT = 53318;
 /** TCP mesh HTTPS port, the default target of `probe`. */
 export const DEFAULT_MESH_PORT = 53318;
-export const MAX_ANNOUNCE_BYTES = 1024;
-export const MAX_PEERS = 256;
+const MAX_ANNOUNCE_BYTES = 1024;
+const MAX_PEERS = 256;
 export const MAX_ALIAS_CHARS = 64;
 /** An info response is a ~100-byte JSON object; a scan target must not make us buffer more. */
 const MAX_INFO_BYTES = 4096;

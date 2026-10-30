@@ -9,8 +9,8 @@ import { join } from 'node:path';
 import { writeFileAtomic } from '../trust.ts';
 import { canonicalJson, signDomain, verifyDomain } from './canonical.ts';
 
-export const RELAYS_DOMAIN = 'meshdrop-relays-v1';
-export const MAX_RELAYS = 8;
+const RELAYS_DOMAIN = 'meshdrop-relays-v1';
+const MAX_RELAYS = 8;
 const DEVICE_ID_RE = /^[0-9a-f]{64}$/;
 
 export interface Relay {
@@ -30,7 +30,7 @@ export interface SignedRelays {
   sig: string;
 }
 
-export class RelayListError extends Error {
+class RelayListError extends Error {
   constructor(message: string) {
     super(message);
     this.name = 'RelayListError';
@@ -39,7 +39,7 @@ export class RelayListError extends Error {
 
 const isObj = (x: unknown): x is Record<string, unknown> => typeof x === 'object' && x !== null && !Array.isArray(x);
 
-export function validateRelays(x: unknown): RelayList {
+function validateRelays(x: unknown): RelayList {
   if (!isObj(x) || x.v !== 1) throw new RelayListError('invalid relay list');
   if (typeof x.mesh !== 'string' || x.mesh === '') throw new RelayListError('invalid relay list: mesh');
   if (!Number.isSafeInteger(x.version) || (x.version as number) < 1) throw new RelayListError('invalid relay list: version');

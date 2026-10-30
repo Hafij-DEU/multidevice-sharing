@@ -7,9 +7,6 @@ import type { Duplex } from 'node:stream';
 import { writeFileAtomic } from '../trust.ts';
 import { BtLink } from './mux.ts';
 
-/** The MeshDrop RFCOMM service UUID (SDP record on both platforms). */
-export const BT_SERVICE_UUID = '6d657368-6472-6f70-0001-000000000001';
-
 /** A paired device that offers the MeshDrop service. */
 export interface BtBonded { address: string; name: string }
 
@@ -25,7 +22,6 @@ export interface BtPlatform {
 
 /** Per device: Auto (LAN, else Bluetooth, else hub), Wi-Fi only, or Bluetooth only. */
 export type LinkMode = 'auto' | 'wifi' | 'bt';
-export const LINK_MODES: readonly LinkMode[] = ['auto', 'wifi', 'bt'];
 
 export interface LinkPolicy {
   /** Master switch (default on). Off: no Bluetooth at all. */

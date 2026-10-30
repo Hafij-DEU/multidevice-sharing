@@ -6,7 +6,7 @@ import { EventEmitter } from 'node:events';
 import { networkInterfaces } from 'node:os';
 import type { LsInfo } from './server.ts';
 
-export const LS_GROUP = '224.0.0.167';
+const LS_GROUP = '224.0.0.167';
 export const LS_PORT = 53317;
 
 export interface LsPeerInfo {

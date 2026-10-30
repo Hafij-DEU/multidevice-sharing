@@ -5,7 +5,7 @@ import { buildCsr } from '../x509.ts';
 
 export const LETS_ENCRYPT = 'https://acme-v02.api.letsencrypt.org/directory';
 
-export class AcmeError extends Error {
+class AcmeError extends Error {
   constructor(message: string) {
     super(message);
     this.name = 'AcmeError';
@@ -14,7 +14,7 @@ export class AcmeError extends Error {
 
 const b64u = (b: Buffer | string) => Buffer.from(b).toString('base64url');
 
-export function jwkOf(pub: KeyObject): { crv: string; kty: string; x: string; y: string } {
+function jwkOf(pub: KeyObject): { crv: string; kty: string; x: string; y: string } {
   const j = pub.export({ format: 'jwk' }) as { crv: string; kty: string; x: string; y: string };
   return { crv: j.crv, kty: j.kty, x: j.x, y: j.y };
 }

@@ -63,9 +63,15 @@ async function poll() {
     for (;;) {
       let r;
       try {
-        r = await fetch(APP + '/poll', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' });
+        // The app answers within 25 s; a hung app must not leave this fetch pending forever.
+        r = await fetch(APP + '/poll', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: '{}',
+          signal: AbortSignal.timeout(35_000),
+        });
       } catch {
-        break; // the app is not running: the alarm tries again
+        break; // the app is not running (or hung): the alarm tries again
       }
       if (!r.ok) break;
       const cmd = await r.json().catch(() => ({}));

@@ -30,7 +30,7 @@ export interface LinkManifest {
 }
 
 export const UPLOAD_SALT_BYTES = 16;
-export const UPLOAD_KEY_DOMAIN = 'meshdrop-link-upload-v1';
+const UPLOAD_KEY_DOMAIN = 'meshdrop-link-upload-v1';
 
 /** The key one upload offer (and its slices) is sealed with: derived from the link key and the offer's salt. */
 export function uploadKey(linkKey: Buffer, linkId: string, salt: Buffer): Buffer {

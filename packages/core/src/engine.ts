@@ -115,11 +115,11 @@ export type EngineEvent =
       error?: string;
     };
 
-export const DEFAULT_GUEST_PORT = 53320;
+const DEFAULT_GUEST_PORT = 53320;
 /** How long a guest link works: the owner's choice within these bounds (plain HTTP: keep it short). */
-export const DEFAULT_GUEST_MINUTES = 60;
-export const MIN_GUEST_MINUTES = 5;
-export const MAX_GUEST_MINUTES = 24 * 60;
+const DEFAULT_GUEST_MINUTES = 60;
+const MIN_GUEST_MINUTES = 5;
+const MAX_GUEST_MINUTES = 24 * 60;
 
 /** The LAN guest session as the app shows it. */
 export interface GuestState {
@@ -870,7 +870,7 @@ export class Engine extends EventEmitter {
       const poll = setInterval(() => {
         this.syncInvite();
         void this.pickUpMesh();
-        void this.applyHubRequests();
+        this.applyHubRequests().catch(() => {});
       }, INVITE_POLL_MS);
       poll.unref();
       const pending = setInterval(() => void this.finishPendingJoin(), PENDING_RETRY_MS);
@@ -1848,8 +1848,12 @@ export class Engine extends EventEmitter {
       } catch (e) {
         result = { ok: false, error: e instanceof Error ? e.message : String(e) };
       }
-      rmSync(file, { force: true });
-      writeFileAtomic(join(dir, `${m[1]}.done.json`), JSON.stringify(result));
+      try {
+        rmSync(file, { force: true });
+        writeFileAtomic(join(dir, `${m[1]}.done.json`), JSON.stringify(result));
+      } catch {
+        /* disk full or read-only home: the poll timer must not die on it; next poll retries */
+      }
     }
   }
 

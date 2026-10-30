@@ -3,7 +3,7 @@
 // One live session per engine; it ends after its TTL, when the owner ends it, or when a new one opens.
 import { randomBytes, timingSafeEqual } from 'node:crypto';
 
-export const GUEST_TTL_MS = 3_600_000;
+const GUEST_TTL_MS = 3_600_000;
 const KEEP_OLD = 16;
 
 export type GuestCheck = 'ok' | 'unknown' | 'used' | 'expired';

@@ -8,13 +8,13 @@ import { join } from 'node:path';
 import type { Readable } from 'node:stream';
 import { safeRelPath, uniqueName } from '../sanitize.ts';
 
-export const MAX_GUEST_FILES = 1000;
-export const MAX_GUEST_TEXT = 64 * 1024;
-export const MAX_GUEST_THUMB = 48 * 1024;
-export const MAX_GUEST_SLICE = 4 * 1024 * 1024;
-export const MAX_GUEST_PENDING = 4;
+const MAX_GUEST_FILES = 1000;
+const MAX_GUEST_TEXT = 64 * 1024;
+const MAX_GUEST_THUMB = 48 * 1024;
+const MAX_GUEST_SLICE = 4 * 1024 * 1024;
+const MAX_GUEST_PENDING = 4;
 /** All thumbnails of one offer together (they travel in every app state update while pending). */
-export const MAX_GUEST_THUMBS_TOTAL = 1024 * 1024;
+const MAX_GUEST_THUMBS_TOTAL = 1024 * 1024;
 const PARTIAL_DIR = '.meshdrop-partial';
 const NO_HARDLINK = new Set(['EPERM', 'ENOTSUP', 'EOPNOTSUPP', 'ENOSYS', 'EMLINK']);
 

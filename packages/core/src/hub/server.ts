@@ -35,22 +35,22 @@ export const HUB_CTL_DOMAIN = 'meshdrop-hub-ctl-v1';
 const CTL_MAX_SKEW_MS = 10 * 60_000;
 export const HUB_PATH = '/mesh/v1/hub';
 export const DEFAULT_INGRESS_PORT = 53319;
-export const DEFAULT_HEARTBEAT_TIMEOUT_MS = 510_000;
-export const DEFAULT_AUTH_TIMEOUT_MS = 10_000;
+const DEFAULT_HEARTBEAT_TIMEOUT_MS = 510_000;
+const DEFAULT_AUTH_TIMEOUT_MS = 10_000;
 export const MAX_FRAME_BYTES = MAX_OFFER_BODY + 64 * 1024;
-export const CLOSE_AUTH = 4401;
+const CLOSE_AUTH = 4401;
 export const CLOSE_REVOKED = 4403;
-export const CLOSE_REPLACED = 4409;
+const CLOSE_REPLACED = 4409;
 /** Too many links waiting to authenticate. */
-export const CLOSE_BUSY = 4429;
-export const MAX_PENDING_AUTH = 64;
+const CLOSE_BUSY = 4429;
+const MAX_PENDING_AUTH = 64;
 /**
  * Links from one address waiting to authenticate. Loopback is exempt: the internet ingress (a tunnel
  * on this machine) brings every outside link from 127.0.0.1.
  */
-export const MAX_PENDING_AUTH_PER_IP = 8;
+const MAX_PENDING_AUTH_PER_IP = 8;
 const isLoopback = (ip: string) => ip === '::1' || ip.startsWith('127.') || ip.startsWith('::ffff:127.');
-export const MAX_PREAUTH_BYTES = 16384;
+const MAX_PREAUTH_BYTES = 16384;
 const MAX_LAN_ADDRS = 8;
 
 export interface LanAddr { host: string; port: number }
@@ -93,7 +93,7 @@ export interface HubServerOptions {
   now?: () => number;
 }
 
-export const DEFAULT_RELAY_TIMEOUT_MS = 600_000;
+const DEFAULT_RELAY_TIMEOUT_MS = 600_000;
 
 interface Relay { from: string; to: string; timer: NodeJS.Timeout; onRes?: (e: Envelope | null) => void }
 const HELD_PRUNE_INTERVAL_MS = 3600_000;

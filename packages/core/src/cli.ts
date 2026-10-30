@@ -829,6 +829,11 @@ async function cmdGuest(base: EngineOptions, share: string[], acceptAll: boolean
   }
 }
 
+// A stray rejected background promise (a socket, a timer tick) is logged, not fatal: `serve` keeps running.
+process.on('unhandledRejection', (e: unknown) => {
+  err(`meshdrop: unhandled: ${printable((e as Error)?.message ?? String(e))}`);
+});
+
 main(process.argv.slice(2)).then(
   (code) => {
     process.exitCode = code;

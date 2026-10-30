@@ -79,10 +79,10 @@ export interface MeshServerOptions {
 }
 
 /** Max body of a join request (device id, alias, certificate, proof). */
-export const MAX_JOIN_BODY = 64 * 1024;
+const MAX_JOIN_BODY = 64 * 1024;
 
 /** An app message (M10) is small: input events, a notification, a reply. */
-export const MAX_APP_BODY = 256 * 1024;
+const MAX_APP_BODY = 256 * 1024;
 
 export interface MeshRequest {
   /** Authenticated caller, or null when the transport could not identify one. */

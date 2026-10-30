@@ -5,7 +5,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 
 const run = promisify(execFile);
-export const PKG = 'io.github.hafijbge.meshdrop';
+const PKG = 'io.github.hafijbge.meshdrop';
 
 export interface PhoneSetupResult {
   serial: string;

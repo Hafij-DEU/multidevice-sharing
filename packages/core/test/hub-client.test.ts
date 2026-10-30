@@ -85,19 +85,23 @@ async function startRealHub(mesh: Mesh, port = 0): Promise<RealHub> {
 }
 
 /** A hub impostor/test double: completes the handshake with `welcomeKey`, then hands over the socket. */
-async function startFakeHub(welcomeKey: KeyObject): Promise<{ port: number; sockets: WebSocket[] }> {
+async function startFakeHub(welcomeKey: KeyObject, welcomeDelayMs = 0): Promise<{ port: number; sockets: WebSocket[]; auths: number }> {
   const https = createServer(serverTlsOptions(H));
   const wss = new WebSocketServer({ noServer: true });
   const sockets: WebSocket[] = [];
+  const r = { port: 0, sockets, auths: 0 };
   https.on('upgrade', (req, socket, head) => {
     wss.handleUpgrade(req, socket, head, (ws) => {
       const nonce = randomBytes(32).toString('base64');
       ws.on('error', () => {});
       ws.once('message', (d) => {
+        r.auths++;
         const auth = JSON.parse(d.toString());
         const sig = signDomain(HUB_AUTH_DOMAIN, `hub\0${auth.deviceId}\0${auth.nonce}`, welcomeKey);
-        ws.send(JSON.stringify({ t: 'welcome', sig, directory: [] }));
-        sockets.push(ws);
+        setTimeout(() => {
+          ws.send(JSON.stringify({ t: 'welcome', sig, directory: [] }));
+          sockets.push(ws);
+        }, welcomeDelayMs);
       });
       ws.send(JSON.stringify({ t: 'hello', v: 1, hub: H.deviceId, nonce }));
     });
@@ -108,7 +112,8 @@ async function startFakeHub(welcomeKey: KeyObject): Promise<{ port: number; sock
     https.closeAllConnections();
     await new Promise<void>((r) => https.close(() => r()));
   });
-  return { port: (https.address() as { port: number }).port, sockets };
+  r.port = (https.address() as { port: number }).port;
+  return r;
 }
 
 interface Dev { client: HubClient; members: MembershipStore; handled: MeshRequest[] }
@@ -166,6 +171,31 @@ describe('HubClient', () => {
     a.client.start();
     await sleep(400);
     expect(a.client.state).not.toBe('online');
+  });
+
+  it('stop() during the handshake: a late welcome never brings the link online', async () => {
+    const mesh = await makeMesh();
+    const fake = await startFakeHub(H.privateKey, 300);
+    const a = await device(mesh, A, () => fake.port);
+    a.client.start();
+    await until(() => fake.auths === 1);
+    await a.client.stop();
+    await sleep(500);
+    expect(a.client.state).toBe('idle');
+  });
+
+  it('stop() then start() during the handshake runs one connect loop, not two', async () => {
+    const mesh = await makeMesh();
+    const fake = await startFakeHub(H.privateKey, 300);
+    const a = await device(mesh, A, () => fake.port);
+    a.client.start();
+    await until(() => fake.auths === 1);
+    await a.client.stop();
+    a.client.start();
+    await until(() => a.client.state === 'online');
+    await sleep(500);
+    expect(fake.auths).toBe(2);
+    expect(fake.sockets.filter((w) => w.readyState === w.OPEN)).toHaveLength(1);
   });
 
   it('reconnects after the hub restarts', async () => {
