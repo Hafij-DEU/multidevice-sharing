@@ -41,10 +41,9 @@ public final class BtLink implements Closeable {
      * The phone is the Bluetooth central: the far side only gets send slots when the phone transmits, so a
      * phone that only listens got 21-27% of real-time sound. While a stream has received DATA in the last
      * FILL_FOR_MS, the writer sends a frame at least every FILL_MS (an empty CREDIT on stream 0, which a
-     * peer ignores as a frame for an unknown stream). Each transmission let the far side send about 130
-     * bytes, so every 10 ms only just carried 96 kbit/s sound and any lost slot broke it up.
+     * peer ignores as a frame for an unknown stream).
      */
-    static final long FILL_MS = 3;
+    static final long FILL_MS = 10;
     static final long FILL_FOR_MS = 5000;
     private static final byte[] FILL = BtMux.encode(BtMux.CREDIT, 0, new byte[4]);
     /** Logcat tag MeshDropBt: why links and streams end, for field reports. */

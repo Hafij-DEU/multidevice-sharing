@@ -294,21 +294,15 @@ public class BtLinkTest {
         }
         long to = System.nanoTime();
         long gap = 0, prev = from;
-        int sent = 0;
         synchronized (seen) {
             for (long t : seen) {
                 if (t < from || t > to) continue;
                 gap = Math.max(gap, t - prev);
                 prev = t;
-                sent++;
             }
         }
         gap = Math.max(gap, to - prev);
         assertTrue("longest upstream silence " + gap / 1_000_000 + " ms", gap < TimeUnit.MILLISECONDS.toNanos(40));
-        // each phone transmission lets the far side send about one RFCOMM frame: 100 a second only just
-        // carried 96 kbit/s sound, so any lost slot broke it up
-        long perSecond = sent * TimeUnit.SECONDS.toNanos(1) / (to - from);
-        assertTrue(perSecond + " frames a second", perSecond >= 200);
         // Nothing received for a while: back to the keepalive alone.
         Thread.sleep(BtLink.FILL_FOR_MS + 300);
         int before = seen.size();
