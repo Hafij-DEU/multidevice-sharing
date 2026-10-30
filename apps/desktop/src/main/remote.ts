@@ -232,9 +232,23 @@ export function mediaPipe(cmd: string, args: string[], dir: 'in' | 'out', opts: 
   };
 }
 
+/** A device name made safe for PipeWire properties. */
+const label = (s: string) => s.replace(/[^\p{L}\p{N} ._-]/gu, '').slice(0, 40) || 'Phone';
+
+/** The gst-launch arguments that turn back-to-back JPEG frames into the PipeWire camera `node`. */
+export function cameraArgs(name: string, node = 'meshdrop-camera'): string[] {
+  return [
+    '-q', 'fdsrc', 'fd=0', 'do-timestamp=true', '!', 'jpegparse', '!',
+    // pipewiresink takes no frames while no app shows the camera: drop the oldest instead of blocking, so the
+    // phone's upload keeps flowing and its end arrives (a blocked one left a stale, frozen camera behind)
+    'queue', 'leaky=downstream', 'max-size-buffers=2', 'max-size-bytes=0', 'max-size-time=0', '!', 'jpegdec', '!', 'videoconvert', '!', 'video/x-raw,format=YUY2', '!',
+    // gst-launch re-parses its arguments: the description's quotes must be escaped inside the quoted value
+    'pipewiresink', `stream-properties="props,media.class=Video/Source,media.role=Camera,node.name=${node},node.description=\\"${label(name)} camera (MeshDrop)\\""`,
+  ];
+}
+
 /** Media for M10b: this PC's sound out, a phone's camera and microphone in (PipeWire, no root). */
 export function mediaPlatform(): Required<Pick<Platform, 'captureAudio' | 'cameraSink' | 'micSink' | 'speakerSink'>> {
-  const label = (s: string) => s.replace(/[^\p{L}\p{N} ._-]/gu, '').slice(0, 40) || 'Phone';
   return {
     // what the speakers play (the default sink's monitor)
     captureAudio: () => mediaPipe('pw-record', ['--raw', '--latency', '20ms', '-P', '{ stream.capture.sink=true node.name=meshdrop-cast }', '--format', 's16', '--rate', '48000', '--channels', '2', '-'], 'out'),
@@ -242,13 +256,7 @@ export function mediaPlatform(): Required<Pick<Platform, 'captureAudio' | 'camer
     speakerSink: (name) =>
       mediaPipe('pw-cat', ['--playback', '--raw', '--latency', '20ms', '--format', 's16', '--rate', '48000', '--channels', '2', '-P', `{ node.name=meshdrop-sound media.name="Sound from ${label(name)}" }`, '-'], 'in', { stallMs: STALL_MS }),
     // back-to-back JPEG frames -> a PipeWire video source that browsers and call apps can pick
-    // (no stall watchdog: pipewiresink waits while no app shows the camera)
-    cameraSink: (name) =>
-      mediaPipe('gst-launch-1.0', [
-        '-q', 'fdsrc', 'fd=0', 'do-timestamp=true', '!', 'jpegparse', '!', 'jpegdec', '!', 'videoconvert', '!', 'video/x-raw,format=YUY2', '!',
-        // gst-launch re-parses its arguments: the description's quotes must be escaped inside the quoted value
-        'pipewiresink', `stream-properties="props,media.class=Video/Source,media.role=Camera,node.name=meshdrop-camera,node.description=\\"${label(name)} camera (MeshDrop)\\""`,
-      ], 'in'),
+    cameraSink: (name) => mediaPipe('gst-launch-1.0', cameraArgs(name), 'in'),
     // s16le 48 kHz mono -> a virtual microphone (a null-sink loopback whose source side apps record from)
     micSink: (name) => {
       const loop = spawn('pw-loopback', [
