@@ -108,11 +108,11 @@ function inboxCategory(name: string): string {
 const STATUS_POLL_MS = 60_000;
 const RING_MAX_MS = 60_000;
 /**
- * 1 s of 48 kbit/s Opus with its RTP, RFC 4571 and HTTP chunk overhead (about 7 kB/s). The count
+ * 0.6 s of 32 kbit/s Opus with its RTP, RFC 4571 and HTTP chunk overhead (about 5 kB/s). The count
  * includes bytes on their way, and a phone's credit takes about 0.4 s to come back, so a smaller cap
  * drops sound even while the link keeps up.
  */
-const OPUS_LIVE_BYTES = 7000;
+const OPUS_LIVE_BYTES = 3000;
 
 /** Turns the Remote page's events into input primitives (unknown keys are skipped). */
 export function toPrims(events: RemoteEvent[]): InputPrim[] {

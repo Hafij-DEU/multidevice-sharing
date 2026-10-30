@@ -57,7 +57,7 @@ describe('opus content types', () => {
     expect(opusChannels('audio/opus-rtp')).toBe(2);
     expect(opusChannels('audio/L16; rate=48000; channels=2')).toBeNull();
     expect(opusChannels(undefined)).toBeNull();
-    expect(opusBitrate(2)).toBe(48_000);
+    expect(opusBitrate(2)).toBe(32_000);
     expect(opusBitrate(1)).toBe(32_000);
   });
 
