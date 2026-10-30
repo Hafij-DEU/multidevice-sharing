@@ -250,6 +250,66 @@ public class BtLinkTest {
         assertTrue(why.get().getMessage(), why.get().getMessage().contains("silent"));
     }
 
+    @Test(timeout = 20_000)
+    public void keepsTransmittingWhileAStreamReceives() throws Exception {
+        // The phone is the Bluetooth central: the far side only gets send slots while the phone transmits.
+        int sink = meshStub(s -> {
+            try {
+                readAll(s.getInputStream());
+            } catch (IOException ignored) {
+            }
+        });
+        ServerSocket ss = new ServerSocket(0, 1, LOOPBACK);
+        Socket x = new Socket(LOOPBACK, ss.getLocalPort());
+        Socket y = ss.accept();
+        open.add(y);
+        ss.close();
+        x.setTcpNoDelay(true); // RFCOMM has no Nagle; on TCP it would hold small frames for 40 ms
+        BtLink a = new BtLink(x.getInputStream(), x.getOutputStream(), x, true, A, () -> sink, 15_000, QUIET);
+        open.add(a);
+        a.start();
+        List<Long> seen = java.util.Collections.synchronizedList(new ArrayList<>());
+        Thread reader = new Thread(() -> {
+            try {
+                java.io.DataInputStream in = new java.io.DataInputStream(y.getInputStream());
+                while (true) {
+                    BtMux.read(in);
+                    seen.add(System.nanoTime());
+                }
+            } catch (IOException ignored) {
+            }
+        });
+        reader.setDaemon(true);
+        reader.start();
+        OutputStream o = y.getOutputStream();
+        o.write(BtMux.encode(BtMux.HELLO, 0, ("{\"v\":1,\"id\":\"" + B + "\"}").getBytes(StandardCharsets.UTF_8)));
+        o.write(BtMux.encode(BtMux.OPEN, 2, new byte[] {0}));
+        o.flush();
+        assertTrue(a.awaitReady(5000));
+        long from = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(200);
+        for (int i = 0; i < 10; i++) {
+            o.write(BtMux.encode(BtMux.DATA, 2, new byte[160]));
+            o.flush();
+            Thread.sleep(100);
+        }
+        long to = System.nanoTime();
+        long gap = 0, prev = from;
+        synchronized (seen) {
+            for (long t : seen) {
+                if (t < from || t > to) continue;
+                gap = Math.max(gap, t - prev);
+                prev = t;
+            }
+        }
+        gap = Math.max(gap, to - prev);
+        assertTrue("longest upstream silence " + gap / 1_000_000 + " ms", gap < TimeUnit.MILLISECONDS.toNanos(40));
+        // Nothing received for a while: back to the keepalive alone.
+        Thread.sleep(BtLink.FILL_FOR_MS + 300);
+        int before = seen.size();
+        Thread.sleep(500);
+        assertEquals(before, seen.size());
+    }
+
     @Test(timeout = 10_000)
     public void rejectsBadHelloAndWrongParity() throws Exception {
         byte[][] firsts = {

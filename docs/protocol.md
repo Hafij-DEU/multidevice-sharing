@@ -723,6 +723,9 @@ link on an unknown type or an oversized frame.
   then the other streams round-robin. DATA frames carry at most 4 KiB so live sound interleaves with a
   running transfer. END follows the stream's queued DATA.
 - Keepalive: PING every 15 s; a link with nothing received for 45 s is closed.
+- Filler: the Android side is the Bluetooth central, and the far side only gets send slots while it
+  transmits. While a stream has received DATA in the last 5 s, Android sends a frame at least every
+  10 ms: when nothing else is queued, an empty CREDIT (`u32` 0) on stream 0, ignored as an unknown stream.
 - HELLO `id` must be 64 lowercase hex characters. It is an unauthenticated claim, used only to map the
   Bluetooth address to a device; the link manager closes a link whose id is not a trusted device.
 - When two links to the same device exist, the one dialled by the device with the lower deviceId stays.

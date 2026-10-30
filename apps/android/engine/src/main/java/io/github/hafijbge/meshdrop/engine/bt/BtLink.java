@@ -37,6 +37,15 @@ public final class BtLink implements Closeable {
         void onClosed(BtLink link, Exception why);
     }
 
+    /**
+     * The phone is the Bluetooth central: the far side only gets send slots when the phone transmits, so a
+     * phone that only listens got 21-27% of real-time sound. While a stream has received DATA in the last
+     * FILL_FOR_MS, the writer sends a frame at least every FILL_MS (an empty CREDIT on stream 0, which a
+     * peer ignores as a frame for an unknown stream).
+     */
+    static final long FILL_MS = 10;
+    static final long FILL_FOR_MS = 5000;
+    private static final byte[] FILL = BtMux.encode(BtMux.CREDIT, 0, new byte[4]);
     /** Logcat tag MeshDropBt: why links and streams end, for field reports. */
     static final java.util.logging.Logger LOG = java.util.logging.Logger.getLogger("MeshDropBt");
     /** Streams are dialled at 127.0.0.1 (see Engine.Route.bt); Android's getLoopbackAddress() is ::1, which refuses them. */
@@ -66,6 +75,7 @@ public final class BtLink implements Closeable {
     private volatile String peerId;
     private volatile long lastRx = System.currentTimeMillis();
     private volatile long lastActive = System.currentTimeMillis();
+    private volatile long lastDataIn;
     private ServerSocket normal, priority;
 
     private final class Pipe {
@@ -174,7 +184,7 @@ public final class BtLink implements Closeable {
                     case BtMux.DATA: {
                         Pipe p = pipe(f.stream);
                         if (p != null) {
-                            lastActive = System.currentTimeMillis();
+                            lastActive = lastDataIn = System.currentTimeMillis();
                             p.inq.add(f.payload);
                         }
                         break;
@@ -417,27 +427,40 @@ public final class BtLink implements Closeable {
 
     private void writeLoop() {
         long lastPing = System.currentTimeMillis();
+        long lastTx = lastPing;
         try {
             while (true) {
                 byte[] f = null;
-                boolean idle;
+                boolean idle, fill = false;
                 synchronized (lock) {
                     while (!closed) {
                         f = next();
                         if (f != null) break;
                         long now = System.currentTimeMillis();
                         if (now - lastPing >= pingMs) break;
-                        lock.wait(Math.max(1, pingMs - (now - lastPing)));
+                        long wait = pingMs - (now - lastPing);
+                        if (now - lastDataIn < FILL_FOR_MS) {
+                            long due = FILL_MS - (now - lastTx);
+                            if (due <= 0) {
+                                fill = true;
+                                break;
+                            }
+                            wait = Math.min(wait, due);
+                        }
+                        lock.wait(Math.max(1, wait));
                     }
                     if (closed) return;
                 }
                 long now = System.currentTimeMillis();
-                if (f == null) {
+                if (fill) {
+                    f = FILL;
+                } else if (f == null) {
                     if (now - lastRx > pingMs * 3) throw new IOException("btmux: link silent");
                     lastPing = now;
                     f = BtMux.encode(BtMux.PING, 0);
                 }
                 out.write(f);
+                lastTx = now;
                 synchronized (lock) {
                     idle = control.isEmpty() && ring.isEmpty();
                 }
