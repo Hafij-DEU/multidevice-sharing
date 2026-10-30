@@ -1530,11 +1530,13 @@ public final class Engine {
         public final java.io.InputStream in;
         public final java.io.OutputStream out;
         private final javax.net.ssl.SSLSocket s;
+        private final java.util.concurrent.atomic.AtomicReference<Runnable> onClose;
 
-        Stream(javax.net.ssl.SSLSocket s, java.io.InputStream in, java.io.OutputStream out) {
+        Stream(javax.net.ssl.SSLSocket s, java.io.InputStream in, java.io.OutputStream out, Runnable onClose) {
             this.s = s;
             this.in = in;
             this.out = out;
+            this.onClose = new java.util.concurrent.atomic.AtomicReference<>(onClose);
         }
 
         @Override
@@ -1544,6 +1546,8 @@ public final class Engine {
             } catch (IOException ignored) {
                 // closed
             }
+            Runnable r = onClose.getAndSet(null);
+            if (r != null) r.run();
         }
     }
 
@@ -1573,7 +1577,7 @@ public final class Engine {
                 // skip the headers
             }
             if (code != 200) throw new IOException(code == 403 ? "That PC does not allow this device: tick it on the PC (More > Remote)." : "The PC refused (" + code + ").");
-            return new Stream(s, in, null);
+            return liveStream(s, in, null);
         } catch (IOException | RuntimeException e) {
             s.close();
             throw e instanceof IOException ? (IOException) e : new IOException(e);
@@ -1611,7 +1615,13 @@ public final class Engine {
                 }
             }
         };
-        return new Stream(s, s.getInputStream(), chunked);
+        return liveStream(s, s.getInputStream(), chunked);
+    }
+
+    /** A live stream holds the wake and Wi-Fi locks like a send: Wi-Fi power save stalls sound and frames. */
+    private Stream liveStream(javax.net.ssl.SSLSocket s, java.io.InputStream in, java.io.OutputStream out) {
+        sendStarted();
+        return new Stream(s, in, out, this::sendEnded);
     }
 
     private static final byte[] CRLF = {'\r', '\n'};
@@ -1639,6 +1649,7 @@ public final class Engine {
         Route r = route(deviceId);
         Sender.Target t = target(deviceId, r);
         if (t == null || r.kind.equals("held")) throw new IOException("That device is not reachable now.");
+        touch(); // remote input is live: the locks keep Wi-Fi power save from delaying the next message
         Transport tr = t.host != null ? new LanTransport(identity, t, 5_000) : transportFor(t, false, 0);
         if (tr == null) throw new IOException("That device is not reachable now.");
         Http.Response res = tr.request("POST", "/mesh/v1/app", Json.stringify(msg).getBytes(StandardCharsets.UTF_8), "application/json", timeoutMs, null, null);

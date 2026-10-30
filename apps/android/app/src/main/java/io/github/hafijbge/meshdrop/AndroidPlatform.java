@@ -69,8 +69,10 @@ public class AndroidPlatform implements Platform {
     }
 
     /**
-     * While a transfer is active: a partial wake lock (the CPU keeps running with the screen off) and a
-     * high-performance Wi-Fi lock (the radio does not doze), released after the engine reports idle.
+     * While a transfer, live stream or remote input is active: a partial wake lock (the CPU keeps running
+     * with the screen off) and Wi-Fi locks (the radio does not doze), released after the engine reports
+     * idle. Low latency holds while MeshDrop is on screen (webcam, mic, touchpad); high performance covers
+     * the screen-off case before API 34, where it stopped working.
      */
     @SuppressWarnings("deprecation") // WIFI_MODE_FULL_HIGH_PERF: the only mode that holds with the screen off before API 34
     EngineConfig.ActivityListener transferLocks() {
@@ -80,13 +82,17 @@ public class AndroidPlatform implements Platform {
         WifiManager wifi = (WifiManager) ctx.getSystemService(Context.WIFI_SERVICE);
         WifiManager.WifiLock wl = wifi.createWifiLock(WifiManager.WIFI_MODE_FULL_HIGH_PERF, "meshdrop:transfer");
         wl.setReferenceCounted(false);
+        WifiManager.WifiLock fast = wifi.createWifiLock(WifiManager.WIFI_MODE_FULL_LOW_LATENCY, "meshdrop:live");
+        fast.setReferenceCounted(false);
         return busy -> {
             if (busy) {
                 wake.acquire(6 * 60 * 60 * 1000L); // a safety cap; idle releases it much sooner
                 wl.acquire();
+                fast.acquire();
             } else {
                 if (wake.isHeld()) wake.release();
                 if (wl.isHeld()) wl.release();
+                if (fast.isHeld()) fast.release();
             }
         };
     }

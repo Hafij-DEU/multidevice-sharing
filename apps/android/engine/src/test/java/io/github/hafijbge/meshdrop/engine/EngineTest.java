@@ -276,4 +276,33 @@ public class EngineTest {
             until(() -> busy.size() > before && busy.subList(before, busy.size()).contains(Boolean.TRUE), 5_000);
         }
     }
+
+    @Test
+    public void holdsTheLocksWhileALiveStreamIsOpenAndAfterRemoteInput() throws Exception {
+        List<Boolean> busy = Collections.synchronizedList(new ArrayList<>());
+        File home = tmp.newFolder();
+        EngineConfig c = new EngineConfig(home, new PlainKeyVault(), new DirectorySink(new File(home, "inbox")));
+        c.port = 0;
+        c.discovery = false;
+        c.activityIdleMs = 300;
+        c.activity = busy::add;
+        Engine e = Engine.create(c);
+        e.start();
+        engines.add(e);
+        try (NodeListen pc = NodeListen.start(tmp.newFolder())) {
+            pairBoth(e, pc);
+            // A webcam or mic stream: Wi-Fi power save would stall it, so the locks hold until it closes.
+            Engine.Stream s = e.streamTo(pc.deviceId, "mic", "audio/L16");
+            until(() -> busy.contains(Boolean.TRUE), 5_000);
+            Thread.sleep(1_000);
+            assertEquals(Boolean.TRUE, busy.get(busy.size() - 1));
+            s.close();
+            s.close(); // twice is harmless
+            until(() -> !busy.get(busy.size() - 1), 5_000);
+            // Touchpad input: each message is live too.
+            int before = busy.size();
+            e.appSend(pc.deviceId, java.util.Map.of("kind", "input", "events", List.of()), 5_000);
+            until(() -> busy.size() > before && busy.get(busy.size() - 1), 5_000);
+        }
+    }
 }
