@@ -20,7 +20,7 @@ import { cleanHandoff, handoffUrl, type HandoffState } from '@meshdrop/core/src/
 import type { AppState, NoWifiView, StreamKind, DeviceStatus, ReceivedRecord, DeviceView, PhoneNote, RemoteEvent, ScheduledView, SendOptions, GuestView, LinkCreateInput, LinkView, ReachInput, ReachView, SendItemInput, Settings, SyncView, TransferView } from '../shared/api.ts';
 import type { HistoryStore } from './history.ts';
 import { SettingsError, type SettingsStore } from './settings.ts';
-import { liveAudio } from './liveaudio.ts';
+import { liveAudio, liveRtp } from './liveaudio.ts';
 import { opusChannels, opusDecoder, opusEncoder, opusType } from './opus.ts';
 import { HOTSPOT_HOST_IP, validHotspot, wifiQr, type NetMan } from './netman.ts';
 
@@ -107,6 +107,8 @@ function inboxCategory(name: string): string {
 }
 const STATUS_POLL_MS = 60_000;
 const RING_MAX_MS = 60_000;
+/** 0.3 s of 48 kbit/s Opus with its RTP, RFC 4571 and HTTP chunk overhead (about 7 kB/s). */
+const OPUS_LIVE_BYTES = 2100;
 
 /** Turns the Remote page's events into input primitives (unknown keys are skipped). */
 export function toPrims(events: RemoteEvent[]): InputPrim[] {
@@ -1356,7 +1358,10 @@ export class AppController extends EventEmitter {
     if (opusIn) pipe.in?.on('finish', end);
     if (kind === 'audio') {
       s.res.writeHead(200, { 'content-type': codec ? opusType(2) : 'audio/L16; rate=48000; channels=2', 'cache-control': 'no-store' });
-      (codec ? pipe.out!.pipe(codec) : pipe.out!).pipe(s.res);
+      // over Bluetooth only 0.3 s of sound may queue ahead of the phone: newer frames are dropped
+      // while the link is behind, so the sound stays live instead of falling seconds back
+      const backlog = () => s.res.writableLength + (this.#e.btBacklog(s.peer, s.req.socket.remotePort) ?? 0);
+      (codec ? pipe.out!.pipe(codec).pipe(liveRtp(backlog, OPUS_LIVE_BYTES)) : pipe.out!).pipe(s.res);
     } else {
       // sound and microphone stay live: audio that piled up behind a Wi-Fi stall is dropped
       const live = kind === 'sound' ? liveAudio(192_000, 4) : kind === 'mic' ? liveAudio(96_000, 2) : null;

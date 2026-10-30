@@ -1092,6 +1092,16 @@ export class Engine extends EventEmitter {
     return route.kind === 'lan' && route.via === 'bt';
   }
 
+  /**
+   * Bytes of a stream to `deviceId` over Bluetooth that the device has not taken yet, found by the
+   * local port of its socket into the mesh server (`req.socket.remotePort` there); undefined when that
+   * connection did not come over Bluetooth.
+   */
+  btBacklog(deviceId: string, port: number | undefined): number | undefined {
+    if (port === undefined) return undefined;
+    return this.btLinks?.link(this.resolveDeviceId(deviceId))?.backlog(port);
+  }
+
   /** Devices with a Bluetooth link up now. */
   btLinked(): string[] {
     return this.btLinks?.linked() ?? [];

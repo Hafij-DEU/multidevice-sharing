@@ -169,6 +169,27 @@ describe('BtLink', () => {
     s2.destroy();
   });
 
+  it('reports the bytes of a stream the far side has not credited yet', async () => {
+    let served: Socket | undefined;
+    const stub = await meshStub((s) => {
+      served = s;
+      s.write(Buffer.alloc(5000));
+    });
+    const [x, y] = duplexPair();
+    const far = new Mux(x, { dialer: true, selfId: A });
+    const b = new BtLink(y, { dialer: false, selfId: B, meshPort: () => portOf(stub) });
+    open.push(far, b);
+    await b.ready;
+    // the far side opens a stream (as a phone asking for this PC's sound) and never credits
+    const id = far.open(false);
+    for (let i = 0; i < 100 && b.backlog(served?.remotePort ?? 0) !== 5000; i++) await sleep(10);
+    expect(b.backlog(served!.remotePort!)).toBe(5000);
+    far.credit(id, 2000);
+    for (let i = 0; i < 100 && b.backlog(served!.remotePort!) !== 3000; i++) await sleep(10);
+    expect(b.backlog(served!.remotePort!)).toBe(3000);
+    expect(b.backlog(1)).toBeUndefined();
+  });
+
   it('closes a link that falls silent', async () => {
     const [x] = duplexPair();
     const m = new Mux(x, { dialer: true, selfId: A, pingMs: 20 });

@@ -336,6 +336,12 @@ export class BtLink extends EventEmitter {
     return this.#pipes.size;
   }
 
+  /** Bytes sent on the stream whose local socket uses `port` that the far side has not credited yet. */
+  backlog(port: number): number | undefined {
+    for (const p of this.#pipes.values()) if (p.sock.localPort === port) return p.inFlight;
+    return undefined;
+  }
+
   close(): void {
     this.mux.close();
   }

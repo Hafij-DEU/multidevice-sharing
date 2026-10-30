@@ -15,8 +15,11 @@ export function opusChannels(contentType: string | undefined): 1 | 2 | null {
   return m[1] === '1' ? 1 : 2;
 }
 
-/** Bit rates from the design: stereo sound 96 kbit/s, a mono microphone 32 kbit/s. */
-export const opusBitrate = (channels: 1 | 2): number => (channels === 2 ? 96_000 : 32_000);
+/**
+ * Stereo sound 48 kbit/s, a mono microphone 32 kbit/s. Stereo was 96 kbit/s, but a phone that is the
+ * Bluetooth central lets this PC send only about that much, so the sound fell behind and stopped.
+ */
+export const opusBitrate = (channels: 1 | 2): number => (channels === 2 ? 48_000 : 32_000);
 
 const RTP_CAPS = 'application/x-rtp-stream,media=audio,clock-rate=48000,encoding-name=OPUS,payload=96';
 

@@ -31,3 +31,33 @@ export function liveAudio(bytesPerSecond: number, frameBytes: number, opts: { ma
     },
   });
 }
+
+/**
+ * Keeps live Opus sound live over a slow link: passes RFC 4571 frames (u16 length + RTP packet) whole,
+ * but drops a frame while `backlog()` plus what this chunk already passed would go over `maxBytes`.
+ * `backlog` is what is queued ahead of the player (unsent socket bytes plus bytes the link has not
+ * delivered yet). The player decodes frames one by one, so a dropped frame is a short gap, not noise.
+ */
+export function liveRtp(backlog: () => number, maxBytes: number): Transform {
+  let carry = Buffer.alloc(0);
+  return new Transform({
+    transform(chunk: Buffer, _enc, done) {
+      const buf = carry.length ? Buffer.concat([carry, chunk]) : chunk;
+      const keep: Buffer[] = [];
+      let passed = 0;
+      let at = 0;
+      while (at + 2 <= buf.length) {
+        const end = at + 2 + buf.readUInt16BE(at);
+        if (end > buf.length) break;
+        const frame = buf.subarray(at, end);
+        if (backlog() + passed + frame.length <= maxBytes) {
+          keep.push(frame);
+          passed += frame.length;
+        }
+        at = end;
+      }
+      carry = Buffer.from(buf.subarray(at));
+      done(null, keep.length ? Buffer.concat(keep) : undefined);
+    },
+  });
+}
