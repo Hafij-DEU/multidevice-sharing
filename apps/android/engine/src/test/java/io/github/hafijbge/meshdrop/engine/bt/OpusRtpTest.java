@@ -87,6 +87,26 @@ public class OpusRtpTest {
     }
 
     @Test
+    public void dropsAFrameThatWouldQueueTooMuchAndKeepsTheClock() throws IOException {
+        int frame = OpusRtp.FRAME_SAMPLES * 2; // mono
+        long[] backlog = {0};
+        ByteArrayOutputStream wire = new ByteArrayOutputStream();
+        OutputStream o = OpusRtp.encoding(wire, new Same(), 1, () -> backlog[0], 3000);
+        o.write(new byte[frame]);
+        backlog[0] = 2000; // 2000 + a 1934-byte frame is over 3000: this one goes
+        o.write(new byte[frame]);
+        backlog[0] = 0;
+        o.write(new byte[frame]);
+        o.close();
+        List<byte[]> packets = frames(wire.toByteArray());
+        assertEquals(2, packets.size());
+        assertEquals((seq(packets.get(0)) + 2) & 0xffff, seq(packets.get(1)));
+        assertEquals((timestamp(packets.get(0)) + 2 * 960) & 0xffffffffL, timestamp(packets.get(1)));
+        assertEquals(1000 + 2500, OpusRtp.liveBytes(8_000));
+        assertEquals(4000 + 2500, OpusRtp.liveBytes(32_000));
+    }
+
+    @Test
     public void readsWhatGstreamerWrites() throws IOException {
         // 1 s of stereo sine through: opusenc frame-size=20 ! rtpopuspay pt=96 ! rtpstreampay
         byte[] wire;

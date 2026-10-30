@@ -1472,7 +1472,16 @@ public final class AppController {
         }
         final io.github.hafijbge.meshdrop.engine.bt.OpusRtp.Codec opus = codec;
         final java.io.InputStream sin = opus != null && s.in != null && kind.equals("audio") ? io.github.hafijbge.meshdrop.engine.bt.OpusRtp.decoding(s.in, opus) : s.in;
-        final java.io.OutputStream sout = opus != null && s.out != null ? io.github.hafijbge.meshdrop.engine.bt.OpusRtp.encoding(s.out, opus, ch) : s.out;
+        final java.io.OutputStream sout;
+        if (opus != null && s.out != null) {
+            // drop frames once about 1 s queues on the link, so the PC hears it live after a slow spell
+            String peer = e().resolveDeviceId(deviceId);
+            int port = s.localPort();
+            sout = io.github.hafijbge.meshdrop.engine.bt.OpusRtp.encoding(s.out, opus, ch, () -> Math.max(0, e().btBacklog(peer, port)),
+                    io.github.hafijbge.meshdrop.engine.bt.OpusRtp.liveBytes(io.github.hafijbge.meshdrop.engine.bt.OpusRtp.bitrate(settings.get().btSoundKbps)));
+        } else {
+            sout = s.out;
+        }
         casts.put(kind, s);
         castTo.put(kind, deviceId);
         if (kind.equals("camera")) cameraBack = back;

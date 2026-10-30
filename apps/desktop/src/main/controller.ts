@@ -1362,8 +1362,11 @@ export class AppController extends EventEmitter {
       const backlog = () => s.res.writableLength + (this.#e.btBacklog(s.peer, s.req.socket.remotePort) ?? 0);
       (codec ? pipe.out!.pipe(codec).pipe(liveRtp(backlog, opusLiveBytes(bitrate))) : pipe.out!).pipe(s.res);
     } else {
-      // sound and microphone stay live: audio that piled up behind a Wi-Fi stall is dropped
-      const live = kind === 'sound' ? liveAudio(192_000, 4) : kind === 'mic' ? liveAudio(96_000, 2) : null;
+      // sound and microphone stay live: audio that piled up behind a Wi-Fi stall is dropped. Over
+      // Bluetooth frames arrive in bunches after the link pauses for a moment, so 300 ms may queue there
+      // (120 ms cut each bunch and broke the sound up); the phone drops frames before more piles up.
+      const maxMs = opusIn ? 300 : 120;
+      const live = kind === 'sound' ? liveAudio(192_000, 4, { maxMs }) : kind === 'mic' ? liveAudio(96_000, 2, { maxMs }) : null;
       const pcm = codec ? s.req.pipe(codec) : s.req;
       (live ? pcm.pipe(live) : pcm).pipe(pipe.in! as NodeJS.WritableStream);
       s.req.on('end', () => {

@@ -141,6 +141,28 @@ public final class BtLink implements Closeable {
         }
     }
 
+    /**
+     * Bytes of the stream whose local socket has `port` at its far end (the port a local client dialled
+     * from) that the far side has not credited yet: queued here, on the air, or unread there. -1 for no
+     * such stream. Live sound reads this to drop frames instead of falling behind.
+     */
+    public long backlog(int port) {
+        Pipe found = null;
+        synchronized (lock) {
+            for (Pipe p : pipes.values()) {
+                Socket s = p.sock;
+                if (s != null && s.getPort() == port) {
+                    found = p;
+                    break;
+                }
+            }
+        }
+        if (found == null) return -1;
+        synchronized (found) {
+            return found.inFlight;
+        }
+    }
+
     public boolean closed() {
         synchronized (lock) {
             return closed;
