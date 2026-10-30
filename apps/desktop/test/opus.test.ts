@@ -1,6 +1,6 @@
 import { execFileSync } from 'node:child_process';
 import { describe, expect, it } from 'vitest';
-import { opusBitrate, opusChannels, opusDecoder, opusEncoder, opusLiveBytes, opusType } from '../src/main/opus.ts';
+import { encodeArgs, opusBitrate, opusChannels, opusDecoder, opusEncoder, opusLiveBytes, opusType } from '../src/main/opus.ts';
 
 /**
  * Splits an RFC 4571 byte stream into RTP packets (the Android side has its own in Java).
@@ -69,15 +69,15 @@ describe('opus content types', () => {
   });
 
   it('sizes the Bluetooth queue cap to 1 s of sound at the chosen bitrate', () => {
+    expect(opusLiveBytes(8_000)).toBe(2300);
     expect(opusLiveBytes(16_000)).toBe(3300);
     expect(opusLiveBytes(24_000)).toBe(4300);
     expect(opusLiveBytes(32_000)).toBe(5300);
   });
 
-  it('passes the chosen bitrate to the encoder', async () => {
-    const args = async (o: { bitrate?: number }) => (await through(opusEncoder(2, { ...o, cmd: 'echo' }), Buffer.alloc(0))).toString();
-    expect(await args({ bitrate: 16_000 })).toContain('bitrate=16000');
-    expect(await args({})).toContain('bitrate=24000');
+  it('passes the chosen bitrate to the encoder', () => {
+    expect(encodeArgs(2, 8_000)).toContain('bitrate=8000');
+    expect(encodeArgs(1)).toContain('bitrate=24000');
   });
 });
 

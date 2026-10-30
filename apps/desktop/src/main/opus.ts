@@ -16,9 +16,9 @@ export function opusChannels(contentType: string | undefined): 1 | 2 | null {
 }
 
 /**
- * 24 kbit/s unless Settings picks 16 or 32. Stereo was 96 kbit/s, then 48 kbit/s, but a phone that is
- * the Bluetooth central lets this PC send only about 6 kB/s, so the sound fell behind and broke up;
- * 24 kbit/s (about 4.3 kB/s on the link) leaves room to catch up after a slow spell.
+ * 24 kbit/s when nothing else is asked; Settings picks 8 to 32 (12 by default). Stereo was 96 kbit/s,
+ * then 48 kbit/s, but a phone that is the Bluetooth central lets this PC send only about 6 kB/s, so the
+ * sound fell behind and broke up. The phone sends at the rate picked in its own Settings.
  */
 export const opusBitrate = (_channels: 1 | 2): number => 24_000;
 
@@ -33,7 +33,7 @@ export const opusLiveBytes = (bitrate: number): number => bitrate / 8 + 1300;
 const RTP_CAPS = 'application/x-rtp-stream,media=audio,clock-rate=48000,encoding-name=OPUS,payload=96';
 
 /** gst-launch arguments: s16le 48 kHz PCM in, RFC 4571 Opus RTP out. */
-function encodeArgs(channels: 1 | 2, bitrate = opusBitrate(channels)): string[] {
+export function encodeArgs(channels: 1 | 2, bitrate = opusBitrate(channels)): string[] {
   return [
     '-q', 'fdsrc', 'fd=0', '!',
     'rawaudioparse', 'format=pcm', 'pcm-format=s16le', 'sample-rate=48000', `num-channels=${channels}`, '!',

@@ -1458,7 +1458,7 @@ public final class AppController {
         io.github.hafijbge.meshdrop.engine.bt.OpusRtp.Codec codec = null;
         try {
             if (!kind.equals("camera") && e().viaBluetooth(deviceId)) {
-                codec = kind.equals("audio") ? platform.opusDecoder(ch) : platform.opusEncoder(ch, io.github.hafijbge.meshdrop.engine.bt.OpusRtp.bitrate(ch));
+                codec = kind.equals("audio") ? platform.opusDecoder(ch) : platform.opusEncoder(ch, io.github.hafijbge.meshdrop.engine.bt.OpusRtp.bitrate(settings.get().btSoundKbps));
             }
             String pcm = "audio/L16; rate=48000; channels=" + ch;
             String type = codec != null ? io.github.hafijbge.meshdrop.engine.bt.OpusRtp.contentType(ch) : pcm;

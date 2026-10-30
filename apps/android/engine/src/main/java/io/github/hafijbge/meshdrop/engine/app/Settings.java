@@ -41,6 +41,8 @@ public final class Settings implements Cloneable {
     public Map<String, String> deviceLinks = java.util.Collections.emptyMap();
     /** M14 (a PC setting; kept for the shared shape). */
     public boolean tetherNoData = true;
+    /** M14: kbit/s of Opus sound and microphone sent over Bluetooth, both directions alike (8, 12, 16, 24 or 32). */
+    public int btSoundKbps = 12;
 
     public static Settings defaults(String alias) {
         Settings s = new Settings();
@@ -83,6 +85,7 @@ public final class Settings implements Cloneable {
         m.put("allBluetooth", allBluetooth);
         m.put("deviceLinks", new LinkedHashMap<String, Object>(deviceLinks));
         m.put("tetherNoData", tetherNoData);
+        m.put("btSoundKbps", (long) btSoundKbps);
         return m;
     }
 }

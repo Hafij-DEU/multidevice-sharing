@@ -142,6 +142,13 @@ public final class SettingsStore {
                 s.cleanupDays = (int) d;
                 break;
             }
+            case "btSoundKbps": {
+                if (!(v instanceof Long) && !(v instanceof Integer)) throw new SettingsError("Invalid value for btSoundKbps.");
+                long kbps = ((Number) v).longValue();
+                if (kbps != 8 && kbps != 12 && kbps != 16 && kbps != 24 && kbps != 32) throw new SettingsError("Sound over Bluetooth must be 8, 12, 16, 24 or 32 kbit/s.");
+                s.btSoundKbps = (int) kbps;
+                break;
+            }
             case "guestMinutes":
                 if (!(v instanceof Long) && !(v instanceof Integer)) throw new SettingsError("Invalid value for guestMinutes.");
                 long gm = ((Number) v).longValue();

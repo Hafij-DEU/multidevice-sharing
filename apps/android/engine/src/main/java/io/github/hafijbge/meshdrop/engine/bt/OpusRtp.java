@@ -26,9 +26,12 @@ public final class OpusRtp {
         return "audio/opus-rtp; channels=" + channels;
     }
 
-    /** Bit rates from the design: stereo sound 96 kbit/s, a mono microphone 32 kbit/s. */
-    public static int bitrate(int channels) {
-        return channels == 2 ? 96_000 : 32_000;
+    /**
+     * The bit rate for the kbit/s picked in Settings, for stereo sound and a mono microphone alike. It was
+     * 96 and 32 kbit/s, but a Bluetooth link carries only a few kB/s, so the sound fell behind and broke up.
+     */
+    public static int bitrate(int kbps) {
+        return kbps * 1000;
     }
 
     /** A codec step: one unit in, whatever the codec has ready out (codecs lag a frame or two). */

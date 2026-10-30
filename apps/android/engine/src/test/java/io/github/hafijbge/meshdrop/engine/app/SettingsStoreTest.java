@@ -31,4 +31,15 @@ public class SettingsStoreTest {
         assertEquals("Phone ✓", again.get().alias);
         assertEquals(false, again.get().notifications);
     }
+
+    @Test
+    public void soundOverBluetoothIs8To32Kbps() throws Exception {
+        SettingsStore s = new SettingsStore(new File(tmp.getRoot(), "s.json"), Settings.defaults("Pixel 8"));
+        assertEquals(12, s.get().btSoundKbps);
+        assertEquals(12L, s.get().toMap().get("btSoundKbps"));
+        for (long k : new long[] {8, 12, 16, 24, 32}) assertEquals((int) k, s.set(Map.of("btSoundKbps", k)).btSoundKbps);
+        for (long k : new long[] {6, 20, 64}) assertThrows(SettingsStore.SettingsError.class, () -> s.set(Map.of("btSoundKbps", k)));
+        assertThrows(SettingsStore.SettingsError.class, () -> s.set(Map.of("btSoundKbps", "16")));
+        assertEquals(32, s.get().btSoundKbps);
+    }
 }

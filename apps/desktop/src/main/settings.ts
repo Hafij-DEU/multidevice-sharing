@@ -40,7 +40,7 @@ export function defaultSettings(over: Partial<Settings> = {}): Settings {
     allBluetooth: false,
     deviceLinks: {},
     tetherNoData: true,
-    btSoundKbps: 24,
+    btSoundKbps: 12,
     ...over,
   };
 }
@@ -90,8 +90,8 @@ function validate(s: Settings): void {
   ) {
     throw new SettingsError('Invalid connection choice for a device.');
   }
-  if (![16, 24, 32].includes(s.btSoundKbps)) {
-    throw new SettingsError('Sound over Bluetooth must be 16, 24 or 32 kbit/s.');
+  if (![8, 12, 16, 24, 32].includes(s.btSoundKbps)) {
+    throw new SettingsError('Sound over Bluetooth must be 8, 12, 16, 24 or 32 kbit/s.');
   }
   for (const k of ['discovery', 'autostart', 'startHidden', 'closeToTray', 'clipboardReceive', 'clipboardSync', 'notifications', 'openLinks', 'phoneNotifications', 'printFromDevices', 'sortInbox', 'sendReceipts', 'bluetooth', 'allBluetooth', 'tetherNoData'] as const) {
     if (typeof s[k] !== 'boolean') throw new SettingsError(`Invalid value for ${k}.`);

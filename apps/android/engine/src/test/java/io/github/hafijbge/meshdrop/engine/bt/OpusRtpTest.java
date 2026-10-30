@@ -44,8 +44,9 @@ public class OpusRtpTest {
     public void contentTypesMatchThePc() {
         assertEquals("audio/opus-rtp; channels=2", OpusRtp.contentType(2));
         assertEquals("audio/opus-rtp; channels=1", OpusRtp.contentType(1));
-        assertEquals(96_000, OpusRtp.bitrate(2));
-        assertEquals(32_000, OpusRtp.bitrate(1));
+        // stereo sound and a mono microphone go at the one rate from Settings
+        assertEquals(8_000, OpusRtp.bitrate(8));
+        assertEquals(32_000, OpusRtp.bitrate(32));
     }
 
     @Test
