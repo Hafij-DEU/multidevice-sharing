@@ -1541,6 +1541,17 @@ public final class Engine {
         return bl == null ? null : bl.addressOf(deviceId);
     }
 
+    /**
+     * Bytes of a Bluetooth stream (by its Stream.localPort()) the device (its full id, as
+     * resolveDeviceId gives it) has not taken yet, or -1 when the stream does not go over a Bluetooth link
+     * to it. Cheap enough to ask for every sound frame.
+     */
+    public long btBacklog(String deviceId, int localPort) {
+        io.github.hafijbge.meshdrop.engine.bt.BtLinks bl = btLinks;
+        io.github.hafijbge.meshdrop.engine.bt.BtLink l = bl == null ? null : bl.link(deviceId);
+        return l == null ? -1 : l.backlog(localPort);
+    }
+
     /** Devices with a Bluetooth link up now. */
     public List<String> btLinked() {
         io.github.hafijbge.meshdrop.engine.bt.BtLinks bl = btLinks;
@@ -1561,6 +1572,11 @@ public final class Engine {
             this.in = in;
             this.out = out;
             this.onClose = new java.util.concurrent.atomic.AtomicReference<>(onClose);
+        }
+
+        /** The local port of the stream's socket: over Bluetooth, what btBacklog() looks it up by. */
+        public int localPort() {
+            return s.getLocalPort();
         }
 
         @Override

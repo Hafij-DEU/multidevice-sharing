@@ -225,6 +225,41 @@ public class BtLinkTest {
         assertEquals(1, l[0].streams());
     }
 
+    @Test(timeout = 20_000)
+    public void reportsTheBytesOfAStreamTheFarSideHasNotCredited() throws Exception {
+        ServerSocket ss = new ServerSocket(0, 1, LOOPBACK);
+        Socket x = new Socket(LOOPBACK, ss.getLocalPort());
+        Socket y = ss.accept();
+        ss.close();
+        open.add(y);
+        BtLink a = new BtLink(x.getInputStream(), x.getOutputStream(), x, true, A, () -> 1, 15_000, QUIET);
+        open.add(a);
+        a.start();
+        // the far side says hello and reads, but never credits (as a phone that falls behind)
+        y.getOutputStream().write(BtMux.encode(BtMux.HELLO, 0, ("{\"v\":1,\"id\":\"" + B + "\"}").getBytes(StandardCharsets.UTF_8)));
+        Thread drain = new Thread(() -> {
+            try {
+                readAll(y.getInputStream());
+            } catch (IOException ignored) {
+            }
+        });
+        drain.setDaemon(true);
+        drain.start();
+        assertTrue(a.awaitReady(5000));
+        Socket s = new Socket(LOOPBACK, a.priorityPort());
+        open.add(s);
+        s.getOutputStream().write(new byte[5000]);
+        int port = s.getLocalPort();
+        for (int i = 0; i < 200 && a.backlog(port) != 5000; i++) Thread.sleep(10);
+        assertEquals(5000, a.backlog(port));
+        byte[] n = new byte[4];
+        BtMux.putU32(n, 0, 2000);
+        y.getOutputStream().write(BtMux.encode(BtMux.CREDIT, 1, n));
+        for (int i = 0; i < 200 && a.backlog(port) != 3000; i++) Thread.sleep(10);
+        assertEquals(3000, a.backlog(port));
+        assertEquals(-1, a.backlog(1));
+    }
+
     @Test(timeout = 10_000)
     public void closesALinkThatFallsSilent() throws Exception {
         ServerSocket ss = new ServerSocket(0, 1, LOOPBACK);

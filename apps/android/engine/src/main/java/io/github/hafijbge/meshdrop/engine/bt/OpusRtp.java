@@ -7,6 +7,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.util.List;
+import java.util.function.LongSupplier;
 
 /**
  * Live sound over a Bluetooth link (M14). Raw PCM (192 kB/s stereo) does not fit an RFCOMM link, so
@@ -34,6 +35,16 @@ public final class OpusRtp {
         return kbps * 1000;
     }
 
+    /**
+     * How many bytes of sound may queue on a Bluetooth link before frames are dropped: 1 s of Opus at
+     * `bitrate` plus its RTP, RFC 4571, HTTP chunk, TLS and link framing (about 50 bytes a frame, 50
+     * frames a second). The far side's credit takes 0.4 s or more to come back, so much less drops sound
+     * even while the link keeps up.
+     */
+    public static long liveBytes(int bitrate) {
+        return bitrate / 8 + 2500;
+    }
+
     /** A codec step: one unit in, whatever the codec has ready out (codecs lag a frame or two). */
     public interface Codec extends java.io.Closeable {
         /** Encoder: 20 ms of s16le 48 kHz PCM in, Opus packets out. Decoder: one Opus packet in, s16le PCM out. */
@@ -45,7 +56,16 @@ public final class OpusRtp {
 
     /** PCM (s16le 48 kHz, `channels`) written here goes to `rtp` as RFC 4571 Opus RTP. Closing closes both. */
     public static OutputStream encoding(OutputStream rtp, Codec enc, int channels) {
-        return new Encoding(rtp, enc, channels);
+        return new Encoding(rtp, enc, channels, () -> 0, Long.MAX_VALUE);
+    }
+
+    /**
+     * As above, but a frame is dropped (its sequence number and time still pass, so the far side conceals
+     * the gap) when `backlog` bytes already queue and the frame would take them over `maxBytes`. Sound
+     * then stays live after a slow spell on the link instead of lagging by everything that queued.
+     */
+    public static OutputStream encoding(OutputStream rtp, Codec enc, int channels, LongSupplier backlog, long maxBytes) {
+        return new Encoding(rtp, enc, channels, backlog, maxBytes);
     }
 
     /** RFC 4571 Opus RTP from `rtp`, read back as s16le PCM. Closing closes both. */
@@ -101,12 +121,16 @@ public final class OpusRtp {
         private int fill;
         private int seq = java.util.concurrent.ThreadLocalRandom.current().nextInt(0x10000);
         private long ts = java.util.concurrent.ThreadLocalRandom.current().nextInt() & 0xffffffffL;
+        private final LongSupplier backlog;
+        private final long maxBytes;
         private boolean first = true;
 
-        Encoding(OutputStream rtp, Codec enc, int channels) {
+        Encoding(OutputStream rtp, Codec enc, int channels, LongSupplier backlog, long maxBytes) {
             this.rtp = rtp;
             this.enc = enc;
             this.frame = new byte[FRAME_SAMPLES * 2 * channels];
+            this.backlog = backlog;
+            this.maxBytes = maxBytes;
         }
 
         @Override
@@ -131,14 +155,16 @@ public final class OpusRtp {
 
         private void send(byte[] opus) throws IOException {
             byte[] p = packet(seq, ts, ssrc, first, opus);
-            first = false;
             seq = (seq + 1) & 0xffff;
             ts = (ts + FRAME_SAMPLES) & 0xffffffffL;
+            if (backlog.getAsLong() + 2 + p.length > maxBytes) return;
+            first = false;
             byte[] f = new byte[2 + p.length];
             f[0] = (byte) (p.length >> 8);
             f[1] = (byte) p.length;
             System.arraycopy(p, 0, f, 2, p.length);
             rtp.write(f); // one write per packet: the link sends it as one piece
+            rtp.flush(); // the backlog counts only what reached the link
         }
 
         @Override
