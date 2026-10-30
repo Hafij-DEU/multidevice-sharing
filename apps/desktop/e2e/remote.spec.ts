@@ -53,6 +53,17 @@ test('a device allowed on the PC types and clicks there from the Remote page', a
     }
     const keys = readFileSync(log, 'utf8').trim().split('\n').map((l) => JSON.parse(l) as { t: string; keysym?: number; down?: boolean }).filter((x) => x.t === 'key' && x.down).map((x) => x.keysym);
     expect(keys).toEqual([0x68, 0x69]);
+
+    // pointer speed: a 10 px finger move at the top speed (5) moves the pointer 50 px, and the choice is kept
+    await A.win.getByLabel('Pointer speed').press('End');
+    const pad = await A.win.getByLabel('Touchpad').boundingBox();
+    await A.win.mouse.move(pad!.x + 50, pad!.y + 50);
+    await A.win.mouse.down();
+    await A.win.mouse.move(pad!.x + 60, pad!.y + 50);
+    await A.win.mouse.up();
+    const moved = () => logged().trim().split('\n').map((l) => JSON.parse(l) as { t: string; dx?: number }).filter((x) => x.t === 'move').reduce((s, x) => s + (x.dx ?? 0), 0);
+    await expect.poll(moved).toBe(50);
+    expect(await A.win.evaluate(() => localStorage.getItem('md.pointerSpeed'))).toBe('5');
     await A.win.screenshot({ path: join('test-results', 'remote-page.png') });
   } finally {
     await A.app.close();

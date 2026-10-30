@@ -5,6 +5,7 @@ import { Peer } from '../components/Peer.tsx';
 import { fmtBytes } from '../format.ts';
 
 const SPEED = 1.6;
+const SPEED_KEY = 'md.pointerSpeed';
 /** This window runs on Windows (the PC app; the phone's WebView says Android). */
 const WINDOWS = /Windows NT/.test(navigator.userAgent);
 const TAP_MS = 220;
@@ -67,8 +68,18 @@ function useSender(target: string | null, onError: (e: string) => void) {
   };
 }
 
+/** The touchpad's pointer speed, kept per device. */
+function savedSpeed(): number {
+  try {
+    const v = Number(localStorage.getItem(SPEED_KEY));
+    return v >= 0.5 && v <= 5 ? v : SPEED;
+  } catch {
+    return SPEED;
+  }
+}
+
 /** One finger moves and taps (left click); two fingers scroll, a two-finger tap is a right click. */
-function Touchpad({ send }: { send: (e: RemoteEvent) => void }) {
+function Touchpad({ send, speed }: { send: (e: RemoteEvent) => void; speed: number }) {
   const pts = useRef(new Map<number, { x: number; y: number }>());
   const start = useRef({ t: 0, moved: 0, max: 0 });
   const down = (e: RPointerEvent<HTMLDivElement>) => {
@@ -86,7 +97,7 @@ function Touchpad({ send }: { send: (e: RemoteEvent) => void }) {
     p.y = e.clientY;
     start.current.moved += Math.abs(dx) + Math.abs(dy);
     if (pts.current.size >= 2) send({ t: 'scroll', dx: dx / 4, dy: -dy / 4 });
-    else send({ t: 'move', dx: dx * SPEED, dy: dy * SPEED });
+    else send({ t: 'move', dx: dx * speed, dy: dy * speed });
   };
   const up = (e: RPointerEvent<HTMLDivElement>) => {
     pts.current.delete(e.pointerId);
@@ -278,6 +289,15 @@ function Control({ state, run, targets }: { state: AppState; run: Run; targets: 
   const pick = () => (targets.find((d) => d.reach !== 'offline') ?? targets[0])?.deviceId ?? null;
   const [target, setTarget] = useState<string | null>(pick);
   const [panel, setPanel] = useState<(typeof PANELS)[number]>('Touchpad');
+  const [speed, setSpeed] = useState(savedSpeed);
+  const changeSpeed = (v: number) => {
+    setSpeed(v);
+    try {
+      localStorage.setItem(SPEED_KEY, String(v));
+    } catch {
+      // no storage: the speed lasts until the page closes
+    }
+  };
   const lastErr = useRef(0);
   const send = useSender(target, (e) => {
     if (Date.now() - lastErr.current < 4000) return; // one toast for a burst of failed moves
@@ -315,7 +335,12 @@ function Control({ state, run, targets }: { state: AppState; run: Run; targets: 
       </div>
       {target && panel === 'Touchpad' && (
         <>
-          <Touchpad send={send} />
+          <Touchpad send={send} speed={speed} />
+          <label className="row">
+            Pointer speed
+            <input type="range" aria-label="Pointer speed" min={0.5} max={5} step={0.1} value={speed} onChange={(e) => changeSpeed(Number(e.target.value))} />
+            <span className="muted">{speed.toFixed(1)}×</span>
+          </label>
           <div className="row">
             <button onClick={() => send({ t: 'click', b: 'left' })}>Left click</button>
             <button onClick={() => send({ t: 'click', b: 'right' })}>Right click</button>
