@@ -107,8 +107,12 @@ function inboxCategory(name: string): string {
 }
 const STATUS_POLL_MS = 60_000;
 const RING_MAX_MS = 60_000;
-/** 0.3 s of 48 kbit/s Opus with its RTP, RFC 4571 and HTTP chunk overhead (about 7 kB/s). */
-const OPUS_LIVE_BYTES = 2100;
+/**
+ * 1 s of 48 kbit/s Opus with its RTP, RFC 4571 and HTTP chunk overhead (about 7 kB/s). The count
+ * includes bytes on their way, and a phone's credit takes about 0.4 s to come back, so a smaller cap
+ * drops sound even while the link keeps up.
+ */
+const OPUS_LIVE_BYTES = 7000;
 
 /** Turns the Remote page's events into input primitives (unknown keys are skipped). */
 export function toPrims(events: RemoteEvent[]): InputPrim[] {
@@ -1358,7 +1362,7 @@ export class AppController extends EventEmitter {
     if (opusIn) pipe.in?.on('finish', end);
     if (kind === 'audio') {
       s.res.writeHead(200, { 'content-type': codec ? opusType(2) : 'audio/L16; rate=48000; channels=2', 'cache-control': 'no-store' });
-      // over Bluetooth only 0.3 s of sound may queue ahead of the phone: newer frames are dropped
+      // over Bluetooth only 1 s of sound may queue ahead of the phone: newer frames are dropped
       // while the link is behind, so the sound stays live instead of falling seconds back
       const backlog = () => s.res.writableLength + (this.#e.btBacklog(s.peer, s.req.socket.remotePort) ?? 0);
       (codec ? pipe.out!.pipe(codec).pipe(liveRtp(backlog, OPUS_LIVE_BYTES)) : pipe.out!).pipe(s.res);
