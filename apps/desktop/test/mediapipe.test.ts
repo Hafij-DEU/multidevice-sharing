@@ -1,4 +1,4 @@
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -77,6 +77,51 @@ describe('mediaPipe', () => {
     p.stop();
     // the phone sends 30 a second: all of them must go through
     expect(frames).toBeGreaterThan(90);
+  });
+
+  // the webcam froze again: a video app that closed the camera (or reopened it to pick a format) made
+  // pipewiresink fail with "all buffers have been removed", which ended the phone's stream
+  it.skipIf(!gst)('keeps the webcam for the next app after one stops showing it', { timeout: 30_000 }, async () => {
+    const frame = spawnSync('gst-launch-1.0', ['-q', 'videotestsrc', 'num-buffers=1', '!', 'video/x-raw,width=640,height=480', '!', 'jpegenc', '!', 'fdsink', 'fd=1']).stdout;
+    const node = `meshdrop-test-camera-${process.pid}`;
+    const p = mediaPipe('gst-launch-1.0', cameraArgs('Test', node), 'in');
+    const exited = vi.fn();
+    p.onExit(exited);
+    let feeding = true;
+    void (async () => {
+      while (feeding) {
+        p.in!.write(frame);
+        await new Promise((r) => setTimeout(r, 33));
+      }
+    })();
+    const id = async () => {
+      for (let i = 0; i < 50; i++) {
+        const dump = JSON.parse(spawnSync('pw-dump', { maxBuffer: 64 << 20 }).stdout.toString() || '[]') as { id: number; type: string; info?: { props?: Record<string, unknown>; 'n-output-ports'?: number } }[];
+        // apps can open it once it offers its video port
+        const n = dump.find((o) => o.type.endsWith('Node') && o.info?.props?.['node.name'] === node && (o.info['n-output-ports'] ?? 0) > 0);
+        if (n) return n.id;
+        await new Promise((r) => setTimeout(r, 100));
+      }
+      throw new Error('no camera node');
+    };
+    const path = await id();
+    // an app shows the camera for a second (30 frames), closes it, the next one opens it
+    const view = () =>
+      new Promise<number | null>((done) => {
+        const v = spawn('gst-launch-1.0', ['-q', 'pipewiresrc', `path=${path}`, 'num-buffers=30', '!', 'videoconvert', '!', 'fakesink'], { stdio: 'ignore' });
+        const t = setTimeout(() => v.kill('SIGKILL'), 5000);
+        v.on('exit', (code) => {
+          clearTimeout(t);
+          done(code);
+        });
+      });
+    const seen: (number | null)[] = [];
+    for (let i = 0; i < 4; i++) seen.push(await view());
+    feeding = false;
+    const alive = exited.mock.calls.length === 0;
+    p.stop();
+    expect(seen).toEqual([0, 0, 0, 0]);
+    expect(alive).toBe(true);
   });
 
   it('keeps a helper that reads', async () => {

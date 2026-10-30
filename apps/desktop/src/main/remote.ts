@@ -242,8 +242,10 @@ export function cameraArgs(name: string, node = 'meshdrop-camera'): string[] {
     // pipewiresink takes no frames while no app shows the camera: drop the oldest instead of blocking, so the
     // phone's upload keeps flowing and its end arrives (a blocked one left a stale, frozen camera behind)
     'queue', 'leaky=downstream', 'max-size-buffers=2', 'max-size-bytes=0', 'max-size-time=0', '!', 'jpegdec', '!', 'videoconvert', '!', 'video/x-raw,format=YUY2', '!',
+    // an app that closed the camera (or reopened it to pick a format) made the default sink fail with "all buffers
+    // have been removed", which ended the phone's stream: provide the stream and copy frames, so the next app gets it
     // gst-launch re-parses its arguments: the description's quotes must be escaped inside the quoted value
-    'pipewiresink', `stream-properties="props,media.class=Video/Source,media.role=Camera,node.name=${node},node.description=\\"${label(name)} camera (MeshDrop)\\""`,
+    'pipewiresink', 'mode=provide', 'use-bufferpool=false', `stream-properties="props,media.class=Video/Source,media.role=Camera,node.name=${node},node.description=\\"${label(name)} camera (MeshDrop)\\""`,
   ];
 }
 
