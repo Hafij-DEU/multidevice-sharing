@@ -16,11 +16,11 @@ export function opusChannels(contentType: string | undefined): 1 | 2 | null {
 }
 
 /**
- * 32 kbit/s, stereo sound or a mono microphone. Stereo was 96 kbit/s, then 48 kbit/s, but a phone that
- * is the Bluetooth central lets this PC send only about that much on a weak link, so the sound fell
- * behind and broke up; 32 kbit/s leaves the link room to catch up.
+ * 24 kbit/s, stereo sound or a mono microphone. Stereo was 96 kbit/s, then 48 kbit/s, but a phone that
+ * is the Bluetooth central lets this PC send only about 6 kB/s, so the sound fell behind and broke up;
+ * 24 kbit/s (about 4.3 kB/s on the link) leaves room to catch up after a slow spell.
  */
-export const opusBitrate = (_channels: 1 | 2): number => 32_000;
+export const opusBitrate = (_channels: 1 | 2): number => 24_000;
 
 const RTP_CAPS = 'application/x-rtp-stream,media=audio,clock-rate=48000,encoding-name=OPUS,payload=96';
 

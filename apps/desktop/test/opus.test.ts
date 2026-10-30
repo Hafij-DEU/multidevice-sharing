@@ -57,8 +57,8 @@ describe('opus content types', () => {
     expect(opusChannels('audio/opus-rtp')).toBe(2);
     expect(opusChannels('audio/L16; rate=48000; channels=2')).toBeNull();
     expect(opusChannels(undefined)).toBeNull();
-    expect(opusBitrate(2)).toBe(32_000);
-    expect(opusBitrate(1)).toBe(32_000);
+    expect(opusBitrate(2)).toBe(24_000);
+    expect(opusBitrate(1)).toBe(24_000);
   });
 
   it('splits RFC 4571 frames and keeps a partial one', () => {
