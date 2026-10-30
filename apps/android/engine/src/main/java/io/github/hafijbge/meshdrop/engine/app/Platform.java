@@ -107,7 +107,7 @@ public interface Platform {
         throw new java.io.IOException("Not available on this device.");
     }
 
-    /** Writes JPEG frames (back to back) from the front (or `back`) camera to `out` until `stop` says so. */
+    /** Writes JPEG frames (back to back) from the front (or `back`) camera to `out` until `stop` says so; throws {@link CameraTakenException} when another app has the camera. */
     default void captureCamera(java.io.OutputStream out, java.util.function.BooleanSupplier stop, boolean back) throws java.io.IOException {
         throw new java.io.IOException("Not available on this device.");
     }

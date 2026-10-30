@@ -26,6 +26,7 @@ import android.media.projection.MediaProjection;
 import android.media.projection.MediaProjectionManager;
 import android.os.Handler;
 import android.os.HandlerThread;
+import io.github.hafijbge.meshdrop.engine.app.CameraTakenException;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
@@ -335,15 +336,15 @@ final class MediaCast {
                 @Override
                 public void onDisconnected(CameraDevice d) {
                     d.close();
-                    fail[0] = new IOException("Another app took the camera.");
+                    fail[0] = new CameraTakenException(); // face unlock takes it when the phone wakes: tried again
                     opened.countDown();
                 }
 
                 @Override
                 public void onError(CameraDevice d, int error) {
                     d.close();
-                    fail[0] = new IOException(error == ERROR_CAMERA_IN_USE || error == ERROR_MAX_CAMERAS_IN_USE
-                            ? "Another app is using the camera: close it, then tap again." : "The camera is not available (" + error + ").");
+                    fail[0] = error == ERROR_CAMERA_IN_USE || error == ERROR_MAX_CAMERAS_IN_USE
+                            ? new CameraTakenException() : new IOException("The camera is not available (" + error + ").");
                     opened.countDown();
                 }
             }, h);
@@ -358,6 +359,9 @@ final class MediaCast {
             }
             if (fail[0] != null) throw fail[0];
         } catch (android.hardware.camera2.CameraAccessException e) {
+            int r = e.getReason();
+            if (r == android.hardware.camera2.CameraAccessException.CAMERA_IN_USE || r == android.hardware.camera2.CameraAccessException.MAX_CAMERAS_IN_USE
+                    || r == android.hardware.camera2.CameraAccessException.CAMERA_DISCONNECTED) throw new CameraTakenException();
             throw new IOException("The camera is not available.");
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();

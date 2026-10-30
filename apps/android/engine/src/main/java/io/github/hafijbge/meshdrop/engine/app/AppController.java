@@ -1480,7 +1480,7 @@ public final class AppController {
             java.util.function.BooleanSupplier stop = () -> casts.get(kind) != s;
             try {
                 if (kind.equals("audio")) platform.playAudio(sin, stop);
-                else if (kind.equals("camera")) platform.captureCamera(sout, stop, back);
+                else if (kind.equals("camera")) CameraRetry.keep(sout, stop, o -> platform.captureCamera(o, stop, back), 30_000, 1_000);
                 else if (kind.equals("sound")) platform.captureSound(sout, stop);
                 else platform.captureMic(sout, stop);
             } catch (IOException | RuntimeException ignored) {
