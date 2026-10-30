@@ -27,6 +27,7 @@ import android.media.projection.MediaProjectionManager;
 import android.os.Handler;
 import android.os.HandlerThread;
 import io.github.hafijbge.meshdrop.engine.app.CameraTakenException;
+import io.github.hafijbge.meshdrop.engine.app.LiveTrim;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
@@ -43,8 +44,6 @@ import java.util.function.BooleanSupplier;
  */
 final class MediaCast {
     static final int RATE = 48_000;
-    /** Most sound a player keeps queued (120 ms): more is a backlog from a network stall. */
-    private static final int LIVE_FRAMES = RATE * 120 / 1000;
     private static final int WIDTH = 1280;
     private static final int HEIGHT = 720;
     private static final int JPEG_QUALITY = 70;
@@ -140,27 +139,30 @@ final class MediaCast {
         }
     }
 
-    void play(InputStream in, BooleanSupplier stop) throws IOException {
+    void play(InputStream in, BooleanSupplier stop, boolean bluetooth) throws IOException {
+        // live: once playing, sound queued beyond what the trim allows (a burst after a stall) is dropped,
+        // or the stall's delay would last for the rest of the stream
+        LiveTrim trim = bluetooth ? LiveTrim.bluetooth() : LiveTrim.lan();
         int min = AudioTrack.getMinBufferSize(RATE, AudioFormat.CHANNEL_OUT_STEREO, AudioFormat.ENCODING_PCM_16BIT);
         AudioTrack t = new AudioTrack.Builder()
                 .setAudioAttributes(new AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_MEDIA).setContentType(AudioAttributes.CONTENT_TYPE_MUSIC).build())
                 .setAudioFormat(new AudioFormat.Builder().setSampleRate(RATE).setEncoding(AudioFormat.ENCODING_PCM_16BIT).setChannelMask(AudioFormat.CHANNEL_OUT_STEREO).build())
-                .setBufferSizeInBytes(Math.max(min, RATE * 4 * 150 / 1000)) // 150 ms: a little over LIVE_FRAMES
+                .setBufferSizeInBytes(Math.max(min, (trim.highFrames() + RATE * 30 / 1000) * 4)) // a little over the most the trim keeps
                 .setTransferMode(AudioTrack.MODE_STREAM)
                 .build();
+        java.util.logging.Logger log = java.util.logging.Logger.getLogger("MeshDropBt");
         try {
             t.play();
             byte[] buf = new byte[4096];
             int carry = 0;
-            // live: once playing, sound queued beyond LIVE_FRAMES (a burst after a Wi-Fi stall) is dropped,
-            // or the stall's delay would last for the rest of the stream
             int written = 0, lastHead = 0;
-            long headMoved = -1000;
+            long headMoved = -1000, received = 0, statsAt = android.os.SystemClock.uptimeMillis();
             while (!stop.getAsBoolean()) {
                 int n = in.read(buf, carry, buf.length - carry);
                 if (n < 0) break;
                 n += carry;
                 int whole = n - n % 4; // whole stereo frames only
+                received += whole / 4;
                 int from = 0;
                 int head = t.getPlaybackHeadPosition();
                 long now = android.os.SystemClock.uptimeMillis();
@@ -169,8 +171,7 @@ final class MediaCast {
                     headMoved = now;
                 }
                 if (now - headMoved < 300) { // playing (a starting or refilling track must fill up first)
-                    int room = Math.max(0, LIVE_FRAMES - (written - head)) * 4;
-                    if (whole > room) from = whole - room;
+                    from = whole - trim.keep(whole / 4, Math.max(0, written - head)) * 4;
                 }
                 if (whole > from) {
                     int w = t.write(buf, from, whole - from);
@@ -178,8 +179,14 @@ final class MediaCast {
                 }
                 carry = n - whole;
                 if (carry > 0) System.arraycopy(buf, whole, buf, 0, carry);
+                if (bluetooth && now - statsAt >= 10_000) { // for tuning the link: how much came, was dropped, ran dry
+                    statsAt = now;
+                    log.info("sound over bt: received " + received * 1000 / RATE + " ms, dropped " + trim.dropped() * 1000 / RATE
+                            + " ms, queued " + Math.max(0, written - head) * 1000 / RATE + " ms, underruns " + t.getUnderrunCount());
+                }
             }
         } finally {
+            if (bluetooth) log.info("sound over bt ended: dropped " + trim.dropped() * 1000 / RATE + " ms, underruns " + t.getUnderrunCount());
             t.stop();
             t.release();
         }

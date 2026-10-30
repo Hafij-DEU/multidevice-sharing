@@ -102,8 +102,8 @@ public interface Platform {
 
     default void mediaStopped(String kind) {}
 
-    /** Plays raw s16le 48 kHz stereo from `in` until it ends or `stop` says so. */
-    default void playAudio(java.io.InputStream in, java.util.function.BooleanSupplier stop) throws java.io.IOException {
+    /** Plays raw s16le 48 kHz stereo from `in` until it ends or `stop` says so; `bluetooth`: it comes in bursts, so queue more ({@link LiveTrim}). */
+    default void playAudio(java.io.InputStream in, java.util.function.BooleanSupplier stop, boolean bluetooth) throws java.io.IOException {
         throw new java.io.IOException("Not available on this device.");
     }
 
