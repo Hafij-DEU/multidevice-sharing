@@ -40,6 +40,7 @@ class Air {
 class FakeRadio implements BtPlatform {
   onConn: ((c: Duplex, a: string) => void) | null = null;
   away = false;
+  dialled = 0;
   readonly air: Air;
   readonly address: string;
   constructor(air: Air, address: string) {
@@ -52,6 +53,7 @@ class FakeRadio implements BtPlatform {
   }
   async dial(address: string): Promise<Duplex> {
     this.air.dials++;
+    this.dialled++;
     const far = this.air.radios.get(address);
     if (!far || far.away || !far.onConn || this.away) throw new Error('host is down');
     const [x, y] = duplexPair();
@@ -160,6 +162,28 @@ describe('Bluetooth links between engines (M14)', () => {
     expect(air.dials).toBeGreaterThan(before);
   });
 
+  it('an on-demand dial joins the start-up dial of the same address, so both sides keep one link', async () => {
+    const { A, B } = await makePair();
+    await B.e.start(); // its start-up dial finds A not listening yet
+    await until(() => B.radio.dialled > 0);
+    await A.e.start();
+    const bId = B.e.identity.deviceId;
+    let got = '';
+    B.e.setStreamHandler((s) => {
+      s.req.on('data', (d: Buffer) => (got += d));
+      s.req.on('end', () => s.res.writeHead(200).end());
+      return true;
+    });
+    // A's start-up pass is still learning who BB is when the user sends sound to B.
+    expect(await A.e.viaBluetooth(bId)).toBe(true);
+    expect(A.radio.dialled).toBe(1);
+    const body = new PassThrough();
+    const status = A.e.streamPost(bId, 'audio', 'audio/opus-rtp; channels=2', body);
+    body.end(Buffer.from('sound'));
+    expect(await status).toBe(200);
+    expect(got).toBe('sound');
+  });
+
   it('closes a link whose HELLO names an untrusted device', async () => {
     const { A } = await makePair();
     await A.e.start();
@@ -230,7 +254,7 @@ describe('BtLinks policy', () => {
     await links.start(); // start-up probe of the unmapped radio
     expect(await links.ensure('b'.repeat(64))).toBeUndefined();
     const n = air.dials;
-    expect(n).toBe(2);
+    expect(n).toBe(1); // the on-demand dial joined the start-up probe of the same address
     expect(await links.ensure('b'.repeat(64))).toBeUndefined();
     await links.tick();
     expect(air.dials).toBe(n);

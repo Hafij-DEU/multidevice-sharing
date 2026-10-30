@@ -74,6 +74,8 @@ public final class BtLinks {
     private final Map<String, Long> probed = new HashMap<>(); // guarded by lock
     /** When the device was first seen back on the LAN while it had a Bluetooth link. */
     private final Map<String, Long> lanSince = new HashMap<>(); // guarded by lock
+    /** Dials in flight per address: a second dial joins the first, so one radio link never carries two btmux links. */
+    private final Map<String, CompletableFuture<BtLink>> dialing = new HashMap<>(); // guarded by lock
     private final ExecutorService exec = Executors.newCachedThreadPool(r -> {
         Thread t = new Thread(r, "meshdrop-bt");
         t.setDaemon(true);
@@ -273,12 +275,44 @@ public final class BtLinks {
                 if (addrs.containsKey(b.address) || (last != null && now - last < o.backoffMs[1])) continue;
                 probed.put(b.address, now);
             }
+            dialAddress(b.address);
+        }
+    }
+
+    /**
+     * Dials an address and runs btmux on it; joins a dial of the same address already in flight. Two
+     * concurrent links from one dialler would each be "the newer one" on one side, so the sides could keep
+     * different links and lose streams opened on the other.
+     */
+    private BtLink dialAddress(String address) {
+        CompletableFuture<BtLink> f = new CompletableFuture<>();
+        CompletableFuture<BtLink> cur;
+        synchronized (lock) {
+            cur = dialing.get(address);
+            if (cur == null) dialing.put(address, f);
+        }
+        if (cur != null) {
             try {
-                adopt(o.platform.dial(b.address), b.address, true);
-            } catch (IOException | RuntimeException ignored) {
-                // away, or not a MeshDrop device
+                return cur.get();
+            } catch (java.util.concurrent.ExecutionException e) {
+                return null;
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return null;
             }
         }
+        BtLink l = null;
+        try {
+            l = adopt(o.platform.dial(address), address, true);
+        } catch (IOException | RuntimeException ignored) {
+            // away, or not a MeshDrop device
+        } finally {
+            synchronized (lock) {
+                dialing.remove(address);
+            }
+            f.complete(l);
+        }
+        return l;
     }
 
     private CompletableFuture<BtLink> dial(String deviceId) {
@@ -335,13 +369,9 @@ public final class BtLinks {
             }
         }
         for (String a : candidates) {
-            try {
-                BtLink l = adopt(o.platform.dial(a), a, true);
-                if (l != null && deviceId.equals(l.peerId())) return l;
-            } catch (IOException | RuntimeException ignored) {
-                // try the next one
-            }
-            BtLink l = link(deviceId);
+            BtLink l = dialAddress(a);
+            if (l != null && deviceId.equals(l.peerId())) return l;
+            l = link(deviceId);
             if (l != null) return l;
         }
         return link(deviceId);

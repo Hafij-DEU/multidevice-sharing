@@ -76,6 +76,8 @@ export class BtLinks extends EventEmitter {
   readonly #probed = new Map<string, number>();
   /** When the device was last seen back on the LAN while it had a Bluetooth link. */
   readonly #lanSince = new Map<string, number>();
+  /** Dials in flight per address: a second dial joins the first, so one radio link never carries two btmux links. */
+  readonly #dialing = new Map<string, Promise<BtLink | undefined>>();
   #timer: NodeJS.Timeout | null = null;
   #stopped = false;
 
@@ -199,12 +201,24 @@ export class BtLinks extends EventEmitter {
     for (const b of bonded) {
       if (this.#addrs.has(b.address) || now - (this.#probed.get(b.address) ?? 0) < every) continue;
       this.#probed.set(b.address, now);
-      try {
-        await this.#adopt(await this.#o.platform.dial(b.address), b.address, true);
-      } catch {
-        /* away, or not a MeshDrop device */
-      }
+      await this.#dialAddress(b.address);
     }
+  }
+
+  /**
+   * Dials an address and runs btmux on it; joins a dial of the same address already in flight. Two
+   * concurrent links from one dialler would each be "the newer one" on one side, so the sides could keep
+   * different links and lose streams opened on the other.
+   */
+  #dialAddress(address: string): Promise<BtLink | undefined> {
+    const cur = this.#dialing.get(address);
+    if (cur) return cur;
+    const p = Promise.resolve()
+      .then(async () => this.#adopt(await this.#o.platform.dial(address), address, true))
+      .catch(() => undefined) // away, or not a MeshDrop device
+      .finally(() => this.#dialing.delete(address));
+    this.#dialing.set(address, p);
+    return p;
   }
 
   #dial(deviceId: string): Promise<BtLink | undefined> {
@@ -225,12 +239,8 @@ export class BtLinks extends EventEmitter {
       for (const a of candidates) {
         if (tried.has(a)) continue;
         tried.add(a);
-        try {
-          const l = await this.#adopt(await this.#o.platform.dial(a), a, true);
-          if (l && l.peerId === deviceId) return l;
-        } catch {
-          /* try the next one */
-        }
+        const l = await this.#dialAddress(a);
+        if (l && l.peerId === deviceId) return l;
         if (this.link(deviceId)) return this.link(deviceId);
       }
       return this.link(deviceId);
