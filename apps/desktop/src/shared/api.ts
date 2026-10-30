@@ -124,6 +124,8 @@ export interface Settings {
   deviceLinks: Record<string, LinkMode>;
   /** M14: on a phone's hotspot or USB/Bluetooth tether, never use the phone's mobile data (no default route, no DNS). */
   tetherNoData: boolean;
+  /** Desktop: Opus bitrate in kbit/s (16, 24 or 32) for this PC's sound over Bluetooth. */
+  btSoundKbps: number;
   /** Android: the devices this phone forwards its notifications to. */
   notifyTo?: string[];
 }

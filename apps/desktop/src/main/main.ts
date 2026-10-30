@@ -321,7 +321,7 @@ const SETTING_TYPES: Record<keyof Settings, 'string' | 'number' | 'boolean' | 's
   startHidden: 'boolean', closeToTray: 'boolean', clipboardReceive: 'boolean', clipboardSync: 'boolean', notifications: 'boolean',
   guestMinutes: 'number', remoteFrom: 'string[]', openLinks: 'boolean', phoneNotifications: 'boolean', notifyTo: null,
   printFromDevices: 'boolean', sortInbox: 'boolean', sendReceipts: 'boolean', cleanupDays: 'number',
-  bluetooth: 'boolean', allBluetooth: 'boolean', deviceLinks: 'links', tetherNoData: 'boolean',
+  bluetooth: 'boolean', allBluetooth: 'boolean', deviceLinks: 'links', tetherNoData: 'boolean', btSoundKbps: 'number',
 };
 const settingsPatch = (x: unknown): Partial<Settings> => {
   if (typeof x !== 'object' || x === null || Array.isArray(x)) throw new ArgError('invalid argument');

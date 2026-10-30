@@ -21,7 +21,7 @@ import type { AppState, NoWifiView, StreamKind, DeviceStatus, ReceivedRecord, De
 import type { HistoryStore } from './history.ts';
 import { SettingsError, type SettingsStore } from './settings.ts';
 import { liveAudio, liveRtp } from './liveaudio.ts';
-import { opusChannels, opusDecoder, opusEncoder, opusType } from './opus.ts';
+import { opusChannels, opusDecoder, opusEncoder, opusLiveBytes, opusType } from './opus.ts';
 import { HOTSPOT_HOST_IP, validHotspot, wifiQr, type NetMan } from './netman.ts';
 
 export type ClipImage = { key: string; png: () => Buffer | Promise<Buffer> };
@@ -107,12 +107,6 @@ function inboxCategory(name: string): string {
 }
 const STATUS_POLL_MS = 60_000;
 const RING_MAX_MS = 60_000;
-/**
- * 1 s of 24 kbit/s Opus with its RTP, RFC 4571 and HTTP chunk overhead (about 4.3 kB/s). The count
- * includes bytes on their way, and a phone's credit takes 0.4 s or more to come back, so a cap much
- * under 1 s drops sound even while the link keeps up.
- */
-const OPUS_LIVE_BYTES = 4300;
 
 /** Turns the Remote page's events into input primitives (unknown keys are skipped). */
 export function toPrims(events: RemoteEvent[]): InputPrim[] {
@@ -1340,7 +1334,8 @@ export class AppController extends EventEmitter {
     } catch (e) {
       return deny(503, e instanceof Error ? e.message : 'unavailable');
     }
-    const codec = opusOut ? opusEncoder(2) : opusIn ? opusDecoder(opusIn) : null;
+    const bitrate = this.#settings.get().btSoundKbps * 1000;
+    const codec = opusOut ? opusEncoder(2, { bitrate }) : opusIn ? opusDecoder(opusIn) : null;
     const id = randomUUID();
     let ended = false;
     const end = () => {
@@ -1365,7 +1360,7 @@ export class AppController extends EventEmitter {
       // over Bluetooth only 1 s of sound may queue ahead of the phone: newer frames are dropped
       // while the link is behind, so the sound stays live instead of falling seconds back
       const backlog = () => s.res.writableLength + (this.#e.btBacklog(s.peer, s.req.socket.remotePort) ?? 0);
-      (codec ? pipe.out!.pipe(codec).pipe(liveRtp(backlog, OPUS_LIVE_BYTES)) : pipe.out!).pipe(s.res);
+      (codec ? pipe.out!.pipe(codec).pipe(liveRtp(backlog, opusLiveBytes(bitrate))) : pipe.out!).pipe(s.res);
     } else {
       // sound and microphone stay live: audio that piled up behind a Wi-Fi stall is dropped
       const live = kind === 'sound' ? liveAudio(192_000, 4) : kind === 'mic' ? liveAudio(96_000, 2) : null;
@@ -1399,7 +1394,7 @@ export class AppController extends EventEmitter {
     if ([...this.#streams.values()].some((s) => s.kind === 'sound-out' && s.peer === deviceId)) return;
     const alias = this.#e.devices().find((d) => d.deviceId === deviceId)?.alias;
     // M14: Opus over a Bluetooth link (raw PCM needs 1.5 Mbit/s)
-    const codec = (await this.#e.viaBluetooth(deviceId)) ? opusEncoder(2) : null;
+    const codec = (await this.#e.viaBluetooth(deviceId)) ? opusEncoder(2, { bitrate: this.#settings.get().btSoundKbps * 1000 }) : null;
     const pipe = p.captureAudio();
     const abort = new AbortController();
     const id = randomUUID();

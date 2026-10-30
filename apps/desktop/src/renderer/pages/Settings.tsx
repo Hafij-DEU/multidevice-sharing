@@ -297,6 +297,18 @@ export function Settings({ state, run }: { state: AppState; run: Run }) {
           <input type="checkbox" checked={draft[k] as boolean} disabled={k === 'allBluetooth' && !draft.bluetooth} onChange={(e) => set(k, e.target.checked as never)} /> {label}
         </label>
       ))}
+      {!android && (
+        <label className="row">
+          PC sound over Bluetooth{' '}
+          <select aria-label="PC sound over Bluetooth" value={draft.btSoundKbps} onChange={(e) => set('btSoundKbps', Number(e.target.value))}>
+            {[16, 24, 32].map((k) => (
+              <option key={k} value={k}>
+                {k === 16 ? '16 kbit/s (fewest breaks)' : k === 32 ? '32 kbit/s (best sound)' : '24 kbit/s'}
+              </option>
+            ))}
+          </select>
+        </label>
+      )}
       <Hotspot state={state} run={run} />
       <NoWifiHelp android={android} />
       <div className="row">

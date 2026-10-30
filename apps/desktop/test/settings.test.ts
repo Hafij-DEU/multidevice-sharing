@@ -57,7 +57,7 @@ describe('SettingsStore', () => {
   it('No Wi-Fi (M14): Bluetooth on and mobile data off by default; per-device modes are checked', () => {
     const dir = tmpDir();
     const s = new SettingsStore(join(dir, 's.json'), defaultSettings({ alias: 'pc', inbox: dir }));
-    expect(s.get()).toMatchObject({ bluetooth: true, allBluetooth: false, deviceLinks: {}, tetherNoData: true });
+    expect(s.get()).toMatchObject({ bluetooth: true, allBluetooth: false, deviceLinks: {}, tetherNoData: true, btSoundKbps: 24 });
     const id = 'a'.repeat(64);
     expect(s.set({ deviceLinks: { [id]: 'bt' }, allBluetooth: true }).deviceLinks).toEqual({ [id]: 'bt' });
     expect(() => s.set({ deviceLinks: { [id]: 'usb' as never } })).toThrow(SettingsError);
@@ -65,5 +65,9 @@ describe('SettingsStore', () => {
     expect(() => s.set({ deviceLinks: [] as never })).toThrow(SettingsError);
     expect(() => s.set({ tetherNoData: 1 as never })).toThrow(SettingsError);
     expect(s.get().deviceLinks).toEqual({ [id]: 'bt' });
+    expect(s.set({ btSoundKbps: 16 }).btSoundKbps).toBe(16);
+    expect(s.set({ btSoundKbps: 32 }).btSoundKbps).toBe(32);
+    expect(() => s.set({ btSoundKbps: 20 })).toThrow(SettingsError);
+    expect(s.get().btSoundKbps).toBe(32);
   });
 });

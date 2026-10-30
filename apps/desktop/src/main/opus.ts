@@ -16,11 +16,19 @@ export function opusChannels(contentType: string | undefined): 1 | 2 | null {
 }
 
 /**
- * 24 kbit/s, stereo sound or a mono microphone. Stereo was 96 kbit/s, then 48 kbit/s, but a phone that
- * is the Bluetooth central lets this PC send only about 6 kB/s, so the sound fell behind and broke up;
+ * 24 kbit/s unless Settings picks 16 or 32. Stereo was 96 kbit/s, then 48 kbit/s, but a phone that is
+ * the Bluetooth central lets this PC send only about 6 kB/s, so the sound fell behind and broke up;
  * 24 kbit/s (about 4.3 kB/s on the link) leaves room to catch up after a slow spell.
  */
 export const opusBitrate = (_channels: 1 | 2): number => 24_000;
+
+/**
+ * How many bytes of sound may queue ahead of a phone over Bluetooth: 1 s of Opus at `bitrate` plus
+ * its RTP, RFC 4571 and HTTP chunk overhead (about 1.3 kB/s at 50 frames a second). The count
+ * includes bytes on their way, and a phone's credit takes 0.4 s or more to come back, so a cap much
+ * under 1 s drops sound even while the link keeps up.
+ */
+export const opusLiveBytes = (bitrate: number): number => bitrate / 8 + 1300;
 
 const RTP_CAPS = 'application/x-rtp-stream,media=audio,clock-rate=48000,encoding-name=OPUS,payload=96';
 
@@ -65,8 +73,8 @@ function gst(args: string[], cmd = 'gst-launch-1.0'): Duplex {
 }
 
 /** PCM in, Opus RTP (RFC 4571) out. */
-export function opusEncoder(channels: 1 | 2, cmd?: string): Duplex {
-  return gst(encodeArgs(channels), cmd);
+export function opusEncoder(channels: 1 | 2, o: { bitrate?: number; cmd?: string } = {}): Duplex {
+  return gst(encodeArgs(channels, o.bitrate), o.cmd);
 }
 
 /** Opus RTP (RFC 4571) in, PCM out. */
