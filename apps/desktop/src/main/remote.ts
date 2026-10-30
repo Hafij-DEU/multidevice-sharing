@@ -11,6 +11,9 @@ import type { InputPrim, MediaPipe, Platform } from './controller.ts';
 
 const run = promisify(execFile);
 const READY_TIMEOUT_MS = 90_000; // the first time the user answers GNOME's dialog
+const KILL_AFTER_MS = 2000;
+// PipeWire's audio sinks take input in real time even when nobody listens: a longer stall means a stuck helper
+const STALL_MS = 5000;
 const RING_SOUND = '/usr/share/sounds/freedesktop/stereo/alarm-clock-elapsed.oga';
 
 /** The input helper: started on first use, kept running; null after it failed (retried next time). */
@@ -182,25 +185,49 @@ function pcStatus(inboxDir: string): Omit<DeviceStatus, 'at'> {
   return s;
 }
 
-/** A helper process as a MediaPipe (its stdin or stdout carries the media). */
-function mediaPipe(cmd: string, args: string[], dir: 'in' | 'out'): MediaPipe {
+/** SIGTERM, then SIGKILL if it is still running: a stuck pw-cat blocks SIGTERM while its PipeWire loop hangs. */
+function killHard(p: ChildProcess, afterMs = KILL_AFTER_MS): void {
+  const running = () => p.exitCode === null && p.signalCode === null;
+  if (!running()) return;
+  p.kill();
+  setTimeout(() => running() && p.kill('SIGKILL'), afterMs).unref();
+}
+
+/**
+ * A helper process as a MediaPipe (its stdin or stdout carries the media). With `stallMs`, a helper
+ * that takes no input for that long is stopped: a stuck one would otherwise hold the phone's upload open.
+ */
+export function mediaPipe(cmd: string, args: string[], dir: 'in' | 'out', opts: { stallMs?: number; killAfterMs?: number } = {}): MediaPipe {
   const p = spawn(cmd, args, { stdio: dir === 'in' ? ['pipe', 'ignore', 'ignore'] : ['ignore', 'pipe', 'ignore'] });
   const exits: (() => void)[] = [];
   let done = false;
+  let watchdog: NodeJS.Timeout | undefined;
   const fire = () => {
     if (done) return;
     done = true;
+    clearInterval(watchdog);
     for (const f of exits) f();
+  };
+  const stop = () => {
+    killHard(p, opts.killAfterMs);
+    fire();
   };
   p.on('exit', fire);
   p.on('error', fire);
   (dir === 'in' ? p.stdin! : p.stdout!).on('error', () => {});
+  if (dir === 'in' && opts.stallMs) {
+    const stallMs = opts.stallMs;
+    let since = 0;
+    watchdog = setInterval(() => {
+      if (!p.stdin!.writableNeedDrain) since = 0;
+      else if (!since) since = Date.now();
+      else if (Date.now() - since >= stallMs) stop();
+    }, Math.min(500, stallMs / 3));
+    watchdog.unref();
+  }
   return {
     ...(dir === 'in' ? { in: p.stdin! } : { out: p.stdout! }),
-    stop: () => {
-      p.kill();
-      fire();
-    },
+    stop,
     onExit: (cb) => exits.push(cb),
   };
 }
@@ -213,8 +240,9 @@ export function mediaPlatform(): Required<Pick<Platform, 'captureAudio' | 'camer
     captureAudio: () => mediaPipe('pw-record', ['--raw', '--latency', '20ms', '-P', '{ stream.capture.sink=true node.name=meshdrop-cast }', '--format', 's16', '--rate', '48000', '--channels', '2', '-'], 'out'),
     // another device's sound (s16le 48 kHz stereo) -> this PC's speakers
     speakerSink: (name) =>
-      mediaPipe('pw-cat', ['--playback', '--raw', '--latency', '20ms', '--format', 's16', '--rate', '48000', '--channels', '2', '-P', `{ node.name=meshdrop-sound media.name="Sound from ${label(name)}" }`, '-'], 'in'),
+      mediaPipe('pw-cat', ['--playback', '--raw', '--latency', '20ms', '--format', 's16', '--rate', '48000', '--channels', '2', '-P', `{ node.name=meshdrop-sound media.name="Sound from ${label(name)}" }`, '-'], 'in', { stallMs: STALL_MS }),
     // back-to-back JPEG frames -> a PipeWire video source that browsers and call apps can pick
+    // (no stall watchdog: pipewiresink waits while no app shows the camera)
     cameraSink: (name) =>
       mediaPipe('gst-launch-1.0', [
         '-q', 'fdsrc', 'fd=0', 'do-timestamp=true', '!', 'jpegparse', '!', 'jpegdec', '!', 'videoconvert', '!', 'video/x-raw,format=YUY2', '!',
@@ -227,15 +255,15 @@ export function mediaPlatform(): Required<Pick<Platform, 'captureAudio' | 'camer
         '--capture-props', 'media.class=Audio/Sink node.name=meshdrop-mic-in node.description="MeshDrop mic input" audio.position=[MONO]',
         '--playback-props', `media.class=Audio/Source node.name=meshdrop-mic node.description="${label(name)} microphone (MeshDrop)" audio.position=[MONO]`,
       ], { stdio: 'ignore' });
-      const cat = mediaPipe('pw-cat', ['--playback', '--raw', '--latency', '20ms', '--target', 'meshdrop-mic-in', '--format', 's16', '--rate', '48000', '--channels', '1', '-'], 'in');
+      const cat = mediaPipe('pw-cat', ['--playback', '--raw', '--latency', '20ms', '--target', 'meshdrop-mic-in', '--format', 's16', '--rate', '48000', '--channels', '1', '-'], 'in', { stallMs: STALL_MS });
       return {
         in: cat.in!,
         stop: () => {
           cat.stop();
-          loop.kill();
+          killHard(loop);
         },
         onExit: (cb) => cat.onExit(() => {
-          loop.kill();
+          killHard(loop);
           cb();
         }),
       };
