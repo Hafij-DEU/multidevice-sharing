@@ -251,6 +251,31 @@ public class EngineTest {
     }
 
     @Test
+    public void aManualPeerGoneAfterANetworkRestartIsNoLongerOnTheLan() throws Exception {
+        // Wi-Fi off: the paired PC's old address must not keep it "on the LAN", or streams dial that
+        // address instead of the Bluetooth link and the Bluetooth link is closed as idle.
+        File home = tmp.newFolder();
+        EngineConfig c = new EngineConfig(home, new PlainKeyVault(), new DirectorySink(new File(home, "inbox")));
+        c.port = 0;
+        c.discovery = true;
+        c.discoveryPort = 47000 + (int) (Math.random() * 900);
+        Engine e = Engine.create(c);
+        e.start();
+        engines.add(e);
+        NodeListen pc = NodeListen.start(tmp.newFolder());
+        String id = pc.deviceId;
+        try {
+            pairBoth(e, pc);
+            until(() -> e.devices().stream().anyMatch(d -> d.deviceId.equals(id) && d.reach.equals("lan")), 10_000);
+            pc.kill();
+            e.restartNetworking();
+            until(() -> e.devices().stream().noneMatch(d -> d.deviceId.equals(id) && d.reach.equals("lan")), 10_000);
+        } finally {
+            pc.close();
+        }
+    }
+
+    @Test
     public void reportsWhenTransfersAreActiveForWakeLocks() throws Exception {
         List<Boolean> busy = Collections.synchronizedList(new ArrayList<>());
         File home = tmp.newFolder();

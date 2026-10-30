@@ -1111,15 +1111,30 @@ public final class Engine {
         Atomic.write(manualFile, (Json.stringify(root) + "\n").getBytes(StandardCharsets.UTF_8));
     }
 
+    /**
+     * Probes the saved addresses and every trusted manual peer. A trusted manual peer that neither a
+     * probe nor an announce refreshed meanwhile is forgotten: manual peers never expire, so after Wi-Fi
+     * goes off its old address would keep it "on the LAN" and win over the Bluetooth link.
+     */
     private void reprobeManual() {
         Discovery d = discovery;
         if (d == null) return;
-        List<Thread> ts = new ArrayList<>();
+        long started = System.currentTimeMillis();
+        Map<String, Object[]> addrs = new LinkedHashMap<>();
         for (Map<String, Object> m : readManual()) {
             if (!trust.isTrusted((String) m.get("deviceId"))) continue;
+            String host = (String) m.get("host");
+            int port = ((Long) m.get("port")).intValue();
+            addrs.put(host + " " + port, new Object[] {host, port});
+        }
+        for (Discovery.PeerInfo p : d.peers()) {
+            if (p.manual && trust.isTrusted(p.deviceId)) addrs.put(p.host + " " + p.port, new Object[] {p.host, p.port});
+        }
+        List<Thread> ts = new ArrayList<>();
+        for (Object[] a : addrs.values()) {
             Thread t = new Thread(() -> {
                 try {
-                    Discovery.PeerInfo p = d.probe((String) m.get("host"), ((Long) m.get("port")).intValue(), REPROBE_TIMEOUT_MS);
+                    Discovery.PeerInfo p = d.probe((String) a[0], (Integer) a[1], REPROBE_TIMEOUT_MS);
                     maybeAutoResume(p.deviceId);
                 } catch (IOException | RuntimeException ignored) {
                     // not reachable right now
@@ -1136,6 +1151,9 @@ public final class Engine {
                 Thread.currentThread().interrupt();
                 return;
             }
+        }
+        for (Discovery.PeerInfo p : d.peers()) {
+            if (p.manual && p.lastSeen < started && trust.isTrusted(p.deviceId)) d.forget(p.deviceId);
         }
     }
 
