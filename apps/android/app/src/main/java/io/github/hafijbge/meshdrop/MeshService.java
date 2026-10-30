@@ -25,7 +25,10 @@ public final class MeshService extends Service {
     static final String ACTION_PAUSE = "io.github.hafijbge.meshdrop.PAUSE";
     static final String ACTION_RESUME = "io.github.hafijbge.meshdrop.RESUME";
     private static final int NOTE_ID = 1;
+    private static final long NET_SETTLE_MS = 2000;
     private ConnectivityManager.NetworkCallback netCallback;
+    private android.os.HandlerThread netThread;
+    private android.os.Handler net;
     /** Screen off: background work slows down (sync, backup, re-probing); receiving stays as it is. */
     private android.content.BroadcastReceiver screen;
     private android.content.BroadcastReceiver btState;
@@ -73,21 +76,34 @@ public final class MeshService extends Service {
             }
         }, "meshdrop-service-start").start();
         ConnectivityManager cm = getSystemService(ConnectivityManager.class);
+        // One Wi-Fi change fires a burst of callbacks (available, link properties, lost): restart
+        // networking once, NET_SETTLE_MS after the last one, on a thread of its own.
+        netThread = new android.os.HandlerThread("meshdrop-net");
+        netThread.start();
+        net = new android.os.Handler(netThread.getLooper());
+        Runnable restart = () -> {
+            if (core.started()) core.controller.networkChanged();
+        };
         netCallback = new ConnectivityManager.NetworkCallback() {
+            private void changed() {
+                net.removeCallbacks(restart);
+                net.postDelayed(restart, NET_SETTLE_MS);
+            }
+
             @Override
             public void onAvailable(Network network) {
-                if (core.started()) core.controller.networkChanged();
+                changed();
             }
 
             @Override
             public void onLost(Network network) {
-                if (core.started()) core.controller.networkChanged();
+                changed();
             }
 
             @Override
             public void onLinkPropertiesChanged(Network network, android.net.LinkProperties lp) {
                 // a new address on the same Wi-Fi: the announce sockets are bound to the old one
-                if (core.started()) core.controller.networkChanged();
+                changed();
             }
         };
         cm.registerNetworkCallback(new NetworkRequest.Builder().addTransportType(NetworkCapabilities.TRANSPORT_WIFI).build(), netCallback);
@@ -155,6 +171,7 @@ public final class MeshService extends Service {
     public void onDestroy() {
         live = null;
         if (netCallback != null) getSystemService(ConnectivityManager.class).unregisterNetworkCallback(netCallback);
+        if (netThread != null) netThread.quit(); // drops a pending restart
         if (screen != null) unregisterReceiver(screen);
         if (btState != null) unregisterReceiver(btState);
         super.onDestroy();

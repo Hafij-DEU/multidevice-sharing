@@ -7,6 +7,7 @@ import static org.junit.Assert.assertThrows;
 import static org.junit.Assert.assertTrue;
 
 import io.github.hafijbge.meshdrop.engine.crypto.P256;
+import io.github.hafijbge.meshdrop.engine.crypto.TestKeys;
 import io.github.hafijbge.meshdrop.engine.net.TrustStore;
 import io.github.hafijbge.meshdrop.engine.util.Hex;
 import io.github.hafijbge.meshdrop.engine.util.Io;
@@ -31,7 +32,7 @@ public class MembershipTest {
     }
 
     static KeyPair root(Map<String, Object> v) {
-        return new KeyPair(P256.publicFromSpki(Hex.parse((String) v.get("rootSpkiDerHex"))), P256.privateFromScalar(Hex.parse((String) v.get("rootPrivateKeyScalarHex"))));
+        return new KeyPair(P256.publicFromSpki(Hex.parse((String) v.get("rootSpkiDerHex"))), TestKeys.privateFromScalar(Hex.parse((String) v.get("rootPrivateKeyScalarHex"))));
     }
 
     @SuppressWarnings("unchecked")

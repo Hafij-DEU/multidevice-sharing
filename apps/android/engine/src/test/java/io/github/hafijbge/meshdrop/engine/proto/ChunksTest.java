@@ -5,6 +5,7 @@ import static org.junit.Assert.assertEquals;
 
 import io.github.hafijbge.meshdrop.engine.crypto.Hpke;
 import io.github.hafijbge.meshdrop.engine.crypto.P256;
+import io.github.hafijbge.meshdrop.engine.crypto.TestKeys;
 import io.github.hafijbge.meshdrop.engine.util.B64;
 import io.github.hafijbge.meshdrop.engine.util.Hex;
 import io.github.hafijbge.meshdrop.engine.util.Json;
@@ -30,9 +31,9 @@ public class ChunksTest {
     public void reproducesChunkVectorByteForByte() throws Exception {
         Map<String, Object> v = vector();
         Map<String, Object> in = (Map<String, Object>) v.get("inputs");
-        KeyPair snd = new KeyPair(P256.publicFromSec1(h(in, "senderPublicKeyHex")), P256.privateFromScalar(h(in, "senderPrivateKeyScalarHex")));
-        KeyPair rcv = new KeyPair(P256.publicFromSec1(h(in, "receiverPublicKeyHex")), P256.privateFromScalar(h(in, "receiverPrivateKeyScalarHex")));
-        KeyPair eph = new KeyPair(P256.publicFromSec1(h(in, "skEPublicKeyHex")), P256.privateFromScalar(h(in, "skEScalarHex")));
+        KeyPair snd = new KeyPair(P256.publicFromSec1(h(in, "senderPublicKeyHex")), TestKeys.privateFromScalar(h(in, "senderPrivateKeyScalarHex")));
+        KeyPair rcv = new KeyPair(P256.publicFromSec1(h(in, "receiverPublicKeyHex")), TestKeys.privateFromScalar(h(in, "receiverPrivateKeyScalarHex")));
+        KeyPair eph = new KeyPair(P256.publicFromSec1(h(in, "skEPublicKeyHex")), TestKeys.privateFromScalar(h(in, "skEScalarHex")));
 
         Manifest m = Manifest.fromJson(v.get("manifest"));
         assertEquals(v.get("manifestJson"), m.toJson());

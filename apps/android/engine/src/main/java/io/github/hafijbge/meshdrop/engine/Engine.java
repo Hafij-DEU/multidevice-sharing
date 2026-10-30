@@ -1523,11 +1523,6 @@ public final class Engine {
         return bl == null ? java.util.Collections.<String>emptyList() : bl.linked();
     }
 
-    /** Whether Bluetooth links run (a platform was given and it started). */
-    public boolean btAvailable() {
-        return btLinks != null;
-    }
-
     // ---- live streams (M10b): LAN or Bluetooth, pinned TLS ------------------------------------
 
     /** A live stream to or from a device on the LAN: read `in` (GET) or write `out` (POST); close() ends it. */

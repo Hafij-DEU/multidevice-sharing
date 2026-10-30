@@ -7,6 +7,7 @@ import static org.junit.Assert.assertThrows;
 import static org.junit.Assert.assertTrue;
 
 import io.github.hafijbge.meshdrop.engine.crypto.P256;
+import io.github.hafijbge.meshdrop.engine.crypto.TestKeys;
 import io.github.hafijbge.meshdrop.engine.util.Hex;
 import io.github.hafijbge.meshdrop.engine.util.Io;
 import io.github.hafijbge.meshdrop.engine.util.Json;
@@ -34,7 +35,7 @@ public class EnvelopeTest {
     public void theVectorIsByteExactAndVerifies() throws Exception {
         Map<String, Object> v = vector();
         PublicKey pub = P256.publicFromSpki(Hex.parse((String) v.get("senderSpkiDerHex")));
-        PrivateKey key = P256.privateFromScalar(Hex.parse((String) v.get("senderScalarHex")));
+        PrivateKey key = TestKeys.privateFromScalar(Hex.parse((String) v.get("senderScalarHex")));
         byte[] body = Hex.parse((String) v.get("bodyHex"));
         byte[] frame = Hex.parse((String) v.get("frameHex"));
 

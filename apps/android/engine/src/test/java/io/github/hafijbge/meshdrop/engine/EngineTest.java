@@ -205,11 +205,11 @@ public class EngineTest {
             assertTrue(!e.receiving());
             File f = new File(tmp.getRoot(), "x.txt");
             Files.write(f.toPath(), "x".getBytes(StandardCharsets.UTF_8));
-            Node.Result r = Node.run(60, "send", e.identity().shortId(), f.getPath(), "--home", pc.home.getPath());
+            Node.Result r = Node.run(60, "send", e.identity().deviceId().substring(0, 8), f.getPath(), "--home", pc.home.getPath());
             assertNotEquals(0, r.code);
             assertTrue(r.out, r.out.contains("503"));
             e.setReceiving(true);
-            assertEquals(0, Node.run(60, "send", e.identity().shortId(), f.getPath(), "--home", pc.home.getPath()).code);
+            assertEquals(0, Node.run(60, "send", e.identity().deviceId().substring(0, 8), f.getPath(), "--home", pc.home.getPath()).code);
         }
     }
 
@@ -272,7 +272,7 @@ public class EngineTest {
             File g = new File(tmp.getRoot(), "in.txt");
             Files.write(g.toPath(), "in".getBytes(StandardCharsets.UTF_8));
             int before = busy.size();
-            assertEquals(0, Node.run(60, "send", e.identity().shortId(), g.getPath(), "--home", pc.home.getPath()).code);
+            assertEquals(0, Node.run(60, "send", e.identity().deviceId().substring(0, 8), g.getPath(), "--home", pc.home.getPath()).code);
             until(() -> busy.size() > before && busy.subList(before, busy.size()).contains(Boolean.TRUE), 5_000);
         }
     }

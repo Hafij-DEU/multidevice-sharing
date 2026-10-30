@@ -21,10 +21,18 @@ public final class HistoryStore {
         this(file, 500);
     }
 
-    @SuppressWarnings("unchecked")
+    /** Reads nothing yet: the file is parsed on first use, so building the store on Android's main thread does no disk I/O. */
     public HistoryStore(File file, int cap) {
         this.file = file;
         this.cap = cap;
+    }
+
+    private boolean loaded;
+
+    @SuppressWarnings("unchecked")
+    private void ensureLoaded() {
+        if (loaded) return;
+        loaded = true;
         try {
             Object j = Json.parse(Io.readString(file.toPath()));
             if (j instanceof List) {
@@ -53,6 +61,7 @@ public final class HistoryStore {
 
     /** M11: the first open of `ref` (the records it was in, with their changes), or none. */
     public synchronized List<Map<String, Object>> opened(String ref, long now, long burnAfterMs) throws IOException {
+        ensureLoaded();
         List<Map<String, Object>> hit = new ArrayList<>();
         for (Map<String, Object> r : records) {
             if (r.get("openedAt") != null || !(r.get("files") instanceof List) || !((List<?>) r.get("files")).contains(ref)) continue;
@@ -67,6 +76,7 @@ public final class HistoryStore {
     /** M11: burn-after-reading records whose time came; they are marked burned and their files returned. */
     @SuppressWarnings("unchecked")
     public synchronized List<String> burnDue(long now, long unopenedMs) throws IOException {
+        ensureLoaded();
         List<String> out = new ArrayList<>();
         for (Map<String, Object> r : records) {
             if (!Boolean.TRUE.equals(r.get("burn")) || Boolean.TRUE.equals(r.get("burned"))) continue;
@@ -83,6 +93,7 @@ public final class HistoryStore {
     }
 
     public synchronized void addReceived(long at, String from, String alias, List<String> files, String text, boolean clipboard, String sessionId, boolean burn) throws IOException {
+        ensureLoaded();
         Map<String, Object> r = new LinkedHashMap<>();
         r.put("at", at);
         r.put("from", from);
@@ -98,6 +109,7 @@ public final class HistoryStore {
     }
 
     public synchronized List<Map<String, Object>> received() {
+        ensureLoaded();
         List<Map<String, Object>> out = new ArrayList<>();
         for (Map<String, Object> r : records) out.add(new LinkedHashMap<>(r));
         return out;

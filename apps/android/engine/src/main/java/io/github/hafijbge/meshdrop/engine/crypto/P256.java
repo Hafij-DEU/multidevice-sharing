@@ -13,7 +13,6 @@ import java.security.interfaces.ECPublicKey;
 import java.security.spec.ECGenParameterSpec;
 import java.security.spec.ECParameterSpec;
 import java.security.spec.ECPoint;
-import java.security.spec.ECPrivateKeySpec;
 import java.security.spec.ECPublicKeySpec;
 import java.security.spec.PKCS8EncodedKeySpec;
 import java.security.spec.X509EncodedKeySpec;
@@ -101,17 +100,6 @@ public final class P256 {
         byte[] b = v.toByteArray();
         int len = Math.min(b.length, 32);
         System.arraycopy(b, b.length - len, out, off + 32 - len, len);
-    }
-
-    public static ECPrivateKey privateFromScalar(byte[] d) {
-        if (d.length != 32) throw new IllegalArgumentException("expected a 32-byte scalar");
-        BigInteger s = new BigInteger(1, d);
-        if (s.signum() == 0 || s.compareTo(PARAMS.getOrder()) >= 0) throw new IllegalArgumentException("scalar out of range");
-        try {
-            return (ECPrivateKey) kf().generatePrivate(new ECPrivateKeySpec(s, PARAMS));
-        } catch (GeneralSecurityException e) {
-            throw new IllegalArgumentException(e);
-        }
     }
 
     public static ECPublicKey publicFromSpki(byte[] der) {

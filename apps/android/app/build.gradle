@@ -31,7 +31,10 @@ android {
 
     buildTypes {
         release {
-            minifyEnabled false
+            // R8: shrink, optimize and obfuscate code, drop unused resources (keep rules: proguard-rules.pro)
+            minifyEnabled true
+            shrinkResources true
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
             if (releaseStore) {
                 signingConfig signingConfigs.release
             }

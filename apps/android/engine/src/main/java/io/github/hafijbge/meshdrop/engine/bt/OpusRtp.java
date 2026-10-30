@@ -90,14 +90,6 @@ public final class OpusRtp {
         return out;
     }
 
-    static int seq(byte[] p) {
-        return ((p[2] & 0xff) << 8) | (p[3] & 0xff);
-    }
-
-    static long timestamp(byte[] p) {
-        return ((long) (p[4] & 0xff) << 24) | ((p[5] & 0xff) << 16) | ((p[6] & 0xff) << 8) | (p[7] & 0xff);
-    }
-
     private static final class Encoding extends OutputStream {
         private final OutputStream rtp;
         private final Codec enc;

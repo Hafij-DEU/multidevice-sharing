@@ -35,7 +35,7 @@ public class NodeInteropTest {
             new Random(42).nextBytes(big);
             Files.write(new File(folder, "big.bin").toPath(), big);
 
-            Node.Result sent = Node.run(120, "send", phone.id.shortId(), folder.getPath(), "--text", "hi", "--home", node.getPath());
+            Node.Result sent = Node.run(120, "send", phone.id.deviceId().substring(0, 8), folder.getPath(), "--text", "hi", "--home", node.getPath());
             assertEquals(sent.out, 0, sent.code);
             assertArrayEquals(big, Files.readAllBytes(new File(phone.inboxDir, "trip/big.bin").toPath()));
             assertEquals("hej", Files.readString(new File(phone.inboxDir, "trip/ü 😀.txt").toPath()));
@@ -49,7 +49,7 @@ public class NodeInteropTest {
 
             File single = new File(src, "ü 😀.txt");
             Files.write(single.toPath(), "again".getBytes(StandardCharsets.UTF_8));
-            for (int i = 0; i < 2; i++) assertEquals(0, Node.run("send", phone.id.shortId(), single.getPath(), "--home", node.getPath()).code);
+            for (int i = 0; i < 2; i++) assertEquals(0, Node.run("send", phone.id.deviceId().substring(0, 8), single.getPath(), "--home", node.getPath()).code);
             assertEquals("again", Files.readString(new File(phone.inboxDir, "ü 😀.txt").toPath()));
             assertEquals("again", Files.readString(new File(phone.inboxDir, "ü 😀 (1).txt").toPath()));
         }

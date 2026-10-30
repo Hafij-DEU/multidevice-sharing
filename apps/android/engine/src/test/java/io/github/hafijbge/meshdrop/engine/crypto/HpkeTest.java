@@ -26,7 +26,7 @@ public class HpkeTest {
     }
 
     static KeyPair pair(Map<String, Object> v, String sk, String pk) throws Exception {
-        return new KeyPair(P256.publicFromSec1(h(v, pk)), P256.privateFromScalar(h(v, sk)));
+        return new KeyPair(P256.publicFromSec1(h(v, pk)), TestKeys.privateFromScalar(h(v, sk)));
     }
 
     @Test

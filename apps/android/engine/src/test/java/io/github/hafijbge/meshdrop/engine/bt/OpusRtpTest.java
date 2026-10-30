@@ -70,8 +70,8 @@ public class OpusRtpTest {
             assertEquals(i == 0, (p[1] & 0x80) != 0); // marker on the first packet only
             assertEquals(frame, p.length - 12);
         }
-        assertEquals((OpusRtp.seq(packets.get(0)) + 1) & 0xffff, OpusRtp.seq(packets.get(1)));
-        assertEquals((OpusRtp.timestamp(packets.get(0)) + 960) & 0xffffffffL, OpusRtp.timestamp(packets.get(1)));
+        assertEquals((seq(packets.get(0)) + 1) & 0xffff, seq(packets.get(1)));
+        assertEquals((timestamp(packets.get(0)) + 960) & 0xffffffffL, timestamp(packets.get(1)));
 
         Same dec = new Same();
         InputStream in = OpusRtp.decoding(new ByteArrayInputStream(wire.toByteArray()), dec);
@@ -103,8 +103,8 @@ public class OpusRtpTest {
             assertNotNull(opus);
             assertTrue(opus.length > 0);
             if (i >= 2) {
-                assertEquals((OpusRtp.seq(packets.get(i - 1)) + 1) & 0xffff, OpusRtp.seq(packets.get(i)));
-                assertEquals((OpusRtp.timestamp(packets.get(i - 1)) + 960) & 0xffffffffL, OpusRtp.timestamp(packets.get(i)));
+                assertEquals((seq(packets.get(i - 1)) + 1) & 0xffff, seq(packets.get(i)));
+                assertEquals((timestamp(packets.get(i - 1)) + 960) & 0xffffffffL, timestamp(packets.get(i)));
             }
         }
     }
@@ -123,5 +123,14 @@ public class OpusRtpTest {
         other[1] = 0; // PT 0
         assertNull(OpusRtp.payload(other));
         assertNull(OpusRtp.payload(new byte[5]));
+    }
+
+    // RTP header fields (RFC 3550), read only by these tests.
+    private static int seq(byte[] p) {
+        return ((p[2] & 0xff) << 8) | (p[3] & 0xff);
+    }
+
+    private static long timestamp(byte[] p) {
+        return ((long) (p[4] & 0xff) << 24) | ((p[5] & 0xff) << 16) | ((p[6] & 0xff) << 8) | (p[7] & 0xff);
     }
 }

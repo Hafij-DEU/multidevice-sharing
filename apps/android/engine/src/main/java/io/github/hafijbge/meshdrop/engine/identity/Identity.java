@@ -39,10 +39,6 @@ public final class Identity {
         return deviceId;
     }
 
-    public String shortId() {
-        return deviceId.substring(0, 8);
-    }
-
     public byte[] certDer() {
         return certDer.clone();
     }

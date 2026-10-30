@@ -25,7 +25,6 @@ public class IdentityTest {
         Identity b = Identity.loadOrCreate(home, new PlainKeyVault());
         assertEquals(a.deviceId(), b.deviceId());
         assertTrue(a.deviceId().matches("[0-9a-f]{64}"));
-        assertEquals(a.deviceId().substring(0, 8), a.shortId());
         assertTrue(X509.parse(a.certDer()).getSubjectX500Principal().getName().startsWith("CN=meshdrop-"));
     }
 
