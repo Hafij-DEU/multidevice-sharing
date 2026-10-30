@@ -1148,6 +1148,14 @@ export class AppController extends EventEmitter {
       case 'apps':
         if (!may) return { status: 403, body: { error: 'remote-off' } };
         return { status: 200, body: { apps: (await p.apps?.()) ?? [] } };
+      case 'bt-audio-stop': {
+        // a phone cannot drop its own A2DP link (privileged API), so it asks here; only its own sound
+        if (!this.#bt?.audioStop) return { status: 501, body: { error: 'unsupported' } };
+        const mine = this.#btAudio.filter((a) => this.#e.btDevice(a.address) === peer);
+        if (mine.length === 0) return { status: 404, body: { error: 'not-playing' } };
+        for (const a of mine) await this.#bt.audioStop(a.address);
+        return { status: 200, body: { ok: true } };
+      }
       case 'ring':
         if (msg.on === false) await this.ringStop();
         else this.#ring(alias());

@@ -662,6 +662,39 @@ describe('AppController internet access', () => {
     expect(c.state().streams).toEqual([]);
   });
 
+  it('a phone asks the PC to stop its own Bluetooth audio, and only its own', async () => {
+    const A = await make('ay');
+    const aId = A.c.state().self.deviceId;
+    const home = tmpDir();
+    writeFileSync(join(home, 'bt-peers.json'), JSON.stringify({ 'DD:DD:DD:DD:DD:DD': aId }));
+    let report: (s: { address: string; name: string }[]) => void = () => undefined;
+    const stopped: string[] = [];
+    const bt = {
+      bonded: async () => [],
+      dial: async () => { throw new Error('Host is down'); },
+      listen: async () => undefined,
+      stop: () => undefined,
+      onAudio: (cb: typeof report) => { report = cb; },
+      audioStop: async (a: string) => { stopped.push(a); report([]); },
+    };
+    const B = new AppController({
+      home,
+      settings: new SettingsStore(join(home, 'desktop-settings.json'), defaultSettings({ alias: 'bee', inbox: join(home, 'inbox'), port: 0, discovery: false })),
+      history: new HistoryStore(join(home, 'desktop-history.json')),
+      platform: fakePlatform(),
+      engineOptions: { hub: { ingressPort: 0 }, guest: { port: 0 } },
+      bt,
+    });
+    ctls.push(B);
+    await B.start();
+    await pair(A.c, B);
+    const bId = B.state().self.deviceId;
+    expect(await A.c.appSend(bId, { kind: 'bt-audio-stop' })).toMatchObject({ status: 404, body: { error: 'not-playing' } });
+    report([{ address: 'EE:EE:EE:EE:EE:EE', name: 'Someone else' }, { address: 'DD:DD:DD:DD:DD:DD', name: 'POCO X3 Pro' }]);
+    expect(await A.c.appSend(bId, { kind: 'bt-audio-stop' })).toMatchObject({ status: 200 });
+    expect(stopped).toEqual(['DD:DD:DD:DD:DD:DD']);
+  });
+
   it('M10b streams: PC sound only for allowed devices; a phone camera arrives as a stream', async () => {
     const { LanTransport } = await import('@meshdrop/core/src/transfer/transport.ts');
     const { loadOrCreateIdentity } = await import('@meshdrop/core/src/identity.ts');

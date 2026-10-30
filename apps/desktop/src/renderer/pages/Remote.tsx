@@ -15,6 +15,7 @@ const ERRORS: Record<string, string> = {
   'remote-off': 'That PC does not allow this device yet: on the PC, open More → Remote and tick this device under "Devices that may control this PC".',
   'input-unavailable': 'The PC cannot take input right now.',
   unsupported: 'That PC cannot do this yet: sound, camera and microphone need MeshDrop on Linux for now.',
+  'not-playing': 'The PC hears no Bluetooth audio from this phone now.',
 };
 
 /** What an app message answered, as an error to show (undefined: it worked). */
@@ -562,7 +563,11 @@ function AndroidExtras({ state, run, trusted }: { state: AppState; run: Run; tru
             {(c.a2dpTo !== d.deviceId || c.soundTo === d.deviceId) && <SoundTo state={state} run={run} to={d.deviceId} label="Play phone sound on PC" />}
             {c.a2dpTo === d.deviceId ? (
               <>
-                <p className="muted">This phone's sound plays on the PC as Bluetooth audio, like earbuds. To end it, pick the phone speaker as the audio output.</p>
+                <p className="muted">This phone's sound plays on the PC as Bluetooth audio, like earbuds.</p>
+                <button className="primary" onClick={() => void run(async () => {
+                  const err = problem(await window.meshdrop.appSend(d.deviceId, { kind: 'bt-audio-stop' }));
+                  if (err) throw new Error(err);
+                }, 'Bluetooth audio stopped')}>Stop Bluetooth audio</button>
                 <button onClick={() => void run(() => window.meshdrop.keepAliveAction!('audio-output'))}>Change audio output</button>
               </>
             ) : (
