@@ -27,4 +27,6 @@ if [ -f "$APPARMOR_PROFILE_DEST" ]; then
 fi
 if [ "$1" = remove ] || [ "$1" = purge ]; then
     rm -f '/usr/bin/meshdrop'
+    # the camera setup; a loaded module stays until the next restart (an app may be showing it)
+    rm -f /etc/modprobe.d/meshdrop-camera.conf /etc/modules-load.d/meshdrop-camera.conf
 fi

@@ -1,11 +1,11 @@
 import { spawn, spawnSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('electron', () => ({ BrowserWindow: class {}, screen: {} }));
-const { cameraArgs, mediaPipe } = await import('../src/main/remote.ts');
+const { cameraArgs, loopbackDevice, mediaPipe } = await import('../src/main/remote.ts');
 
 const tmps: string[] = [];
 afterEach(() => {
@@ -122,6 +122,56 @@ describe('mediaPipe', () => {
     p.stop();
     expect(seen).toEqual([0, 0, 0, 0]);
     expect(alive).toBe(true);
+  });
+
+  // browsers and call apps (Chrome, Zoom) only list V4L2 cameras: a v4l2loopback device carries the phone too
+  it('finds the MeshDrop loopback camera device', () => {
+    const d = mkdtempSync(join(tmpdir(), 'md-v4l-'));
+    tmps.push(d);
+    const dev = (n: string, name: string) => {
+      mkdirSync(join(d, n));
+      writeFileSync(join(d, n, 'name'), `${name}\n`);
+    };
+    expect(loopbackDevice(d)).toBeNull();
+    dev('video0', 'Integrated Camera: Integrated C');
+    expect(loopbackDevice(d)).toBeNull();
+    dev('video7', 'MeshDrop camera');
+    expect(loopbackDevice(d)).toBe('/dev/video7');
+    expect(loopbackDevice(join(d, 'missing'))).toBeNull();
+  });
+
+  it('sends the camera to the loopback device as well', () => {
+    const args = cameraArgs('Test', 'meshdrop-camera', '/dev/video7');
+    expect(args).toContain('pipewiresink');
+    expect(args).toContain('v4l2sink');
+    expect(args).toContain('device=/dev/video7');
+    expect(cameraArgs('Test')).not.toContain('v4l2sink');
+  });
+
+  const loop = gst ? loopbackDevice() : null;
+  it.skipIf(!loop)('shows the phone camera on the loopback device', { timeout: 20_000 }, async () => {
+    const frame = spawnSync('gst-launch-1.0', ['-q', 'videotestsrc', 'num-buffers=1', '!', 'video/x-raw,width=640,height=480', '!', 'jpegenc', '!', 'fdsink', 'fd=1']).stdout;
+    const p = mediaPipe('gst-launch-1.0', cameraArgs('Test', `meshdrop-test-camera-${process.pid}`, loop), 'in');
+    let feeding = true;
+    void (async () => {
+      while (feeding) {
+        p.in!.write(frame);
+        await new Promise((r) => setTimeout(r, 33));
+      }
+    })();
+    // a V4L2 app opens it once frames flow
+    await new Promise((r) => setTimeout(r, 1000));
+    const code = await new Promise<number | null>((done) => {
+      const v = spawn('gst-launch-1.0', ['-q', 'v4l2src', `device=${loop}`, 'num-buffers=30', '!', 'fakesink'], { stdio: 'ignore' });
+      const t = setTimeout(() => v.kill('SIGKILL'), 8000);
+      v.on('exit', (c) => {
+        clearTimeout(t);
+        done(c);
+      });
+    });
+    feeding = false;
+    p.stop();
+    expect(code).toBe(0);
   });
 
   it('keeps a helper that reads', async () => {

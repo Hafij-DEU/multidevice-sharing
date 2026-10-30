@@ -59,3 +59,15 @@ fi
 # The meshdrop command line (the core CLI, run by the bundled Electron in Node mode).
 ln -sf '/opt/${sanitizedProductName}/resources/meshdrop' '/usr/bin/meshdrop'
 chmod 0755 '/opt/${sanitizedProductName}/resources/meshdrop' || true
+
+# A V4L2 camera for the phone (v4l2loopback ships with Ubuntu's kernel): Chrome, Zoom and other apps that only list
+# V4L2 cameras find it as "MeshDrop camera" while a phone streams. An existing v4l2loopback setup (OBS) stays as it is.
+if modinfo v4l2loopback >/dev/null 2>&1; then
+    if [ -f /etc/modprobe.d/meshdrop-camera.conf ] || ! grep -rqs '^options v4l2loopback' /etc/modprobe.d; then
+        echo 'options v4l2loopback devices=1 exclusive_caps=1 card_label="MeshDrop camera"' > /etc/modprobe.d/meshdrop-camera.conf
+        echo v4l2loopback > /etc/modules-load.d/meshdrop-camera.conf
+        if ! { [ -x '/usr/bin/ischroot' ] && /usr/bin/ischroot; } && ! grep -qs '^v4l2loopback ' /proc/modules; then
+            modprobe v4l2loopback || true
+        fi
+    fi
+fi

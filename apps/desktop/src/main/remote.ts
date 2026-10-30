@@ -2,7 +2,7 @@
 // PC actions, the app list, ringing (Find my device) and this PC's own status.
 import { BrowserWindow, screen } from 'electron';
 import { execFile, spawn, type ChildProcess } from 'node:child_process';
-import { appendFileSync, existsSync, readdirSync, readFileSync, statfsSync } from 'node:fs';
+import { accessSync, appendFileSync, constants, existsSync, readdirSync, readFileSync, statfsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
@@ -235,17 +235,57 @@ export function mediaPipe(cmd: string, args: string[], dir: 'in' | 'out', opts: 
 /** A device name made safe for PipeWire properties. */
 const label = (s: string) => s.replace(/[^\p{L}\p{N} ._-]/gu, '').slice(0, 40) || 'Phone';
 
-/** The gst-launch arguments that turn back-to-back JPEG frames into the PipeWire camera `node`. */
-export function cameraArgs(name: string, node = 'meshdrop-camera'): string[] {
-  return [
-    '-q', 'fdsrc', 'fd=0', 'do-timestamp=true', '!', 'jpegparse', '!',
-    // pipewiresink takes no frames while no app shows the camera: drop the oldest instead of blocking, so the
-    // phone's upload keeps flowing and its end arrives (a blocked one left a stale, frozen camera behind)
-    'queue', 'leaky=downstream', 'max-size-buffers=2', 'max-size-bytes=0', 'max-size-time=0', '!', 'jpegdec', '!', 'videoconvert', '!', 'video/x-raw,format=YUY2', '!',
+/**
+ * The v4l2loopback device the MeshDrop package sets up ("MeshDrop camera"): Chrome, Zoom and other apps that
+ * only list V4L2 cameras find the phone there.
+ */
+export function loopbackDevice(dir = '/sys/class/video4linux'): string | null {
+  let names: string[];
+  try {
+    names = readdirSync(dir).sort();
+  } catch {
+    return null;
+  }
+  for (const n of names) {
+    try {
+      if (readFileSync(join(dir, n, 'name'), 'utf8').trim() === 'MeshDrop camera') return `/dev/${n}`;
+    } catch {
+      // not a device folder
+    }
+  }
+  return null;
+}
+
+/** `dev` if this user may write frames to it: a failing v4l2sink would take the PipeWire camera down too. */
+function writable(dev: string | null): string | null {
+  if (!dev) return null;
+  try {
+    accessSync(dev, constants.W_OK);
+    return dev;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The gst-launch arguments that turn back-to-back JPEG frames into the PipeWire camera `node`, and also into the
+ * V4L2 loopback `device` when there is one.
+ */
+export function cameraArgs(name: string, node = 'meshdrop-camera', device: string | null = null): string[] {
+  const leaky = ['queue', 'leaky=downstream', 'max-size-buffers=2', 'max-size-bytes=0', 'max-size-time=0'];
+  const pw = [
     // an app that closed the camera (or reopened it to pick a format) made the default sink fail with "all buffers
     // have been removed", which ended the phone's stream: provide the stream and copy frames, so the next app gets it
     // gst-launch re-parses its arguments: the description's quotes must be escaped inside the quoted value
     'pipewiresink', 'mode=provide', 'use-bufferpool=false', `stream-properties="props,media.class=Video/Source,media.role=Camera,node.name=${node},node.description=\\"${label(name)} camera (MeshDrop)\\""`,
+  ];
+  return [
+    '-q', 'fdsrc', 'fd=0', 'do-timestamp=true', '!', 'jpegparse', '!',
+    // pipewiresink takes no frames while no app shows the camera: drop the oldest instead of blocking, so the
+    // phone's upload keeps flowing and its end arrives (a blocked one left a stale, frozen camera behind)
+    ...leaky, '!', 'jpegdec', '!', 'videoconvert', '!', 'video/x-raw,format=YUY2', '!',
+    // each sink gets its own leaky queue: one that stops taking frames must not hold up the other
+    ...(device ? ['tee', 'name=t', '!', ...leaky, '!', ...pw, 't.', '!', ...leaky, '!', 'v4l2sink', `device=${device}`, 'sync=false'] : pw),
   ];
 }
 
@@ -258,7 +298,7 @@ export function mediaPlatform(): Required<Pick<Platform, 'captureAudio' | 'camer
     speakerSink: (name) =>
       mediaPipe('pw-cat', ['--playback', '--raw', '--latency', '20ms', '--format', 's16', '--rate', '48000', '--channels', '2', '-P', `{ node.name=meshdrop-sound media.name="Sound from ${label(name)}" }`, '-'], 'in', { stallMs: STALL_MS }),
     // back-to-back JPEG frames -> a PipeWire video source that browsers and call apps can pick
-    cameraSink: (name) => mediaPipe('gst-launch-1.0', cameraArgs(name), 'in'),
+    cameraSink: (name) => mediaPipe('gst-launch-1.0', cameraArgs(name, undefined, writable(loopbackDevice())), 'in'),
     // s16le 48 kHz mono -> a virtual microphone (a null-sink loopback whose source side apps record from)
     micSink: (name) => {
       const loop = spawn('pw-loopback', [
