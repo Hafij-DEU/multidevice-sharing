@@ -35,6 +35,16 @@ import org.junit.Test;
 public class BtLinkTest {
     static final String A = "a".repeat(64);
     static final String B = "b".repeat(64);
+    /** Engine.Route.bt dials the link ports at 127.0.0.1, whatever getLoopbackAddress() says (::1 on Android). */
+    static final InetAddress LOOPBACK = v4();
+
+    static InetAddress v4() {
+        try {
+            return InetAddress.getByAddress(new byte[] {127, 0, 0, 1});
+        } catch (IOException e) {
+            throw new IllegalStateException(e);
+        }
+    }
     final List<AutoCloseable> open = new ArrayList<>();
 
     @After
@@ -85,7 +95,7 @@ public class BtLinkTest {
 
     /** A TCP server standing in for a mesh port. */
     int meshStub(Consumer<Socket> handler) throws IOException {
-        ServerSocket s = new ServerSocket(0, 16, InetAddress.getLoopbackAddress());
+        ServerSocket s = new ServerSocket(0, 16, LOOPBACK);
         open.add(s);
         Thread t = new Thread(() -> {
             while (!s.isClosed()) {
@@ -113,8 +123,8 @@ public class BtLinkTest {
 
     /** Two links over a loopback TCP connection standing in for RFCOMM. */
     BtLink[] pair(int meshA, int meshB) throws Exception {
-        ServerSocket ss = new ServerSocket(0, 1, InetAddress.getLoopbackAddress());
-        Socket x = new Socket(InetAddress.getLoopbackAddress(), ss.getLocalPort());
+        ServerSocket ss = new ServerSocket(0, 1, LOOPBACK);
+        Socket x = new Socket(LOOPBACK, ss.getLocalPort());
         Socket y = ss.accept();
         ss.close();
         BtLink a = new BtLink(x.getInputStream(), x.getOutputStream(), x, true, A, () -> meshA, 15_000, QUIET);
@@ -155,7 +165,7 @@ public class BtLinkTest {
         int echo = meshStub(BtLinkTest::echo);
         BtLink[] l = pair(echo, echo);
         for (BtLink side : l) {
-            try (Socket s = new Socket(InetAddress.getLoopbackAddress(), side.normalPort())) {
+            try (Socket s = new Socket(LOOPBACK, side.normalPort())) {
                 s.getOutputStream().write("hello over bluetooth".getBytes(StandardCharsets.UTF_8));
                 s.shutdownOutput();
                 assertEquals("hello over bluetooth", new String(readAll(s.getInputStream()), StandardCharsets.UTF_8));
@@ -172,7 +182,7 @@ public class BtLinkTest {
         new SecureRandom().nextBytes(data);
         int echo = meshStub(BtLinkTest::echo);
         BtLink[] l = pair(1, echo);
-        try (Socket s = new Socket(InetAddress.getLoopbackAddress(), l[0].priorityPort())) {
+        try (Socket s = new Socket(LOOPBACK, l[0].priorityPort())) {
             CompletableFuture<byte[]> back = CompletableFuture.supplyAsync(() -> {
                 try {
                     return readAll(s.getInputStream());
@@ -202,8 +212,8 @@ public class BtLinkTest {
             closed.incrementAndGet();
         });
         BtLink[] l = pair(1, stub);
-        Socket s1 = new Socket(InetAddress.getLoopbackAddress(), l[0].normalPort());
-        Socket s2 = new Socket(InetAddress.getLoopbackAddress(), l[0].normalPort());
+        Socket s1 = new Socket(LOOPBACK, l[0].normalPort());
+        Socket s2 = new Socket(LOOPBACK, l[0].normalPort());
         open.add(s2);
         s1.getOutputStream().write('x');
         s2.getOutputStream().write('y');
@@ -217,8 +227,8 @@ public class BtLinkTest {
 
     @Test(timeout = 10_000)
     public void closesALinkThatFallsSilent() throws Exception {
-        ServerSocket ss = new ServerSocket(0, 1, InetAddress.getLoopbackAddress());
-        Socket x = new Socket(InetAddress.getLoopbackAddress(), ss.getLocalPort());
+        ServerSocket ss = new ServerSocket(0, 1, LOOPBACK);
+        Socket x = new Socket(LOOPBACK, ss.getLocalPort());
         Socket y = ss.accept();
         open.add(y);
         ss.close();
@@ -249,8 +259,8 @@ public class BtLinkTest {
         };
         String[] want = {"HELLO", "HELLO", "bad OPEN"};
         for (int i = 0; i < firsts.length; i++) {
-            ServerSocket ss = new ServerSocket(0, 1, InetAddress.getLoopbackAddress());
-            Socket x = new Socket(InetAddress.getLoopbackAddress(), ss.getLocalPort());
+            ServerSocket ss = new ServerSocket(0, 1, LOOPBACK);
+            Socket x = new Socket(LOOPBACK, ss.getLocalPort());
             Socket y = ss.accept();
             open.add(y);
             ss.close();

@@ -454,6 +454,7 @@ public final class BtLinks {
             }
         }
         if (save) save();
+        BtLink.LOG.info("link up peer=" + peer + " dialer=" + dialer + " address=" + address + (drop == null ? "" : drop == l ? " (duplicate: dropped this one)" : " (duplicate: dropped the older)"));
         if (drop != null) drop.close();
         if (drop == l) return stopped ? null : link(peer);
         if (l.closed()) {

@@ -27,3 +27,17 @@ test {
         exceptionFormat 'full'
     }
 }
+
+// Android's InetAddress.getLoopbackAddress() is ::1; rerun the Bluetooth link tests the way the phone sees it.
+tasks.register('btLoopbackTest', Test) {
+    testClassesDirs = sourceSets.test.output.classesDirs
+    classpath = sourceSets.test.runtimeClasspath
+    filter { includeTestsMatching 'io.github.hafijbge.meshdrop.engine.bt.BtLinkTest' }
+    systemProperty 'meshdrop.repo', rootDir.parentFile.parentFile.path
+    systemProperty 'java.net.preferIPv6Addresses', 'true'
+    testLogging {
+        events 'failed'
+        exceptionFormat 'full'
+    }
+}
+check.dependsOn btLoopbackTest

@@ -1465,6 +1465,7 @@ public final class AppController {
             s = kind.equals("audio") ? e().streamFrom(deviceId, codec != null ? "audio?codec=opus" : "audio")
                     : e().streamTo(deviceId, kind, kind.equals("camera") ? "multipart/x-mixed-replace" : type);
         } catch (IOException | RuntimeException x) {
+            java.util.logging.Logger.getLogger("MeshDropBt").info("stream " + kind + " start failed (bt=" + (codec != null) + "): " + x);
             if (codec != null) codec.close();
             platform.mediaStopped(kind);
             throw x;
@@ -1483,8 +1484,9 @@ public final class AppController {
                 else if (kind.equals("camera")) CameraRetry.keep(sout, stop, o -> platform.captureCamera(o, stop, back), 30_000, 1_000);
                 else if (kind.equals("sound")) platform.captureSound(sout, stop);
                 else platform.captureMic(sout, stop);
-            } catch (IOException | RuntimeException ignored) {
+            } catch (IOException | RuntimeException x) {
                 // the PC went away or the stream was stopped
+                java.util.logging.Logger.getLogger("MeshDropBt").info("stream " + kind + " ended: " + x);
             } finally {
                 try {
                     if (sout != null) sout.close();

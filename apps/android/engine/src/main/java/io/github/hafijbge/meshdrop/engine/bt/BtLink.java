@@ -37,6 +37,10 @@ public final class BtLink implements Closeable {
         void onClosed(BtLink link, Exception why);
     }
 
+    /** Logcat tag MeshDropBt: why links and streams end, for field reports. */
+    static final java.util.logging.Logger LOG = java.util.logging.Logger.getLogger("MeshDropBt");
+    /** Streams are dialled at 127.0.0.1 (see Engine.Route.bt); Android's getLoopbackAddress() is ::1, which refuses them. */
+    private static final InetAddress LOOPBACK = loopback();
     private static final Pattern DEVICE_ID = Pattern.compile("[0-9a-f]{64}");
     private static final Object END_MARK = new Object();
     private static final byte[] ABORT = new byte[0];
@@ -152,6 +156,7 @@ public final class BtLink implements Closeable {
         quiet(priority);
         for (Pipe p : all) abortSocket(p);
         ready.countDown();
+        LOG.info("link closed peer=" + peerId + " dialer=" + dialer + " streams=" + all.size() + " why=" + why);
         listener.onClosed(this, why);
     }
 
@@ -223,7 +228,7 @@ public final class BtLink implements Closeable {
 
     private ServerSocket listen(boolean prio) throws IOException {
         ServerSocket s = new ServerSocket();
-        s.bind(new InetSocketAddress(InetAddress.getLoopbackAddress(), 0), 16);
+        s.bind(new InetSocketAddress(LOOPBACK, 0), 16);
         thread(() -> acceptLoop(s, prio), "bt-accept");
         return s;
     }
@@ -250,6 +255,7 @@ public final class BtLink implements Closeable {
                 control.add(BtMux.encode(BtMux.OPEN, id, new byte[] {(byte) (prio ? 1 : 0)}));
                 lock.notifyAll();
             }
+            LOG.info("stream opened here id=" + id + " prio=" + prio);
             startPipe(p);
         }
     }
@@ -262,13 +268,15 @@ public final class BtLink implements Closeable {
             p = new Pipe(id, prio, null);
             pipes.put(id, p);
         }
+        LOG.info("stream open id=" + id + " prio=" + prio);
         // Connecting may block; it runs on the stream's own writer thread, which buffers early DATA.
         thread(() -> {
             try {
                 Socket s = new Socket();
-                s.connect(new InetSocketAddress(InetAddress.getLoopbackAddress(), meshPort.getAsInt()), 5000);
+                s.connect(new InetSocketAddress(LOOPBACK, meshPort.getAsInt()), 5000);
                 p.sock = s;
             } catch (IOException e) {
+                LOG.info("stream " + id + " local connect failed: " + e);
                 drop(id, false);
                 return;
             }
@@ -465,6 +473,7 @@ public final class BtLink implements Closeable {
         synchronized (lock) {
             p = pipes.remove(id);
             if (p == null) return;
+            LOG.info("stream reset id=" + id + " byPeer=" + remote);
             if (!remote && !closed) {
                 control.add(BtMux.encode(BtMux.RESET, id));
                 lock.notifyAll();
@@ -486,6 +495,14 @@ public final class BtLink implements Closeable {
         } catch (IOException ignored) {
         }
         quiet(s);
+    }
+
+    private static InetAddress loopback() {
+        try {
+            return InetAddress.getByAddress(new byte[] {127, 0, 0, 1});
+        } catch (java.net.UnknownHostException e) {
+            throw new IllegalStateException(e);
+        }
     }
 
     private static void quiet(Closeable c) {
