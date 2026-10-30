@@ -144,6 +144,11 @@ export class BtLinks extends EventEmitter {
     return undefined;
   }
 
+  /** The device last seen at a Bluetooth address (any case). */
+  deviceOf(address: string): string | undefined {
+    return this.#addrs.get(address.toUpperCase());
+  }
+
   /**
    * A ready link to the device, dialling it now if needed (within `timeoutMs`). Undefined when the
    * device is in Wi-Fi mode, has no known address, or does not answer.

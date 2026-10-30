@@ -365,6 +365,10 @@ public final class AppController {
         Map<String, Object> casting = new LinkedHashMap<>();
         for (Map.Entry<String, String> c : castTo.entrySet()) casting.put(c.getKey().equals("audio") ? "audioFrom" : c.getKey().equals("camera") ? "cameraTo" : c.getKey().equals("sound") ? "soundTo" : "micTo", c.getValue());
         if (castTo.containsKey("camera") && cameraBack) casting.put("cameraBack", true);
+        List<String> ids = new ArrayList<>();
+        for (EngineDevice d : x.devices()) ids.add(d.deviceId);
+        String a2dp = a2dpTo(platform.a2dpSinks(), ids, x::btAddress);
+        if (a2dp != null) casting.put("a2dpTo", a2dp);
         m.put("casting", casting);
         Map<String, Object> noWifi = new LinkedHashMap<>();
         Map<String, Object> hs = hotspot;
@@ -1444,6 +1448,18 @@ public final class AppController {
     /** kind ("audio" | "camera" | "mic") -> the device it plays from or sends to. */
     private final Map<String, String> castTo = new java.util.concurrent.ConcurrentHashMap<>();
     private final Map<String, io.github.hafijbge.meshdrop.engine.Engine.Stream> casts = new java.util.concurrent.ConcurrentHashMap<>();
+
+    /** The device among `ids` whose Bluetooth address is one of `sinks` (this phone's sound plays there as Bluetooth audio), or null. */
+    static String a2dpTo(java.util.Set<String> sinks, List<String> ids, java.util.function.Function<String, String> address) {
+        if (sinks.isEmpty()) return null;
+        java.util.Set<String> up = new java.util.HashSet<>();
+        for (String a : sinks) up.add(a.toUpperCase(java.util.Locale.ROOT));
+        for (String id : ids) {
+            String a = address.apply(id);
+            if (a != null && up.contains(a.toUpperCase(java.util.Locale.ROOT))) return id;
+        }
+        return null;
+    }
 
     /** The camera a running webcam uses (true: the back one). */
     private volatile boolean cameraBack;

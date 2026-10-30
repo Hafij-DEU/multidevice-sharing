@@ -630,6 +630,38 @@ describe('AppController internet access', () => {
     expect(toPrims([{ t: 'key', k: 'rm -rf' }])).toEqual([]);
   });
 
+  it('a phone playing its sound here as Bluetooth audio shows under Live now, and Stop ends it', async () => {
+    const home = tmpDir();
+    let report: (s: { address: string; name: string }[]) => void = () => undefined;
+    const stopped: string[] = [];
+    const bt = {
+      bonded: async () => [],
+      dial: async () => { throw new Error('Host is down'); },
+      listen: async () => undefined,
+      stop: () => undefined,
+      onAudio: (cb: typeof report) => { report = cb; },
+      audioStop: async (a: string) => { stopped.push(a); report([]); },
+    };
+    const c = new AppController({
+      home,
+      settings: new SettingsStore(join(home, 'desktop-settings.json'), defaultSettings({ alias: 'pc', inbox: join(home, 'inbox'), port: 0, discovery: false })),
+      history: new HistoryStore(join(home, 'desktop-history.json')),
+      platform: fakePlatform(),
+      engineOptions: { hub: { ingressPort: 0 }, guest: { port: 0 } },
+      bt,
+    });
+    ctls.push(c);
+    await c.start();
+    const pushed: AppState[] = [];
+    c.on('state', (st: AppState) => pushed.push(st));
+    report([{ address: 'DD:DD:DD:DD:DD:DD', name: 'POCO X3 Pro' }]);
+    await until(() => pushed.some((st) => st.streams?.length === 1)); // the window hears of it
+    expect(c.state().streams).toEqual([{ id: 'bt-audio:DD:DD:DD:DD:DD:DD', kind: 'bt-audio', peer: '', alias: 'POCO X3 Pro' }]);
+    await c.streamStop('bt-audio:DD:DD:DD:DD:DD:DD');
+    expect(stopped).toEqual(['DD:DD:DD:DD:DD:DD']);
+    expect(c.state().streams).toEqual([]);
+  });
+
   it('M10b streams: PC sound only for allowed devices; a phone camera arrives as a stream', async () => {
     const { LanTransport } = await import('@meshdrop/core/src/transfer/transport.ts');
     const { loadOrCreateIdentity } = await import('@meshdrop/core/src/identity.ts');

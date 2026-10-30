@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 # A stand-in for build/meshdrop-bt.py: the same stdin/stdout and bridge protocol, no BlueZ.
 # Dials to "AA:AA:AA:AA:AA:AA" connect and echo; others fail. The first "bonded" request also opens
-# an incoming connection from "CC:CC:CC:CC:CC:CC" that says "hi".
+# an incoming connection from "CC:CC:CC:CC:CC:CC" that says "hi". "DD:DD:DD:DD:DD:DD" plays its sound here
+# as Bluetooth audio until an "audio-stop" for it.
 import json
 import socket
 import sys
@@ -32,6 +33,7 @@ def echo(u):
 
 
 out({"ready": True})
+out({"audio": [{"address": "DD:DD:DD:DD:DD:DD", "name": "Phone"}]})
 for line in sys.stdin:
     req = json.loads(line)
     if req["t"] == "bonded":
@@ -44,3 +46,6 @@ for line in sys.stdin:
             threading.Thread(target=echo, args=(connect({"address": req["address"], "dial": req["id"]}),), daemon=True).start()
         else:
             out({"id": req["id"], "error": "Host is down"})
+    elif req["t"] == "audio-stop":
+        out({"id": req["id"], "ok": True})
+        out({"audio": []})

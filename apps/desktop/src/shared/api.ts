@@ -280,7 +280,7 @@ export interface AppState {
   /** M11: sends waiting for their time. */
   scheduled?: ScheduledView[];
   /** M10b Android: what this phone streams now. */
-  casting?: { audioFrom?: string; cameraTo?: string; cameraBack?: boolean; micTo?: string; soundTo?: string };
+  casting?: { audioFrom?: string; cameraTo?: string; cameraBack?: boolean; micTo?: string; soundTo?: string; /** Android: the PC this phone's sound plays on as Bluetooth audio (A2DP). */ a2dpTo?: string };
   /** M14 No Wi-Fi hotspots (absent where this device cannot host or join one). */
   noWifi?: NoWifiView;
 }
@@ -299,7 +299,8 @@ export interface NoWifiView {
  * 'mic' a phone's camera or microphone used here, 'sound' another device's sound out of these
  * speakers, 'sound-out' this PC's sound sent to another device.
  */
-export type StreamKind = 'audio' | 'camera' | 'mic' | 'sound' | 'sound-out';
+/** bt-audio: a phone plays its sound here as Bluetooth audio (A2DP), like earbuds. */
+export type StreamKind = 'audio' | 'camera' | 'mic' | 'sound' | 'sound-out' | 'bt-audio';
 
 /** A notification forwarded from a phone (M10). */
 export interface PhoneNote {

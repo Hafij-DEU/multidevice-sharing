@@ -1102,6 +1102,11 @@ export class Engine extends EventEmitter {
     return this.btLinks?.link(this.resolveDeviceId(deviceId))?.backlog(port);
   }
 
+  /** The device that last linked from a Bluetooth address, if any. */
+  btDevice(address: string): string | undefined {
+    return this.btLinks?.deviceOf(address);
+  }
+
   /** Devices with a Bluetooth link up now. */
   btLinked(): string[] {
     return this.btLinks?.linked() ?? [];

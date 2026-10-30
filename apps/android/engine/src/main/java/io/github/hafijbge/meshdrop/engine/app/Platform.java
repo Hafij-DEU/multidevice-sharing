@@ -134,6 +134,11 @@ public interface Platform {
         throw new java.io.IOException(io.github.hafijbge.meshdrop.engine.bt.OpusRtp.NO_CODEC);
     }
 
+    /** Bluetooth addresses this device now plays its sound to as Bluetooth audio (A2DP), upper case; empty when none or unknown. */
+    default java.util.Set<String> a2dpSinks() {
+        return java.util.Collections.emptySet();
+    }
+
     // ---- M14: hotspots, for devices with no Wi-Fi network to share ----
 
     /**

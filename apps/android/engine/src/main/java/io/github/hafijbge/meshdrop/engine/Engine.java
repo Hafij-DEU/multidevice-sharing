@@ -1535,6 +1535,12 @@ public final class Engine {
         return route(resolveDeviceId(deviceId)).bt;
     }
 
+    /** The Bluetooth address last used for a device, or null. */
+    public String btAddress(String deviceId) {
+        io.github.hafijbge.meshdrop.engine.bt.BtLinks bl = btLinks;
+        return bl == null ? null : bl.addressOf(deviceId);
+    }
+
     /** Devices with a Bluetooth link up now. */
     public List<String> btLinked() {
         io.github.hafijbge.meshdrop.engine.bt.BtLinks bl = btLinks;

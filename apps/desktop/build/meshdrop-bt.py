@@ -6,10 +6,14 @@
 # Reads JSON lines on stdin:
 #   {"t":"bonded","id":1}                    the paired phones and computers
 #   {"t":"dial","id":2,"address":"AA:..."}   connect to that device's MeshDrop service
+#   {"t":"audio-stop","id":3,"address":"AA:..."}  end that device's Bluetooth audio to this PC
 # Writes JSON lines:
 #   {"ready":true}  or  {"error":"..."} (then exits)
 #   {"id":1,"bonded":[{"address":"AA:...","name":"Pixel"}]}
 #   {"id":2,"error":"..."}                   the dial failed (on success the connection arrives)
+#   {"id":3,"ok":true}
+#   {"audio":[{"address":"AA:...","name":"Pixel"}]}  devices playing their sound here as Bluetooth
+#                                            audio (A2DP), at start and on every change
 # Each connection opens the unix socket and starts with one JSON line, {"address":"AA:...","dial":2}
 # ("dial" only for a connection this helper dialled), then carries the RFCOMM bytes both ways.
 # Stops when stdin closes.
@@ -29,6 +33,9 @@ PROFILE_PATH = "/io/github/hafijbge/meshdrop/bt"
 BRIDGE = sys.argv[1]
 # Phones and PCs only: never poke headphones or keyboards.
 KINDS = ("phone", "computer")
+# A transport on this PC's A2DP sink endpoint: a device plays its sound here (PipeWire plays it).
+A2DP_SINK = "0000110b-0000-1000-8000-00805f9b34fb"
+A2DP_SOURCE = "0000110a-0000-1000-8000-00805f9b34fb"
 
 INTROSPECTION = """
 <node>
@@ -53,6 +60,7 @@ out_lock = threading.Lock()
 dialing = {}
 # device path -> open sockets (closed on RequestDisconnection)
 conns = {}
+last_audio = None
 
 
 def out(obj):
@@ -188,6 +196,47 @@ def dial(req):
     bus.call("org.bluez", path, "org.bluez.Device1", "ConnectProfile", GLib.Variant("(s)", (UUID,)), None, Gio.DBusCallFlags.NONE, 20000, None, done)
 
 
+def report_audio(*_args):
+    global last_audio
+    try:
+        objs = objects()
+    except GLib.Error:
+        return
+    found = {}
+    for t in (i.get("org.bluez.MediaTransport1") for i in objs.values()):
+        if not t or t.get("UUID", "").lower() != A2DP_SINK:
+            continue
+        dev = t.get("Device", "")
+        d = objs.get(dev, {}).get("org.bluez.Device1", {})
+        address = d.get("Address", address_of(dev))
+        found[address] = {"address": address, "name": d.get("Alias") or d.get("Name") or address}
+    audio = sorted(found.values(), key=lambda a: a["address"])
+    if audio != last_audio:
+        last_audio = audio
+        out({"audio": audio})
+
+
+def audio_stop(req):
+    rid = req["id"]
+    try:
+        path = device_path(req["address"])
+    except GLib.Error as e:
+        out({"id": rid, "error": e.message})
+        return
+    if not path:
+        out({"id": rid, "error": "not paired"})
+        return
+
+    def done(_bus, res):
+        try:
+            bus.call_finish(res)
+            out({"id": rid, "ok": True})
+        except GLib.Error as e:
+            out({"id": rid, "error": e.message})
+
+    bus.call("org.bluez", path, "org.bluez.Device1", "DisconnectProfile", GLib.Variant("(s)", (A2DP_SOURCE,)), None, Gio.DBusCallFlags.NONE, 20000, None, done)
+
+
 def on_line(line):
     try:
         req = json.loads(line)
@@ -197,6 +246,8 @@ def on_line(line):
         bonded(req)
     elif req.get("t") == "dial" and isinstance(req.get("address"), str):
         dial(req)
+    elif req.get("t") == "audio-stop" and isinstance(req.get("address"), str):
+        audio_stop(req)
 
 
 def read_stdin():
@@ -220,6 +271,9 @@ def main():
     except GLib.Error as e:
         fail("Bluetooth is not available: " + e.message)
     out({"ready": True})
+    # transports come and go as the phone picks this PC as its audio output, or leaves it
+    bus.signal_subscribe("org.bluez", "org.freedesktop.DBus.ObjectManager", None, "/", None, Gio.DBusSignalFlags.NONE, report_audio)
+    report_audio()
     threading.Thread(target=read_stdin, daemon=True).start()
     loop.run()
     try:

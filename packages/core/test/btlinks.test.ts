@@ -130,6 +130,8 @@ describe('Bluetooth links between engines (M14)', () => {
 
     // The address map is learnt from HELLO and kept.
     expect(JSON.parse(readFileSync(join(A.home, 'bt-peers.json'), 'utf8'))).toEqual({ 'BB:BB:BB:BB:BB:BB': bId });
+    expect(A.e.btDevice('bb:bb:bb:bb:bb:bb')).toBe(bId); // phone sound arriving as Bluetooth audio names its sender
+    expect(A.e.btDevice('CC:CC:CC:CC:CC:CC')).toBeUndefined();
     expect(A.events.some((x) => x.source === 'bt' && x.type === 'up' && x.deviceId === bId)).toBe(true);
     expect(await A.e.send('all', [{ kind: 'text', text: 'to all' }])).toMatchObject([{ deviceId: bId, status: 'done' }]);
   });

@@ -1,6 +1,7 @@
 // M14 on the PC: Bluetooth links through BlueZ. A Python GI helper (build/meshdrop-bt.py) registers
 // the MeshDrop RFCOMM profile and hands each connection over a private unix socket; the link
-// manager in @meshdrop/core does the rest (HELLO, trust, mux).
+// manager in @meshdrop/core does the rest (HELLO, trust, mux). It also reports phones that play their
+// sound here as Bluetooth audio (A2DP, like earbuds): PipeWire plays that by itself.
 import { spawn, type ChildProcess } from 'node:child_process';
 import { existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { createServer, type Server, type Socket } from 'node:net';
@@ -8,6 +9,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Duplex } from 'node:stream';
 import type { BtBonded, BtPlatform } from '@meshdrop/core/src/bt/links.ts';
+import type { StreamKind } from '../shared/api.ts';
 
 const DIAL_TIMEOUT_MS = 25_000;
 const REPLY_TIMEOUT_MS = 15_000;
@@ -20,6 +22,28 @@ export interface BluezOptions {
   python?: string;
 }
 
+/** A device playing its sound on this PC as Bluetooth audio. */
+export interface BtAudioSource { address: string; name: string }
+
+export interface BluezPlatform extends BtPlatform {
+  /** `cb` gets the devices playing their sound here as Bluetooth audio, at start and on every change. */
+  onAudio(cb: (sources: BtAudioSource[]) => void): void;
+  /** Ends a device's Bluetooth audio to this PC. */
+  audioStop(address: string): Promise<void>;
+}
+
+/** The Live now entries for Bluetooth audio: the MeshDrop device behind each address, else its Bluetooth name. */
+export function a2dpStreams(
+  sources: BtAudioSource[],
+  deviceOf: (address: string) => string | undefined,
+  aliasOf: (deviceId: string) => string | undefined,
+): { id: string; kind: StreamKind; peer: string; alias: string }[] {
+  return sources.map((s) => {
+    const peer = deviceOf(s.address) ?? '';
+    return { id: `bt-audio:${s.address}`, kind: 'bt-audio', peer, alias: (peer && aliasOf(peer)) || s.name };
+  });
+}
+
 interface Pending {
   resolve: (v: unknown) => void;
   reject: (e: Error) => void;
@@ -27,12 +51,19 @@ interface Pending {
 }
 
 /** The PC's Bluetooth: starts the helper on listen(), stops it on stop(). */
-export function bluezPlatform(opts: BluezOptions): BtPlatform {
+export function bluezPlatform(opts: BluezOptions): BluezPlatform {
   let proc: ChildProcess | null = null;
   let server: Server | null = null;
   let dir: string | null = null;
   let onConn: ((c: Duplex, address: string) => void) | null = null;
   let seq = 0;
+  let onAudio: ((s: BtAudioSource[]) => void) | null = null;
+  let audio: BtAudioSource[] = [];
+  const setAudio = (s: BtAudioSource[]) => {
+    if (JSON.stringify(s) === JSON.stringify(audio)) return;
+    audio = s;
+    onAudio?.(s);
+  };
   const pending = new Map<number, Pending>();
 
   const fail = (e: Error) => {
@@ -58,7 +89,7 @@ export function bluezPlatform(opts: BluezOptions): BtPlatform {
   };
 
   const onLine = (line: string, ready: (e?: Error) => void) => {
-    let m: { ready?: boolean; error?: string; id?: number; bonded?: BtBonded[] };
+    let m: { ready?: boolean; error?: string; id?: number; bonded?: BtBonded[]; ok?: boolean; audio?: BtAudioSource[] };
     try {
       m = JSON.parse(line) as typeof m;
     } catch {
@@ -67,12 +98,13 @@ export function bluezPlatform(opts: BluezOptions): BtPlatform {
     if (m.id === undefined) {
       if (m.ready) ready();
       else if (m.error) ready(new Error(m.error));
+      else if (Array.isArray(m.audio)) setAudio(m.audio.filter((a) => typeof a?.address === 'string').map((a) => ({ address: a.address.toUpperCase(), name: typeof a.name === 'string' ? a.name : a.address })));
       return;
     }
     const p = pending.get(m.id);
     if (!p) return;
     // a dial's success is its connection arriving on the bridge; only its failure comes here
-    if (m.error === undefined && m.bonded === undefined) return;
+    if (m.error === undefined && m.bonded === undefined && m.ok === undefined) return;
     pending.delete(m.id);
     clearTimeout(p.timer);
     if (m.error !== undefined) p.reject(new Error(m.error));
@@ -126,6 +158,7 @@ export function bluezPlatform(opts: BluezOptions): BtPlatform {
     fail(new Error('Bluetooth stopped.'));
     proc?.kill();
     proc = null;
+    setAudio([]);
     server?.close();
     server = null;
     if (dir) rmSync(dir, { recursive: true, force: true });
@@ -186,6 +219,12 @@ export function bluezPlatform(opts: BluezOptions): BtPlatform {
     },
     dial(address) {
       return ask<Duplex>({ t: 'dial', address }, DIAL_TIMEOUT_MS);
+    },
+    onAudio(cb) {
+      onAudio = cb;
+    },
+    async audioStop(address) {
+      await ask<unknown>({ t: 'audio-stop', address }, REPLY_TIMEOUT_MS);
     },
     stop,
   };

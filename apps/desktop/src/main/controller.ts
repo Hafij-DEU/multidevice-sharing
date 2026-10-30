@@ -14,6 +14,7 @@ import { Engine, liveListener, type EngineEvent, type EngineOptions, type SendIt
 import { loadOrCreateIdentity } from '@meshdrop/core/src/identity.ts';
 import { writeFileAtomic } from '@meshdrop/core/src/trust.ts';
 import type { BtPlatform, LinkPolicy } from '@meshdrop/core/src/bt/links.ts';
+import { a2dpStreams, type BluezPlatform, type BtAudioSource } from './bluetooth.ts';
 import { BUTTONS, KEYSYMS, charKeysym } from './keys.ts';
 import { ensureDir, land } from '@meshdrop/core/src/guest/uploads.ts';
 import { cleanHandoff, handoffUrl, type HandoffState } from '@meshdrop/core/src/handoff.ts';
@@ -156,8 +157,8 @@ export interface ControllerOptions {
   history: HistoryStore;
   platform: Platform;
   engineOptions?: Partial<EngineOptions>;
-  /** M14: this PC's Bluetooth (BlueZ); none: no Bluetooth links. */
-  bt?: BtPlatform;
+  /** M14: this PC's Bluetooth (BlueZ); none: no Bluetooth links. With onAudio, phones playing their sound here as Bluetooth audio show under Live now. */
+  bt?: BtPlatform & Partial<Pick<BluezPlatform, 'onAudio' | 'audioStop'>>;
   /** M14: NetworkManager for hotspots and the tether guard (Linux); gets the controller's change callback. */
   net?: (onChange: () => void) => NetMan;
   /** Tests: shorter M11 timings (burn after reading, the sweep, the time-capsule threshold). */
@@ -256,7 +257,9 @@ export class AppController extends EventEmitter {
   readonly #history: HistoryStore;
   readonly #platform: Platform;
   readonly #engineOptions: Partial<EngineOptions>;
-  readonly #bt: BtPlatform | undefined;
+  readonly #bt: ControllerOptions['bt'];
+  /** Phones playing their sound here as Bluetooth audio (A2DP) now. */
+  #btAudio: BtAudioSource[] = [];
   #engine: Engine | null = null;
   #mode: AppState['mode'] = 'serving';
   #ownsPid = false;
@@ -307,6 +310,10 @@ export class AppController extends EventEmitter {
     this.#platform = opts.platform;
     this.#engineOptions = opts.engineOptions ?? {};
     this.#bt = opts.bt;
+    this.#bt?.onAudio?.((s) => {
+      this.#btAudio = s;
+      this.#changed();
+    });
     this.#net = opts.net?.(() => this.#changed());
     this.#timing = opts.timing ?? {};
   }
@@ -504,7 +511,10 @@ export class AppController extends EventEmitter {
         return r.active && this.#roomQr ? { ...r, qrSvg: this.#roomQr } : r;
       })(),
       scheduled: this.#scheduled.map(({ items: _i, ...v }) => ({ ...v, targets: [...v.targets], aliases: [...v.aliases], names: [...v.names] })),
-      streams: [...this.#streams].map(([id, s]) => ({ id, kind: s.kind, peer: s.peer, ...(s.alias ? { alias: s.alias } : {}) })),
+      streams: [
+        ...[...this.#streams].map(([id, s]) => ({ id, kind: s.kind, peer: s.peer, ...(s.alias ? { alias: s.alias } : {}) })),
+        ...a2dpStreams(this.#btAudio, (a) => e.btDevice(a), (id) => e.devices().find((d) => d.deviceId === id)?.alias),
+      ],
       platform: 'desktop',
       ...(this.#shared.length > 0 ? { sharedPending: this.#shared.length } : {}),
       receiving: this.#mode === 'serving' && !this.#paused && this.#error === undefined,
@@ -1380,6 +1390,7 @@ export class AppController extends EventEmitter {
   }
 
   async streamStop(id: string): Promise<void> {
+    if (id.startsWith('bt-audio:')) return this.#bt?.audioStop?.(id.slice('bt-audio:'.length));
     this.#streams.get(id)?.stop();
   }
 

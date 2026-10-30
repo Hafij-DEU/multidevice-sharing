@@ -618,4 +618,20 @@ public class AppControllerTest {
         assertTrue(String.valueOf(hs.get("qrSvg")).startsWith("<svg"));
         assertEquals("WIFI:T:WPA;S:DIRECT-ab\\;c;P:pass\\:word1;;", AppController.wifiQr("DIRECT-ab;c", "pass:word1"));
     }
+
+    @Test
+    public void a2dpToIsThePeerWhoseBluetoothAddressPlaysThePhonesSound() {
+        Map<String, String> addr = Map.of("pc", "AA:BB:CC:DD:EE:01", "tab", "AA:BB:CC:DD:EE:02");
+        assertEquals("pc", AppController.a2dpTo(java.util.Set.of("aa:bb:cc:dd:ee:01"), List.of("tab", "pc", "gone"), addr::get));
+        assertEquals(null, AppController.a2dpTo(java.util.Set.of("11:22:33:44:55:66"), List.of("tab", "pc"), addr::get));
+        assertEquals(null, AppController.a2dpTo(java.util.Set.of(), List.of("pc"), addr::get));
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    public void stateHasNoA2dpToWhenNothingPlaysOverBluetoothAudio() throws Exception {
+        Node a = make("ay");
+        Map<String, Object> casting = (Map<String, Object>) state(a.c).get("casting");
+        assertFalse(casting.containsKey("a2dpTo"));
+    }
 }

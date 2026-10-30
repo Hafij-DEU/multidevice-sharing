@@ -393,8 +393,9 @@ export function Remote({ state, run }: { state: AppState; run: Run }) {
             {(state.streams ?? []).map((st) => (
               <li key={st.id} className="row space">
                 <span>
-                  {st.kind === 'audio' || st.kind === 'sound-out' ? "This PC's sound plays on " : st.kind === 'sound' ? 'Playing the sound of ' : st.kind === 'camera' ? 'Camera of ' : 'Microphone of '}
+                  {st.kind === 'audio' || st.kind === 'sound-out' ? "This PC's sound plays on " : st.kind === 'sound' || st.kind === 'bt-audio' ? 'Playing the sound of ' : st.kind === 'camera' ? 'Camera of ' : 'Microphone of '}
                   <Peer text={st.alias ?? 'a device'} />
+                  {st.kind === 'bt-audio' && <span className="muted"> · Bluetooth audio, like earbuds</span>}
                   {st.kind === 'camera' && <span className="muted"> · pick "{st.alias} camera (MeshDrop)" in your video app</span>}
                   {st.kind === 'mic' && <span className="muted"> · pick "{st.alias} microphone (MeshDrop)" as input</span>}
                 </span>
@@ -558,7 +559,21 @@ function AndroidExtras({ state, run, trusted }: { state: AppState; run: Run; tru
               </>
             )}
             <button aria-pressed={on('mic')} onClick={() => toggle('mic')}>{on('mic') ? 'Stop microphone' : 'Use as microphone'}</button>
-            <SoundTo state={state} run={run} to={d.deviceId} label="Play phone sound on PC" />
+            {(c.a2dpTo !== d.deviceId || c.soundTo === d.deviceId) && <SoundTo state={state} run={run} to={d.deviceId} label="Play phone sound on PC" />}
+            {c.a2dpTo === d.deviceId ? (
+              <>
+                <p className="muted">This phone's sound plays on the PC as Bluetooth audio, like earbuds. To end it, pick the phone speaker as the audio output.</p>
+                <button onClick={() => void run(() => window.meshdrop.keepAliveAction!('audio-output'))}>Change audio output</button>
+              </>
+            ) : (
+              bt && (
+                <>
+                  <button className="primary" onClick={() => void run(() => window.meshdrop.keepAliveAction!('audio-output'))}>Play phone sound as Bluetooth audio</button>
+                  <button onClick={() => void run(() => window.meshdrop.keepAliveAction!('bluetooth-settings'))}>Bluetooth settings</button>
+                  <p className="muted">Smoother over Bluetooth, like earbuds: pick {d.alias} as the audio output. Not in the list? Tap it in Bluetooth settings.</p>
+                </>
+              )
+            )}
             {bt && <p className="muted">{CAMERA_NEEDS_WIFI}</p>}
           </div>
         );

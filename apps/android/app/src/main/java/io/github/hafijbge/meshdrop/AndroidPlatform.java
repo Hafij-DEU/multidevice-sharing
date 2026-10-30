@@ -34,10 +34,22 @@ public class AndroidPlatform implements Platform {
 
     AndroidPlatform(Context ctx) {
         this.ctx = ctx;
+        this.btAudio = new BtAudio(ctx, () -> {
+            AppController c = controller;
+            if (c != null) c.refresh();
+        });
     }
 
     void attach(AppController c) {
         this.controller = c;
+    }
+
+    /** Phone sound on a PC as Bluetooth audio: which device it plays on (state.casting.a2dpTo). */
+    private final BtAudio btAudio;
+
+    @Override
+    public java.util.Set<String> a2dpSinks() {
+        return btAudio.sinks();
     }
 
     private MediaStoreSink sink;
@@ -419,6 +431,13 @@ public class AndroidPlatform implements Platform {
     /** Opens the system screen for one keep-alive step; falls back to the app's settings page. */
     @android.annotation.SuppressLint("BatteryLife") // keeping a file receiver reachable is the point of this step
     void keepAliveAction(Activity a, String id) {
+        if (id.equals("audio-output") || id.equals("bluetooth-settings")) {
+            a.runOnUiThread(() -> {
+                if (id.equals("audio-output")) BtAudio.pick(a);
+                else BtAudio.settings(a);
+            });
+            return;
+        }
         String pkg = ctx.getPackageName();
         Intent i;
         switch (id) {
