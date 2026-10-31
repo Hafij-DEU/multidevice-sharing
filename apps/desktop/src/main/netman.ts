@@ -1,6 +1,6 @@
 // M14 No Wi-Fi on the PC, through NetworkManager (nmcli):
-// - the tether guard: on a phone's hotspot or USB/Bluetooth tether the PC never routes internet or DNS
-//   through the phone (no mobile data), runtime only — the saved profiles are untouched;
+// - the tether guard: on a phone's hotspot that MeshDrop joined, the PC never routes internet or DNS
+//   through the phone (no mobile data), runtime only — networks the user picked are left alone;
 // - hosting a hotspot (a phone with no Wi-Fi joins it) and joining a phone's local-only hotspot.
 import { execFile } from 'node:child_process';
 import { randomBytes, randomInt } from 'node:crypto';
@@ -62,16 +62,12 @@ export function parseDevices(text: string): NmDevice[] {
   return out;
 }
 
-/** USB tethering drivers: Android (RNDIS, NCM, ECM) and iPhone. */
-const TETHER_DRIVERS = new Set(['rndis_host', 'cdc_ncm', 'cdc_ether', 'ipheth']);
-
 /**
- * A link whose internet would be a phone's mobile data: Android marks its hotspot and tethers metered
- * (NetworkManager shows "yes (guessed)"), a USB tether has a tethering driver, a Bluetooth tether is a
- * bt device, and the hotspot MeshDrop joined is one by definition.
+ * A link the guard keeps from carrying the PC's internet: only the phone hotspot MeshDrop joined.
+ * A hotspot, USB or Bluetooth tether the user connected to on their own is their call.
  */
 export function isPhoneLink(d: NmDevice): boolean {
-  return d.metered === 'yes (guessed)' || TETHER_DRIVERS.has(d.driver) || d.type === 'bt' || d.connection === JOIN_PROFILE;
+  return d.connection === JOIN_PROFILE;
 }
 
 const NO_ROUTE = ['ipv4.never-default', 'yes', 'ipv6.never-default', 'yes', 'ipv4.ignore-auto-dns', 'yes', 'ipv6.ignore-auto-dns', 'yes'];
@@ -93,13 +89,13 @@ export const hotspotArgs = (ifname: string, ssid: string, psk: string): string[]
   ['device', 'wifi', 'hotspot', 'ifname', ifname, 'con-name', HOTSPOT_PROFILE, 'ssid', ssid, 'band', 'bg', 'password', psk];
 
 /**
- * A private (this user only), non-autoconnect profile for a phone's hotspot that never takes the
- * default route or DNS. The password is not on the command line: `up` reads it from a passwd-file.
+ * A private (this user only), non-autoconnect profile for a phone's hotspot that, with `noData`, never
+ * takes the default route or DNS. The password is not on the command line: `up` reads it from a passwd-file.
  */
-export const joinAddArgs = (ssid: string, user: string): string[] => [
+export const joinAddArgs = (ssid: string, user: string, noData = true): string[] => [
   'connection', 'add', 'type', 'wifi', 'con-name', JOIN_PROFILE, 'ifname', '*', 'ssid', ssid,
   'wifi-sec.key-mgmt', 'wpa-psk', 'wifi-sec.psk-flags', '0',
-  'connection.autoconnect', 'no', 'connection.permissions', `user:${user}`, ...NO_ROUTE,
+  'connection.autoconnect', 'no', 'connection.permissions', `user:${user}`, ...(noData ? NO_ROUTE : []),
 ];
 export const joinUpArgs = (passwdFile: string): string[] => ['connection', 'up', 'id', JOIN_PROFILE, 'passwd-file', passwdFile];
 
@@ -116,7 +112,7 @@ export function wifiQr(ssid: string, psk: string): string {
 }
 
 /**
- * Keeps phone links from carrying the PC's internet while `tetherNoData` is on: checks every 10 s,
+ * Keeps the joined hotspot from carrying the PC's internet while `tetherNoData` is on: checks every 10 s,
  * guards each phone link once per connection, and puts them back when the setting is turned off.
  */
 export class TetherGuard {
@@ -221,9 +217,9 @@ export class NetMan {
     return h;
   }
 
-  async join(ssid: string, psk: string): Promise<void> {
+  async join(ssid: string, psk: string, noData = true): Promise<void> {
     await this.#run('nmcli', ['connection', 'delete', 'id', JOIN_PROFILE]).catch(() => undefined);
-    await this.#run('nmcli', joinAddArgs(ssid, this.#user));
+    await this.#run('nmcli', joinAddArgs(ssid, this.#user, noData));
     const dir = mkdtempSync(join(tmpdir(), 'meshdrop-nm-'));
     const file = join(dir, 'secrets');
     try {

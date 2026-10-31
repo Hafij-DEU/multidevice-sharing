@@ -122,7 +122,7 @@ export interface Settings {
   allBluetooth: boolean;
   /** M14 per device: Auto (network, else Bluetooth), Wi-Fi only, or Bluetooth only; missing: Auto. */
   deviceLinks: Record<string, LinkMode>;
-  /** M14: on a phone's hotspot or USB/Bluetooth tether, never use the phone's mobile data (no default route, no DNS). */
+  /** M14: on a phone's hotspot MeshDrop joined, never use the phone's mobile data (no default route, no DNS). */
   tetherNoData: boolean;
   /** Desktop: Opus bitrate in kbit/s (16, 24 or 32) for this PC's sound over Bluetooth. */
   btSoundKbps: number;
@@ -292,7 +292,7 @@ export interface NoWifiView {
   hotspot?: { role: 'host' | 'joined'; ssid: string; psk?: string; qrSvg?: string };
   /** A device shared its hotspot over Bluetooth (joined on its own when this device's Wi-Fi was free). */
   offer?: { from: string; alias?: string; ssid: string; psk: string; hosts: string[]; joining?: boolean; error?: string };
-  /** Desktop: phone links that carry no internet for this PC right now (tetherNoData). */
+  /** Desktop: the joined phone hotspot, when it carries no internet for this PC right now (tetherNoData). */
   guarded?: string[];
 }
 

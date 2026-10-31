@@ -46,13 +46,12 @@ describe('M14 netman', () => {
     for (const d of devices) expect(d.device).not.toBe('');
   });
 
-  it('knows a phone link: metered hotspot, USB tether drivers, Bluetooth tether, the joined hotspot', () => {
+  it('guards only the hotspot MeshDrop joined, never a network the user picked', () => {
     const base = { device: 'x', type: 'ethernet', state: 100, connection: 'c', metered: 'no (guessed)', driver: 'e1000e' };
     expect(isPhoneLink(base)).toBe(false);
-    expect(isPhoneLink({ ...base, type: 'wifi', metered: 'yes (guessed)' })).toBe(true);
-    expect(isPhoneLink({ ...base, type: 'wifi', metered: 'yes' })).toBe(false); // set by the user: their call
-    for (const driver of ['rndis_host', 'cdc_ncm', 'cdc_ether', 'ipheth']) expect(isPhoneLink({ ...base, driver })).toBe(true);
-    expect(isPhoneLink({ ...base, type: 'bt', driver: 'btusb' })).toBe(true);
+    expect(isPhoneLink({ ...base, type: 'wifi', metered: 'yes (guessed)' })).toBe(false); // a hotspot the user joined
+    for (const driver of ['rndis_host', 'cdc_ncm', 'cdc_ether', 'ipheth']) expect(isPhoneLink({ ...base, driver })).toBe(false);
+    expect(isPhoneLink({ ...base, type: 'bt', driver: 'btusb' })).toBe(false);
     expect(isPhoneLink({ ...base, type: 'wifi', connection: JOIN_PROFILE })).toBe(true);
     expect(isPhoneLink({ ...base, type: 'wifi', connection: HOTSPOT_PROFILE })).toBe(false); // this PC hosts it
   });
@@ -69,6 +68,9 @@ describe('M14 netman', () => {
     expect(opt('ipv4.never-default')).toBe('yes');
     expect(opt('ipv6.ignore-auto-dns')).toBe('yes');
     expect(add.join(' ')).not.toContain('wifi-sec.psk '); // the password goes through a file
+    const open = joinAddArgs('AndroidShare_1234', 'hafij', false); // tetherNoData off: the phone's internet is fine
+    expect(open).not.toContain('ipv4.never-default');
+    expect(open).not.toContain('ipv4.ignore-auto-dns');
     expect(joinUpArgs('/tmp/x')).toEqual(['connection', 'up', 'id', JOIN_PROFILE, 'passwd-file', '/tmp/x']);
   });
 
@@ -85,27 +87,27 @@ describe('M14 netman', () => {
   });
 
   it('the guard: guards a phone link once per connection, lets go when it drops, puts it back when turned off', async () => {
-    let show = dev('enp1', {}) + dev('usb0', { driver: 'rndis_host', connection: 'Wired 2' });
+    let show = dev('enp1', {}) + dev('usb0', { driver: 'rndis_host', connection: 'Wired 2' }) + dev('wlan0', { type: 'wifi', connection: JOIN_PROFILE });
     const nm = fakeNm(() => show);
     let changes = 0;
     const g = new TetherGuard(nm.runner, () => changes++, 60_000);
     await g.setEnabled(true);
-    expect(nm.modifies()).toEqual([guardArgs('usb0')]);
-    expect(g.guarded()).toEqual(['usb0']);
+    expect(nm.modifies()).toEqual([guardArgs('wlan0')]); // not the user's own USB tether
+    expect(g.guarded()).toEqual(['wlan0']);
     expect(changes).toBe(1);
 
     await g.tick(); // nothing new
     expect(nm.modifies().length).toBe(1);
 
-    show = dev('enp1', {}) + dev('usb0', { driver: 'rndis_host', state: 30 });
-    await g.tick(); // unplugged
+    show = dev('enp1', {}) + dev('wlan0', { type: 'wifi', state: 30 });
+    await g.tick(); // left
     expect(g.guarded()).toEqual([]);
-    show = dev('enp1', {}) + dev('usb0', { driver: 'rndis_host', connection: 'Wired 2' });
-    await g.tick(); // plugged in again: a fresh connection, guarded again
+    show = dev('enp1', {}) + dev('wlan0', { type: 'wifi', connection: JOIN_PROFILE });
+    await g.tick(); // joined again: a fresh connection, guarded again
     expect(nm.modifies().filter((a) => a[1] === 'modify').length).toBe(2);
 
     await g.setEnabled(false);
-    expect(nm.modifies().at(-1)).toEqual(reapplyArgs('usb0'));
+    expect(nm.modifies().at(-1)).toEqual(reapplyArgs('wlan0'));
     expect(g.guarded()).toEqual([]);
     const before = nm.calls.length;
     await g.tick(); // off: does nothing
@@ -115,7 +117,7 @@ describe('M14 netman', () => {
 
   it('the guard tries again next time when nmcli refuses', async () => {
     let refuse = true;
-    const nm = fakeNm(() => dev('wlan0', { type: 'wifi', metered: 'yes (guessed)', connection: 'AndroidAP' }), (a) => refuse && a[1] === 'modify');
+    const nm = fakeNm(() => dev('wlan0', { type: 'wifi', connection: JOIN_PROFILE }), (a) => refuse && a[1] === 'modify');
     const g = new TetherGuard(nm.runner, () => undefined, 60_000);
     await g.setEnabled(true);
     expect(g.guarded()).toEqual([]);

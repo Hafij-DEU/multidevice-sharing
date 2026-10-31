@@ -1321,7 +1321,7 @@ export class AppController extends EventEmitter {
       this.#changed();
     }
     try {
-      await net.join(ssid, psk);
+      await net.join(ssid, psk, this.#settings.get().tetherNoData);
     } catch (x) {
       if (offer) {
         offer.joining = false;

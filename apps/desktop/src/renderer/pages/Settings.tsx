@@ -55,7 +55,7 @@ const SWITCHES: [keyof S, string][] = [
 const NO_WIFI: [keyof S, string][] = [
   ['bluetooth', 'Use Bluetooth when there is no shared network'],
   ['allBluetooth', 'Everything over Bluetooth (even on the same network)'],
-  ['tetherNoData', "On a phone's hotspot or USB tether, never use the phone's mobile data"],
+  ['tetherNoData', "When MeshDrop joins a phone's hotspot, never use the phone's mobile data"],
 ];
 
 const DESKTOP_ONLY: (keyof S)[] = ['autostart', 'startHidden', 'closeToTray', 'printFromDevices', 'sortInbox', 'tetherNoData'];
@@ -105,8 +105,8 @@ function NoWifiHelp({ android }: { android: boolean }) {
         </li>
         {!android && (
           <li>
-            With "never use the phone's mobile data" on, this PC keeps its internet and DNS off a phone's hotspot or tether: MeshDrop works over it, nothing
-            else does.
+            With "never use the phone's mobile data" on, this PC keeps its internet and DNS off a phone's hotspot that MeshDrop joined: MeshDrop works
+            over it, nothing else does. A hotspot or tether you join yourself works as usual.
           </li>
         )}
       </ul>
