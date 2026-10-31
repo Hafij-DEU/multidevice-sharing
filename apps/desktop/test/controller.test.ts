@@ -695,6 +695,75 @@ describe('AppController internet access', () => {
     expect(stopped).toEqual(['DD:DD:DD:DD:DD:DD']);
   });
 
+  it('a phone asks the PC to connect its Bluetooth audio, so it needs no reconnect by hand', async () => {
+    const A = await make('ay');
+    const aId = A.c.state().self.deviceId;
+    const home = tmpDir();
+    writeFileSync(join(home, 'bt-peers.json'), JSON.stringify({ 'DD:DD:DD:DD:DD:DD': aId }));
+    let report: (s: { address: string; name: string }[]) => void = () => undefined;
+    const started: string[] = [];
+    let fail = false;
+    const bt = {
+      bonded: async () => [],
+      dial: async () => { throw new Error('Host is down'); },
+      listen: async () => undefined,
+      stop: () => undefined,
+      onAudio: (cb: typeof report) => { report = cb; },
+      audioStop: async () => undefined,
+      audioStart: async (a: string) => {
+        if (fail) throw new Error('br-connection-page-timeout');
+        started.push(a);
+        report([{ address: a, name: 'POCO X3 Pro' }]);
+      },
+    };
+    const B = new AppController({
+      home,
+      settings: new SettingsStore(join(home, 'desktop-settings.json'), defaultSettings({ alias: 'bee', inbox: join(home, 'inbox'), port: 0, discovery: false })),
+      history: new HistoryStore(join(home, 'desktop-history.json')),
+      platform: fakePlatform(),
+      engineOptions: { hub: { ingressPort: 0 }, guest: { port: 0 } },
+      bt,
+    });
+    ctls.push(B);
+    await B.start();
+    await pair(A.c, B);
+    const bId = B.state().self.deviceId;
+    fail = true;
+    expect(await A.c.appSend(bId, { kind: 'bt-audio-start' })).toMatchObject({ status: 502, body: { error: 'br-connection-page-timeout' } });
+    fail = false;
+    expect(await A.c.appSend(bId, { kind: 'bt-audio-start' })).toMatchObject({ status: 200 });
+    expect(started).toEqual(['DD:DD:DD:DD:DD:DD']);
+    // already playing here: nothing to connect
+    expect(await A.c.appSend(bId, { kind: 'bt-audio-start' })).toMatchObject({ status: 200 });
+    expect(started).toEqual(['DD:DD:DD:DD:DD:DD']);
+  });
+
+  it('a phone with no Bluetooth link here cannot ask for Bluetooth audio', async () => {
+    const A = await make('ay');
+    const home = tmpDir();
+    const bt = {
+      bonded: async () => [],
+      dial: async () => { throw new Error('Host is down'); },
+      listen: async () => undefined,
+      stop: () => undefined,
+      onAudio: () => undefined,
+      audioStop: async () => undefined,
+      audioStart: async () => { throw new Error('unexpected'); },
+    };
+    const B = new AppController({
+      home,
+      settings: new SettingsStore(join(home, 'desktop-settings.json'), defaultSettings({ alias: 'bee', inbox: join(home, 'inbox'), port: 0, discovery: false })),
+      history: new HistoryStore(join(home, 'desktop-history.json')),
+      platform: fakePlatform(),
+      engineOptions: { hub: { ingressPort: 0 }, guest: { port: 0 } },
+      bt,
+    });
+    ctls.push(B);
+    await B.start();
+    await pair(A.c, B);
+    expect(await A.c.appSend(B.state().self.deviceId, { kind: 'bt-audio-start' })).toMatchObject({ status: 409, body: { error: 'no-bluetooth' } });
+  });
+
   it('M10b streams: PC sound only for allowed devices; a phone camera arrives as a stream', async () => {
     const { LanTransport } = await import('@meshdrop/core/src/transfer/transport.ts');
     const { loadOrCreateIdentity } = await import('@meshdrop/core/src/identity.ts');

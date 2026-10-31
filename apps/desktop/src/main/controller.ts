@@ -1156,6 +1156,20 @@ export class AppController extends EventEmitter {
         for (const a of mine) await this.#bt.audioStop(a.address);
         return { status: 200, body: { ok: true } };
       }
+      case 'bt-audio-start': {
+        // nor connect it (privileged too): the phone's output picker lists this PC only once A2DP is up,
+        // so this PC connects it, over the Bluetooth link the phone already has here
+        if (!this.#bt?.audioStart) return { status: 501, body: { error: 'unsupported' } };
+        const address = this.#e.btAddress(peer);
+        if (!address) return { status: 409, body: { error: 'no-bluetooth' } };
+        if (this.#btAudio.some((a) => a.address === address)) return { status: 200, body: { ok: true } };
+        try {
+          await this.#bt.audioStart(address);
+        } catch (e) {
+          return { status: 502, body: { error: e instanceof Error ? e.message : String(e) } };
+        }
+        return { status: 200, body: { ok: true } };
+      }
       case 'ring':
         if (msg.on === false) await this.ringStop();
         else this.#ring(alias());

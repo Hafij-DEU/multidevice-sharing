@@ -574,9 +574,13 @@ function AndroidExtras({ state, run, trusted }: { state: AppState; run: Run; tru
             ) : (
               bt && (
                 <>
-                  <button className="primary" onClick={() => void run(() => window.meshdrop.keepAliveAction!('audio-output'))}>Play phone sound as Bluetooth audio</button>
+                  <button className="primary" onClick={() => void run(async () => {
+                    // the PC connects the audio link (a phone app cannot); the phone then plays on it by itself
+                    const r = await window.meshdrop.appSend(d.deviceId, { kind: 'bt-audio-start' }).catch(() => undefined);
+                    if (!r || problem(r)) await window.meshdrop.keepAliveAction!('audio-output');
+                  })}>Play phone sound as Bluetooth audio</button>
                   <button onClick={() => void run(() => window.meshdrop.keepAliveAction!('bluetooth-settings'))}>Bluetooth settings</button>
-                  <p className="muted">Smoother over Bluetooth, like earbuds: pick {d.alias} as the audio output. Not in the list? Tap it in Bluetooth settings.</p>
+                  <p className="muted">Smoother over Bluetooth, like earbuds. Still on the phone speaker? Pick {d.alias} as the audio output, or tap it in Bluetooth settings.</p>
                 </>
               )
             )}
