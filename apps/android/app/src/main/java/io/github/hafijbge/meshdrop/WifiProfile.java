@@ -30,6 +30,9 @@ final class WifiProfile {
     int priority = 2;
     long createdAt;
     long updatedAt;
+    /** Delete tombstone (M5): when the user removed this network, so the delete syncs to their other
+     *  devices instead of the network reappearing from one that still has it. 0 while the network is live. */
+    long deletedAt;
 
     // ---- M3: 802.1X / eduroam (only used when security == "enterprise") --------------------------
     /** EAP method: "peap", "ttls", "tls" or "pwd". */
@@ -53,6 +56,11 @@ final class WifiProfile {
         return "enterprise".equals(security);
     }
 
+    /** True once the user deleted this network: kept as a tombstone only so the delete can sync. */
+    boolean deleted() {
+        return deletedAt > 0;
+    }
+
     Map<String, Object> toMap() {
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("id", id);
@@ -66,6 +74,7 @@ final class WifiProfile {
         m.put("priority", (long) priority);
         m.put("createdAt", createdAt);
         m.put("updatedAt", updatedAt);
+        m.put("deletedAt", deletedAt);
         m.put("eapMethod", eapMethod);
         m.put("phase2", phase2);
         m.put("identity", identity);
@@ -90,6 +99,7 @@ final class WifiProfile {
         if (m.get("priority") instanceof Number) p.priority = ((Number) m.get("priority")).intValue();
         if (m.get("createdAt") instanceof Number) p.createdAt = ((Number) m.get("createdAt")).longValue();
         if (m.get("updatedAt") instanceof Number) p.updatedAt = ((Number) m.get("updatedAt")).longValue();
+        if (m.get("deletedAt") instanceof Number) p.deletedAt = ((Number) m.get("deletedAt")).longValue();
         if (m.get("eapMethod") != null) p.eapMethod = str(m.get("eapMethod"));
         if (m.get("phase2") != null) p.phase2 = str(m.get("phase2"));
         p.identity = m.get("identity") == null ? "" : str(m.get("identity"));

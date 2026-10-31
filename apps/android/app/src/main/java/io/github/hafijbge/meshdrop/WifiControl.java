@@ -14,6 +14,8 @@ import android.net.wifi.WifiNetworkSuggestion;
 import android.os.Build;
 import android.util.Xml;
 
+import io.github.hafijbge.meshdrop.engine.app.AppController;
+
 import java.io.ByteArrayInputStream;
 import java.io.File;
 import java.io.IOException;
@@ -47,22 +49,27 @@ final class WifiControl {
     private final Activity activity;
     private final WifiManager wifi;
     private final WifiStore store;
+    private final AppController controller;
 
     WifiControl(Activity activity, Core core) {
         this.activity = activity;
         this.wifi = (WifiManager) core.app.getSystemService(Context.WIFI_SERVICE);
         this.store = new WifiStore(new File(core.home, "wifi-profiles.bin"));
+        this.controller = core.controller;
+        this.controller.setWifiSyncHook(this::onWifiSync); // M5: receive syncs from the user's own devices
     }
 
     // ---- M1: storage ----------------------------------------------------------------------------
 
     List<Object> list() {
         List<Object> out = new ArrayList<>();
-        for (WifiProfile p : store.load()) out.add(p.toView());
+        for (WifiProfile p : store.load()) {
+            if (!p.deleted()) out.add(p.toView()); // tombstones are kept only to sync the delete
+        }
         return out;
     }
 
-    Map<String, Object> save(Map<?, ?> args) throws IOException {
+    synchronized Map<String, Object> save(Map<?, ?> args) throws IOException {
         String ssid = str(args.get("ssid"));
         String security = normalizeSecurity(str(args.get("security")));
         boolean open = "open".equals(security);
@@ -116,7 +123,9 @@ final class WifiControl {
         if (args.get("priority") instanceof Number) p.priority = ((Number) args.get("priority")).intValue();
         if (enterprise) applyEnterprise(p, args, eap);
         p.updatedAt = now;
+        p.deletedAt = 0; // saving revives a network even if an old tombstone shared its id
         store.save(all);
+        pushToPeers(); // M5: keep the user's other devices in step
         return p.toView();
     }
 
@@ -149,10 +158,23 @@ final class WifiControl {
         p.eapPassword = pw == null ? "" : pw;
     }
 
-    void delete(String id) throws IOException {
+    synchronized void delete(String id) throws IOException {
         List<WifiProfile> all = store.load();
-        all.removeIf(e -> e.id != null && e.id.equals(id));
+        long now = System.currentTimeMillis();
+        boolean hit = false;
+        for (WifiProfile e : all) {
+            if (e.id != null && e.id.equals(id) && !e.deleted()) {
+                // Keep a tombstone (M5) so the delete syncs; drop the secrets it no longer needs.
+                e.deletedAt = now;
+                e.updatedAt = now;
+                e.psk = "";
+                e.eapPassword = "";
+                hit = true;
+            }
+        }
+        all.removeIf(p -> p.deleted() && now - p.deletedAt > TOMBSTONE_TTL_MS);
         store.save(all);
+        if (hit) pushToPeers();
     }
 
     private WifiProfile byId(String id) {
@@ -161,6 +183,160 @@ final class WifiControl {
             if (id.equals(e.id)) return e;
         }
         return null;
+    }
+
+    // ---- M5: sync the user's networks across their own trusted devices ---------------------------
+    //
+    // The networks travel the mesh's pinned mutual-TLS link between the user's own trusted devices
+    // (the same channel as remote control, LAN or hub), carrying the passphrases so a synced network
+    // actually connects. At rest each device re-seals them with its own WifiVault key, so a plaintext
+    // profile never touches the disk. No other app's or the system's networks are involved: only the
+    // ones the user typed into MeshDrop here.
+
+    private static final String SYNC_KIND = "wifi-sync";
+    private static final int SYNC_TIMEOUT_MS = 12_000;
+    /** Drop a delete tombstone once it is this old; by then every device has long since caught up. */
+    private static final long TOMBSTONE_TTL_MS = 60L * 24 * 60 * 60 * 1000;
+
+    /** An incoming "wifi-sync" message from one of the user's trusted devices (on an engine thread). */
+    private Map<String, Object> onWifiSync(String peer, Map<String, Object> msg) {
+        Map<String, Object> out = new LinkedHashMap<>();
+        String op = str(msg.get("op"));
+        try {
+            if ("pull".equals(op)) {
+                out.put("profiles", exportAll());
+            } else if ("push".equals(op)) {
+                int merged = msg.get("profiles") instanceof List ? merge((List<?>) msg.get("profiles")) : 0;
+                out.put("merged", (long) merged);
+            } else {
+                out.put("error", "bad-op");
+                return out;
+            }
+            out.put("ok", true);
+        } catch (IOException | RuntimeException e) {
+            out.put("error", e.getMessage() == null ? "sync-failed" : e.getMessage());
+        }
+        return out;
+    }
+
+    /** Every stored profile as a full map, secrets included: this travels only the pinned TLS mesh link. */
+    private List<Object> exportAll() {
+        List<Object> out = new ArrayList<>();
+        for (WifiProfile p : store.load()) out.add(p.toMap());
+        return out;
+    }
+
+    /**
+     * Merges profiles received from another of the user's devices: for each id the newer timestamp wins,
+     * and a delete tombstone removes a network the other device dropped. Returns how many local entries
+     * changed. {@link WifiStore} keeps everything sealed at rest.
+     */
+    private synchronized int merge(List<?> incoming) throws IOException {
+        List<WifiProfile> all = store.load();
+        Map<String, WifiProfile> byId = new LinkedHashMap<>();
+        for (WifiProfile p : all) {
+            if (p.id != null) byId.put(p.id, p);
+        }
+        int changed = 0;
+        long now = System.currentTimeMillis();
+        for (Object it : incoming) {
+            if (!(it instanceof Map)) continue;
+            WifiProfile in = WifiProfile.fromMap((Map<?, ?>) it);
+            if (in.id == null || in.id.isEmpty() || in.ssid == null) continue;
+            WifiProfile cur = byId.get(in.id);
+            long inStamp = Math.max(in.updatedAt, in.deletedAt);
+            long curStamp = cur == null ? -1 : Math.max(cur.updatedAt, cur.deletedAt);
+            if (cur == null) {
+                if (in.deleted() && now - in.deletedAt > TOMBSTONE_TTL_MS) continue; // a stale tombstone for a network we never had
+                byId.put(in.id, in);
+                all.add(in);
+                changed++;
+            } else if (inStamp > curStamp) {
+                copyInto(cur, in);
+                changed++;
+            }
+        }
+        if (changed > 0) {
+            all.removeIf(p -> p.deleted() && now - p.deletedAt > TOMBSTONE_TTL_MS); // prune old tombstones
+            store.save(all);
+        }
+        return changed;
+    }
+
+    /** Copies every synced field from one profile onto another, keeping the destination object's identity. */
+    private static void copyInto(WifiProfile dst, WifiProfile src) {
+        dst.ssid = src.ssid;
+        dst.security = src.security;
+        dst.psk = src.psk;
+        dst.lockBssid = src.lockBssid;
+        dst.band = src.band;
+        dst.fallback = src.fallback;
+        dst.hidden = src.hidden;
+        dst.priority = src.priority;
+        if (src.createdAt > 0) dst.createdAt = src.createdAt;
+        dst.updatedAt = src.updatedAt;
+        dst.deletedAt = src.deletedAt;
+        dst.eapMethod = src.eapMethod;
+        dst.phase2 = src.phase2;
+        dst.identity = src.identity;
+        dst.anonymousIdentity = src.anonymousIdentity;
+        dst.eapPassword = src.eapPassword;
+        dst.caCertPem = src.caCertPem;
+        dst.domainSuffixMatch = src.domainSuffixMatch;
+        dst.eapXml = src.eapXml;
+    }
+
+    /** Full two-way sync with every trusted device the user has, on demand ("Sync to my devices"). */
+    Map<String, Object> syncNow() {
+        List<String> peers = controller.trustedWifiPeers();
+        int reached = 0;
+        int mergedIn = 0;
+        int pushedTo = 0;
+        for (String peer : peers) {
+            try {
+                Map<String, Object> pull = new LinkedHashMap<>();
+                pull.put("kind", SYNC_KIND);
+                pull.put("op", "pull");
+                Map<String, Object> r = controller.wifiSend(peer, pull, SYNC_TIMEOUT_MS);
+                reached++;
+                Object body = r == null ? null : r.get("body");
+                if (body instanceof Map && ((Map<?, ?>) body).get("profiles") instanceof List) {
+                    mergedIn += merge((List<?>) ((Map<?, ?>) body).get("profiles"));
+                }
+                Map<String, Object> push = new LinkedHashMap<>();
+                push.put("kind", SYNC_KIND);
+                push.put("op", "push");
+                push.put("profiles", exportAll());
+                controller.wifiSend(peer, push, SYNC_TIMEOUT_MS);
+                pushedTo++;
+            } catch (IOException | RuntimeException ignored) {
+                // that device is not reachable now; the others still sync
+            }
+        }
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("devices", (long) peers.size());
+        out.put("reached", (long) reached);
+        out.put("pushed", (long) pushedTo);
+        out.put("merged", (long) mergedIn);
+        return out;
+    }
+
+    /** After a local change, push our networks to the user's trusted devices, best-effort and off-thread. */
+    private void pushToPeers() {
+        final List<Object> profiles = exportAll();
+        new Thread(() -> {
+            Map<String, Object> push = new LinkedHashMap<>();
+            push.put("kind", SYNC_KIND);
+            push.put("op", "push");
+            push.put("profiles", profiles);
+            for (String peer : controller.trustedWifiPeers()) {
+                try {
+                    controller.wifiSend(peer, push, SYNC_TIMEOUT_MS);
+                } catch (IOException | RuntimeException ignored) {
+                    // offline or busy: the next manual sync, or that device's own pull, catches up
+                }
+            }
+        }, "meshdrop-wifi-push").start();
     }
 
     // ---- M2: apply ------------------------------------------------------------------------------
@@ -172,6 +348,7 @@ final class WifiControl {
         int profiles = 0;
         boolean canLock = Build.VERSION.SDK_INT >= Build.VERSION_CODES.R;
         for (WifiProfile p : all) {
+            if (p.deleted()) continue; // a tombstoned network is not suggested
             if (ids != null && !ids.isEmpty() && !ids.contains(p.id)) continue;
             WifiNetworkSuggestion primary = build(p, p.lockBssid, p.priority);
             if (primary == null) continue;

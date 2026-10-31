@@ -560,6 +560,16 @@ export interface DesktopApi {
   wifiStatus?(): Promise<WifiStatusView>;
   /** Scans for access points (optionally one SSID) so the user can pick a BSSID to pin. */
   wifiScan?(ssid?: string): Promise<WifiScanAp[]>;
+  /** M5: two-way sync of the saved networks across the user's own trusted devices. */
+  wifiSyncNow?(): Promise<WifiSyncResult>;
+}
+
+/** Result of a "Sync to my devices" run: how many trusted devices, reached, pushed to, and merged in. */
+export interface WifiSyncResult {
+  devices: number;
+  reached: number;
+  pushed: number;
+  merged: number;
 }
 
 declare global {

@@ -340,6 +340,16 @@ export function Wifi({ state: _state, run }: { state: AppState; run: Run }) {
       run(async () => msg);
     });
 
+  const syncNow = () =>
+    void run(() => api.wifiSyncNow!(), undefined).then((r) => {
+      if (!r) return;
+      const msg =
+        r.devices === 0
+          ? "No other trusted devices online to sync with."
+          : `Synced with ${r.reached}/${r.devices} device(s). ${r.merged} change(s) came in.`;
+      run(async () => msg).then(reload);
+    });
+
   return (
     <section className="wifi">
       <StatusCard run={run} />
@@ -383,9 +393,11 @@ export function Wifi({ state: _state, run }: { state: AppState; run: Run }) {
                   Apply all
                 </button>
                 <button onClick={() => void run(() => api.wifiForget!(), "Removed MeshDrop's Wi-Fi suggestions")}>Remove suggestions</button>
+                {api.wifiSyncNow ? <button onClick={syncNow}>Sync to my devices</button> : null}
               </div>
               <p className="muted hint">
                 Apply tells Android to offer these networks (and keep the band locks). Remove suggestions undoes that; your saved networks here stay.
+                Sync shares them, passwords included, over the encrypted link to your own trusted devices only.
               </p>
             </>
           )}
