@@ -139,7 +139,8 @@ final class MediaCast {
         }
     }
 
-    void play(InputStream in, BooleanSupplier stop, boolean bluetooth) throws IOException {
+    /** `pcAddress`: over Bluetooth, the PC's address, for {@link A2dpKeepAlive}; else null. */
+    void play(InputStream in, BooleanSupplier stop, boolean bluetooth, String pcAddress) throws IOException {
         // live: once playing, sound queued beyond what the trim allows (a burst after a stall) is dropped,
         // or the stall's delay would last for the rest of the stream
         LiveTrim trim = bluetooth ? LiveTrim.bluetooth() : LiveTrim.lan();
@@ -151,6 +152,7 @@ final class MediaCast {
                 .setTransferMode(AudioTrack.MODE_STREAM)
                 .build();
         java.util.logging.Logger log = java.util.logging.Logger.getLogger("MeshDropBt");
+        A2dpKeepAlive keep = bluetooth && pcAddress != null ? new A2dpKeepAlive(ctx, pcAddress, t) : null;
         try {
             t.play();
             byte[] buf = new byte[4096];
@@ -187,6 +189,7 @@ final class MediaCast {
             }
         } finally {
             if (bluetooth) log.info("sound over bt ended: dropped " + trim.dropped() * 1000 / RATE + " ms, underruns " + t.getUnderrunCount());
+            if (keep != null) keep.close();
             t.stop();
             t.release();
         }

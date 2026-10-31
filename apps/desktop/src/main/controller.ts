@@ -14,7 +14,7 @@ import { Engine, liveListener, type EngineEvent, type EngineOptions, type SendIt
 import { loadOrCreateIdentity } from '@meshdrop/core/src/identity.ts';
 import { writeFileAtomic } from '@meshdrop/core/src/trust.ts';
 import type { BtPlatform, LinkPolicy } from '@meshdrop/core/src/bt/links.ts';
-import { a2dpStreams, type BluezPlatform, type BtAudioSource } from './bluetooth.ts';
+import { a2dpStreams, holdA2dp, type BluezPlatform, type BtAudioSource } from './bluetooth.ts';
 import { BUTTONS, KEYSYMS, charKeysym } from './keys.ts';
 import { ensureDir, land } from '@meshdrop/core/src/guest/uploads.ts';
 import { cleanHandoff, handoffUrl, type HandoffState } from '@meshdrop/core/src/handoff.ts';
@@ -158,7 +158,7 @@ export interface ControllerOptions {
   platform: Platform;
   engineOptions?: Partial<EngineOptions>;
   /** M14: this PC's Bluetooth (BlueZ); none: no Bluetooth links. With onAudio, phones playing their sound here as Bluetooth audio show under Live now. */
-  bt?: BtPlatform & Partial<Pick<BluezPlatform, 'onAudio' | 'audioStop'>>;
+  bt?: BtPlatform & Partial<Pick<BluezPlatform, 'onAudio' | 'audioStop' | 'audioStart'>>;
   /** M14: NetworkManager for hotspots and the tether guard (Linux); gets the controller's change callback. */
   net?: (onChange: () => void) => NetMan;
   /** Tests: shorter M11 timings (burn after reading, the sweep, the time-capsule threshold). */
@@ -1355,10 +1355,17 @@ export class AppController extends EventEmitter {
     const bitrate = this.#settings.get().btSoundKbps * 1000;
     const codec = opusOut ? opusEncoder(2, { bitrate }) : opusIn ? opusDecoder(opusIn) : null;
     const id = randomUUID();
+    // over Bluetooth the phone's A2DP link to this PC stays up meanwhile (see holdA2dp)
+    const btAddress = opusOut ? this.#e.btAddress(s.peer) : undefined;
+    const bt = this.#bt;
+    const unhold = btAddress && bt?.audioStart && bt.audioStop
+      ? holdA2dp({ audioStart: (a) => bt.audioStart!(a), audioStop: (a) => bt.audioStop!(a) }, btAddress, () => this.#btAudio, (m) => console.warn(m))
+      : undefined;
     let ended = false;
     const end = () => {
       if (ended) return;
       ended = true;
+      unhold?.();
       pipe.stop();
       codec?.destroy();
       this.#streams.delete(id);

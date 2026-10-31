@@ -7,11 +7,12 @@
 #   {"t":"bonded","id":1}                    the paired phones and computers
 #   {"t":"dial","id":2,"address":"AA:..."}   connect to that device's MeshDrop service
 #   {"t":"audio-stop","id":3,"address":"AA:..."}  end that device's Bluetooth audio to this PC
+#   {"t":"audio-start","id":4,"address":"AA:..."} connect that device's Bluetooth audio to this PC
 # Writes JSON lines:
 #   {"ready":true}  or  {"error":"..."} (then exits)
 #   {"id":1,"bonded":[{"address":"AA:...","name":"Pixel"}]}
 #   {"id":2,"error":"..."}                   the dial failed (on success the connection arrives)
-#   {"id":3,"ok":true}
+#   {"id":3,"ok":true}                      (also for audio-start)
 #   {"audio":[{"address":"AA:...","name":"Pixel"}]}  devices playing their sound here as Bluetooth
 #                                            audio (A2DP), at start and on every change
 # Each connection opens the unix socket and starts with one JSON line, {"address":"AA:...","dial":2}
@@ -216,7 +217,7 @@ def report_audio(*_args):
         out({"audio": audio})
 
 
-def audio_stop(req):
+def audio_profile(req, method):
     rid = req["id"]
     try:
         path = device_path(req["address"])
@@ -234,7 +235,7 @@ def audio_stop(req):
         except GLib.Error as e:
             out({"id": rid, "error": e.message})
 
-    bus.call("org.bluez", path, "org.bluez.Device1", "DisconnectProfile", GLib.Variant("(s)", (A2DP_SOURCE,)), None, Gio.DBusCallFlags.NONE, 20000, None, done)
+    bus.call("org.bluez", path, "org.bluez.Device1", method, GLib.Variant("(s)", (A2DP_SOURCE,)), None, Gio.DBusCallFlags.NONE, 20000, None, done)
 
 
 def on_line(line):
@@ -247,7 +248,9 @@ def on_line(line):
     elif req.get("t") == "dial" and isinstance(req.get("address"), str):
         dial(req)
     elif req.get("t") == "audio-stop" and isinstance(req.get("address"), str):
-        audio_stop(req)
+        audio_profile(req, "DisconnectProfile")
+    elif req.get("t") == "audio-start" and isinstance(req.get("address"), str):
+        audio_profile(req, "ConnectProfile")
 
 
 def read_stdin():

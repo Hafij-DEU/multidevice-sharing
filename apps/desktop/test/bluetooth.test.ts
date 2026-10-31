@@ -2,7 +2,7 @@
 import { join } from 'node:path';
 import type { Duplex } from 'node:stream';
 import { describe, expect, it } from 'vitest';
-import { a2dpStreams, bluezPlatform, type BtAudioSource } from '../src/main/bluetooth.ts';
+import { a2dpStreams, bluezPlatform, holdA2dp, type BtAudioSource } from '../src/main/bluetooth.ts';
 
 const FAKE = join(__dirname, 'fixtures', 'fake-bt.py');
 const until = async (f: () => boolean) => {
@@ -51,10 +51,41 @@ describe('bluezPlatform (M14)', () => {
       await bt.audioStop('DD:DD:DD:DD:DD:DD');
       await until(() => seen.length === 2);
       expect(seen[1]).toEqual([]);
+      await bt.audioStart('DD:DD:DD:DD:DD:DD');
+      await until(() => seen.length === 3);
+      expect(seen[2]).toEqual([{ address: 'DD:DD:DD:DD:DD:DD', name: 'Phone' }]);
     } finally {
       bt.stop();
     }
     expect(seen.at(-1)).toEqual([]); // stopped: nothing plays here any more
+  });
+
+  it('holdA2dp connects a phone\'s Bluetooth audio for the sound, and drops it after only if it connected it', async () => {
+    const calls: string[] = [];
+    const bt = {
+      audioStart: async (a: string) => { calls.push(`start ${a}`); },
+      audioStop: async (a: string) => { calls.push(`stop ${a}`); },
+    };
+    const release = holdA2dp(bt, 'AA:AA:AA:AA:AA:AA', () => []);
+    expect(calls).toEqual(['start AA:AA:AA:AA:AA:AA']);
+    release();
+    release(); // twice: still one stop
+    await until(() => calls.length === 2);
+    expect(calls).toEqual(['start AA:AA:AA:AA:AA:AA', 'stop AA:AA:AA:AA:AA:AA']);
+
+    // already playing here (the user picked this PC as the phone's audio): left as it was
+    calls.length = 0;
+    holdA2dp(bt, 'AA:AA:AA:AA:AA:AA', () => [{ address: 'AA:AA:AA:AA:AA:AA', name: 'Phone' }])();
+    await new Promise((r) => setTimeout(r, 20));
+    expect(calls).toEqual([]);
+
+    // the connect failed: logged, nothing to drop
+    const logs: string[] = [];
+    holdA2dp({ ...bt, audioStart: async () => { throw new Error('Host is down'); } }, 'AA:AA:AA:AA:AA:AA', () => [], (m) => logs.push(m))();
+    await until(() => logs.length === 1);
+    expect(logs[0]).toContain('Host is down');
+    await new Promise((r) => setTimeout(r, 20));
+    expect(calls).toEqual([]);
   });
 
   it('a2dpStreams names the MeshDrop device behind each Bluetooth audio source', () => {

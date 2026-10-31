@@ -30,6 +30,35 @@ export interface BluezPlatform extends BtPlatform {
   onAudio(cb: (sources: BtAudioSource[]) => void): void;
   /** Ends a device's Bluetooth audio to this PC. */
   audioStop(address: string): Promise<void>;
+  /** Connects a device's Bluetooth audio to this PC (a phone cannot ask for that itself). */
+  audioStart(address: string): Promise<void>;
+}
+
+/**
+ * Keeps a phone's Bluetooth audio (A2DP) to this PC up while this PC's sound goes to it over the
+ * Bluetooth link. The phone then plays silence over A2DP (and the sound itself on its own speaker):
+ * phones give a streaming A2DP link priority on the radio, and without it the RFCOMM link stalls for
+ * half a second every few seconds, which broke the sound up. Measured on a POCO X3 Pro: 82-90 % of
+ * the sound arrived without A2DP, all of it with. No delay is added. The returned function ends the
+ * hold: it disconnects the A2DP link only if this hold connected it.
+ */
+export function holdA2dp(
+  bt: Pick<BluezPlatform, 'audioStart' | 'audioStop'>,
+  address: string,
+  playing: () => BtAudioSource[],
+  log: (msg: string) => void = () => undefined,
+): () => void {
+  const had = playing().some((a) => a.address === address);
+  let ended = false;
+  const started = had ? Promise.resolve(false) : bt.audioStart(address).then(() => true, (e: unknown) => {
+    log(`bluetooth audio for ${address} did not connect: ${e instanceof Error ? e.message : String(e)}`);
+    return false;
+  });
+  return () => {
+    if (ended) return;
+    ended = true;
+    void started.then((mine) => (mine ? bt.audioStop(address) : undefined)).catch(() => undefined);
+  };
 }
 
 /** The Live now entries for Bluetooth audio: the MeshDrop device behind each address, else its Bluetooth name. */
@@ -225,6 +254,9 @@ export function bluezPlatform(opts: BluezOptions): BluezPlatform {
     },
     async audioStop(address) {
       await ask<unknown>({ t: 'audio-stop', address }, REPLY_TIMEOUT_MS);
+    },
+    async audioStart(address) {
+      await ask<unknown>({ t: 'audio-start', address }, DIAL_TIMEOUT_MS);
     },
     stop,
   };

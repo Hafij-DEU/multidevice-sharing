@@ -1107,6 +1107,11 @@ export class Engine extends EventEmitter {
     return this.btLinks?.deviceOf(address);
   }
 
+  /** The Bluetooth address a device last linked from, if any. */
+  btAddress(deviceId: string): string | undefined {
+    return this.btLinks?.addressOf(this.resolveDeviceId(deviceId));
+  }
+
   /** Devices with a Bluetooth link up now. */
   btLinked(): string[] {
     return this.btLinks?.linked() ?? [];

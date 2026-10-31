@@ -651,8 +651,8 @@ public class AndroidPlatform implements Platform {
     }
 
     @Override
-    public void playAudio(java.io.InputStream in, java.util.function.BooleanSupplier stop, boolean bluetooth) throws java.io.IOException {
-        cast().play(in, stop, bluetooth);
+    public void playAudio(java.io.InputStream in, java.util.function.BooleanSupplier stop, boolean bluetooth, String pcAddress) throws java.io.IOException {
+        cast().play(in, stop, bluetooth, pcAddress);
     }
 
     @Override
