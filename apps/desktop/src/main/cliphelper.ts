@@ -60,10 +60,22 @@ function passedSwitches(argv: string[]): string[] {
 }
 
 /**
+ * The helper's switches. On Linux with an X display it runs on X11 (XWayland): Wayland hands the
+ * clipboard only to the focused client, so a windowless helper on Wayland always read it empty.
+ */
+function helperSwitches(argv: string[], env: NodeJS.ProcessEnv, platform: NodeJS.Platform): string[] {
+  const passed = passedSwitches(argv);
+  if (platform !== 'linux' || !env.DISPLAY) return passed;
+  return [...passed.filter((a) => !/^--(ozone-platform|ozone-platform-hint|enable-wayland-ime)(=|$)/.test(a)), '--ozone-platform=x11'];
+}
+
+/**
  * Main-process side: clipboard reads that never block this thread. Each read resolves within
  * `timeoutMs` or rejects; a helper that misses it is killed (it is stuck in the owner's wait)
  * and the next read after `backoffMs` starts a fresh one. A helper that never answers at all
  * (3 starts that died) makes the reader unusable: the caller then reads in-process as before.
+ * The helper is a whole Chromium (about 30 MB): one with no reads for `idleMs` exits, and a
+ * fresh one gets `startMs` of start-up time on top of the timeout until it first answers.
  */
 export class ClipReader {
   #child: ChildProcess | null = null;
@@ -73,23 +85,29 @@ export class ClipReader {
   #closed = false;
   #answered = false;
   #deadStarts = 0;
+  #ready = false; // the running helper has answered once: it is past its start-up
+  #idle: NodeJS.Timeout | null = null;
 
   readonly #command: { exe: string; args: string[]; profile: string };
   readonly #timeoutMs: number;
   readonly #backoffMs: number;
+  readonly #idleMs: number;
+  readonly #startMs: number;
 
-  constructor(command: { exe: string; args: string[]; profile: string }, timeoutMs = 2000, backoffMs = 5000) {
+  constructor(command: { exe: string; args: string[]; profile: string }, timeoutMs = 2000, backoffMs = 5000, idleMs = 30_000, startMs = 5000) {
     this.#command = command;
     this.#timeoutMs = timeoutMs;
     this.#backoffMs = backoffMs;
+    this.#idleMs = idleMs;
+    this.#startMs = startMs;
   }
 
   /** The command that starts this app as the helper, with its own Chromium profile in `profile`. */
-  static self(profile: string): { exe: string; args: string[]; profile: string } {
+  static self(profile: string, env = process.env, platform = process.platform): { exe: string; args: string[]; profile: string } {
     // Unpackaged (`electron <entry>`), the same entry: what Electron's docs pass for a relaunch.
     const entry = process.defaultApp && process.argv[1] ? [resolve(process.argv[1])] : [];
     // basic: the helper stores nothing, and the keyring would be D-Bus-activated on every start
-    return { exe: process.execPath, args: [...entry, ...passedSwitches(process.argv), '--password-store=basic'], profile };
+    return { exe: process.execPath, args: [...entry, ...helperSwitches(process.argv, env, platform), '--password-store=basic'], profile };
   }
 
   text(): Promise<string> {
@@ -132,12 +150,16 @@ export class ClipReader {
     if (!this.usable) return Promise.reject(new Error('clipboard helper unusable'));
     if (!this.#child && Date.now() < this.#retryAt) return Promise.reject(new Error('clipboard helper backing off'));
     const child = this.#child ?? this.#start();
+    this.#stopIdle();
     const id = this.#next++;
     return new Promise((ok, err) => {
-      const timer = setTimeout(() => {
-        this.#retryAt = Date.now() + this.#backoffMs;
-        this.#kill(new Error(`clipboard read timed out after ${this.#timeoutMs} ms`));
-      }, this.#timeoutMs);
+      const timer = setTimeout(
+        () => {
+          this.#retryAt = Date.now() + this.#backoffMs;
+          this.#kill(new Error(`clipboard read timed out after ${this.#timeoutMs} ms`));
+        },
+        this.#timeoutMs + (this.#ready ? 0 : this.#startMs),
+      );
       this.#pending.set(id, { ok, err, timer });
       child.stdin!.write(`${JSON.stringify({ ...req, id })}\n`);
     });
@@ -149,6 +171,7 @@ export class ClipReader {
       stdio: ['pipe', 'pipe', 'ignore'],
     });
     this.#child = child;
+    this.#ready = false;
     child.stdin!.on('error', () => {}); // a dead helper: its reads fail through 'exit'
     createInterface({ input: child.stdout! }).on('line', (line) => {
       let msg: { id?: number; ok?: unknown; err?: string };
@@ -161,7 +184,9 @@ export class ClipReader {
       if (!p) return;
       this.#pending.delete(msg.id!);
       this.#answered = true;
+      if (this.#child === child) this.#ready = true;
       clearTimeout(p.timer);
+      if (this.#pending.size === 0 && this.#child === child) this.#startIdle();
       if (msg.err !== undefined) p.err(new Error(msg.err));
       else p.ok(msg.ok);
     });
@@ -178,7 +203,31 @@ export class ClipReader {
     this.#kill(new Error(why));
   }
 
+  #startIdle(): void {
+    this.#stopIdle();
+    this.#idle = setTimeout(() => this.#retire(), this.#idleMs);
+    this.#idle.unref();
+  }
+
+  #stopIdle(): void {
+    if (this.#idle) clearTimeout(this.#idle);
+    this.#idle = null;
+  }
+
+  /** No reads for a while: let the helper exit (closing stdin ends it), no backoff for the next one. */
+  #retire(): void {
+    this.#idle = null;
+    const child = this.#child;
+    if (!child || this.#pending.size > 0) return;
+    this.#child = null; // its exit is no longer a death
+    child.stdin!.end();
+    setTimeout(() => {
+      if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
+    }, 3000).unref();
+  }
+
   #kill(why: Error): void {
+    this.#stopIdle();
     const child = this.#child;
     this.#child = null;
     if (child && child.exitCode === null) child.kill('SIGKILL');

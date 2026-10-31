@@ -8,7 +8,9 @@ const { ClipReader } = await import('../src/main/cliphelper.ts');
 
 // Stands in for the Electron helper: same line protocol. Format 'hang' blocks it for good (a clipboard
 // owner that does not reply), 'die' exits; the helper's pid is the answer to 'text'.
+// Started with 'slow', it takes 600 ms to start answering (Electron's own start-up takes about 1.6 s).
 const FAKE = `
+const start = () => {
 const rl = require('node:readline').createInterface({ input: process.stdin });
 let stuck = false;
 rl.on('line', (line) => {
@@ -18,6 +20,9 @@ rl.on('line', (line) => {
   const ok = req.op === 'text' ? String(process.pid) : req.op === 'buffer' ? Buffer.from(req.format).toString('base64') : req.op === 'image' ? 'k1' : req.key === 'k1' ? Buffer.from('PNG').toString('base64') : null;
   process.stdout.write('chromium says hi\\n' + JSON.stringify({ id: req.id, ok }) + '\\n');
 });
+};
+if (process.argv[2] === 'slow') setTimeout(start, 600);
+else start();
 `;
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -37,11 +42,12 @@ describe('clipboard reads in a helper process', () => {
     for (const r of readers.splice(0)) r.close();
     for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true });
   });
-  function reader(timeoutMs = 400, backoffMs = 300): InstanceType<typeof ClipReader> {
+  function reader(timeoutMs = 400, backoffMs = 300, idleMs = 30_000, startMs = 0, slow = false): InstanceType<typeof ClipReader> {
     const d = mkdtempSync(join(tmpdir(), 'md-clip-'));
     dirs.push(d);
     writeFileSync(join(d, 'fake.cjs'), FAKE);
-    const r = new ClipReader({ exe: process.execPath, args: [join(d, 'fake.cjs')], profile: d }, timeoutMs, backoffMs);
+    const args = [join(d, 'fake.cjs'), ...(slow ? ['slow'] : [])];
+    const r = new ClipReader({ exe: process.execPath, args, profile: d }, timeoutMs, backoffMs, idleMs, startMs);
     readers.push(r);
     return r;
   }
@@ -139,6 +145,43 @@ describe('clipboard reads in a helper process', () => {
       expect(args).toContain('--ozone-platform=x11');
       expect(args).not.toContain('--password-store=gnome-libsecret');
       expect(args).not.toContain('--other');
+    } finally {
+      process.argv = argv;
+    }
+  });
+
+  it('an idle helper exits, and the next read starts a new one at once', async () => {
+    const r = reader(400, 5000, 200);
+    const pid = Number(await r.text());
+    expect(await r.text()).toBe(String(pid)); // still running between close reads
+    await sleep(500);
+    expect(alive(pid)).toBe(false);
+    expect(r.pid).toBeUndefined();
+    const next = Number(await r.text()); // no backoff: it was not stuck
+    expect(next).not.toBe(pid);
+    expect(r.usable).toBe(true);
+  });
+
+  it('a fresh helper gets its start-up time on top of the read timeout; later reads do not', async () => {
+    const r = reader(400, 300, 30_000, 1000, true);
+    expect(Number(await r.text())).toBe(r.pid); // answered after about 600 ms
+    const t0 = Date.now();
+    await expect(r.buffer('hang')).rejects.toThrow('timed out after 400 ms');
+    expect(Date.now() - t0).toBeLessThan(1000);
+  });
+
+  it('on Linux with an X display the helper uses X11: an unfocused Wayland client reads an empty clipboard', () => {
+    const argv = process.argv;
+    process.argv = ['/opt/MeshDrop/meshdrop', '--ozone-platform=wayland', '--ozone-platform-hint=auto', '--enable-features=X'];
+    try {
+      const x = ClipReader.self('/p', { DISPLAY: ':0' }, 'linux').args;
+      expect(x).toContain('--ozone-platform=x11');
+      expect(x).not.toContain('--ozone-platform=wayland');
+      expect(x).not.toContain('--ozone-platform-hint=auto');
+      expect(x).toContain('--enable-features=X');
+      const w = ClipReader.self('/p', {}, 'linux').args; // no XWayland: keep what this process runs on
+      expect(w).toContain('--ozone-platform=wayland');
+      expect(w).not.toContain('--ozone-platform=x11');
     } finally {
       process.argv = argv;
     }

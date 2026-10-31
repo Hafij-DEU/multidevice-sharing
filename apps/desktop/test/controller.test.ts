@@ -284,6 +284,25 @@ describe('AppController', () => {
     expect(B.p.clip).not.toContain('already there');
   }, 30_000);
 
+  it('shared clipboard off: the clipboard is not read at all (no helper kept alive); on again, only newly copied text goes', async () => {
+    const A = await make('a');
+    const B = await make('b', { clipboardSync: true });
+    await pair(A.c, B.c);
+    let reads = 0;
+    A.p.readClipboard = () => {
+      reads++;
+      return A.p.clipboardText;
+    };
+    A.p.clipboardText = 'copied while off';
+    await sleep(2500);
+    expect(reads).toBe(0);
+    await A.c.setSettings({ clipboardSync: true });
+    await sleep(1500); // the first look after turning it on only takes note
+    A.p.clipboardText = 'copied while on';
+    await until(() => B.p.clip.includes('copied while on'), 15_000);
+    expect(B.p.clip).not.toContain('copied while off');
+  }, 30_000);
+
   it('shared clipboard with slow async reads (Linux helper): polls never overlap, and still sync', async () => {
     const A = await make('a', { clipboardSync: true });
     const B = await make('b', { clipboardSync: true });

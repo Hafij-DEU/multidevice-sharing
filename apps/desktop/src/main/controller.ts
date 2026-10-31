@@ -1663,6 +1663,12 @@ export class AppController extends EventEmitter {
    */
   async #clipTick(): Promise<void> {
     if (!this.#engine || this.#stopped || this.#clipBusy) return;
+    // Off (the default): no read at all, so the Linux helper is not kept running for nothing.
+    // Turned on later, the first look only takes note again.
+    if (!this.#settings.get().clipboardSync) {
+      this.#lastClip = undefined;
+      return;
+    }
     this.#clipBusy = true;
     const gen = this.#clipGen;
     let now: ClipNow | null;
