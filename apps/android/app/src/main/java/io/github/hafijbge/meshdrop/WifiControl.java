@@ -9,12 +9,19 @@ import android.net.MacAddress;
 import android.net.wifi.ScanResult;
 import android.net.wifi.WifiInfo;
 import android.net.wifi.WifiManager;
+import android.net.wifi.WifiEnterpriseConfig;
 import android.net.wifi.WifiNetworkSuggestion;
 import android.os.Build;
+import android.util.Xml;
 
+import java.io.ByteArrayInputStream;
 import java.io.File;
 import java.io.IOException;
+import java.io.StringReader;
+import java.security.cert.CertificateFactory;
+import java.security.cert.X509Certificate;
 import java.util.ArrayList;
+import java.util.Base64;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -22,6 +29,9 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+
+import org.xmlpull.v1.XmlPullParser;
+import org.xmlpull.v1.XmlPullParserException;
 
 /**
  * M1 + M2 of the Wi-Fi module. Stores the user's networks encrypted ({@link WifiStore}) and applies them
@@ -54,13 +64,22 @@ final class WifiControl {
 
     Map<String, Object> save(Map<?, ?> args) throws IOException {
         String ssid = str(args.get("ssid"));
-        if (ssid == null || ssid.isEmpty()) throw new IllegalArgumentException("Type the network name (SSID).");
         String security = normalizeSecurity(str(args.get("security")));
         boolean open = "open".equals(security);
-        String psk = args.get("password") == null ? null : str(args.get("password"));
+        boolean enterprise = "enterprise".equals(security);
         String id = str(args.get("id"));
 
-        if (!open) {
+        // An eap-config / CAT XML (e.g. a geteduroam download) fills in the enterprise defaults.
+        Map<String, String> eap = null;
+        if (enterprise) {
+            String xml = str(args.get("eapXml"));
+            if (xml != null && !xml.trim().isEmpty()) eap = importEapConfig(xml);
+            if ((ssid == null || ssid.isEmpty()) && eap != null) ssid = eap.get("ssid");
+        }
+        if (ssid == null || ssid.isEmpty()) throw new IllegalArgumentException("Type the network name (SSID).");
+
+        String psk = args.get("password") == null ? null : str(args.get("password"));
+        if (!open && !enterprise) {
             if (psk == null || psk.isEmpty()) {
                 WifiProfile existing = byId(id); // leave the field blank on edit to keep the old passphrase
                 psk = existing == null ? null : existing.psk;
@@ -89,15 +108,45 @@ final class WifiControl {
         }
         p.ssid = ssid;
         p.security = security;
-        p.psk = open ? "" : psk;
+        p.psk = (open || enterprise) ? "" : psk;
         p.lockBssid = normBssid(str(args.get("lockBssid")));
         p.band = str(args.get("band"));
         p.fallback = Boolean.TRUE.equals(args.get("fallback"));
         p.hidden = Boolean.TRUE.equals(args.get("hidden"));
         if (args.get("priority") instanceof Number) p.priority = ((Number) args.get("priority")).intValue();
+        if (enterprise) applyEnterprise(p, args, eap);
         p.updatedAt = now;
         store.save(all);
         return p.toView();
+    }
+
+    /** Fills a profile's 802.1X fields from the user's input, using an imported eap-config as defaults. */
+    private void applyEnterprise(WifiProfile p, Map<?, ?> args, Map<String, String> eap) {
+        p.eapMethod = firstNonEmpty(str(args.get("eapMethod")), get(eap, "eapMethod"), p.eapMethod, "peap");
+        p.phase2 = firstNonEmpty(str(args.get("phase2")), get(eap, "phase2"), p.phase2, "mschapv2");
+        p.anonymousIdentity = orEmpty(firstNonEmpty(
+                str(args.get("anonymousIdentity")), get(eap, "anonymousIdentity"), p.anonymousIdentity, ""));
+        p.domainSuffixMatch = orEmpty(firstNonEmpty(
+                str(args.get("domainSuffixMatch")), get(eap, "domainSuffixMatch"), p.domainSuffixMatch, ""));
+        p.caCertPem = orEmpty(firstNonEmpty(
+                str(args.get("caCertPem")), get(eap, "caCertPem"), p.caCertPem, ""));
+        String xml = str(args.get("eapXml"));
+        if (xml != null && !xml.trim().isEmpty()) p.eapXml = xml;
+
+        String identity = str(args.get("identity"));
+        if (identity == null || identity.isEmpty()) identity = p.identity; // keep old on blank edit
+        if (identity == null || identity.isEmpty()) {
+            throw new IllegalArgumentException("Type your eduroam / 802.1X username.");
+        }
+        p.identity = identity;
+
+        String pw = str(args.get("password"));
+        if (pw == null || pw.isEmpty()) pw = str(args.get("eapPassword"));
+        if (pw == null || pw.isEmpty()) pw = p.eapPassword; // keep old on blank edit
+        if (!"tls".equals(p.eapMethod) && (pw == null || pw.isEmpty())) {
+            throw new IllegalArgumentException("Type your eduroam / 802.1X password.");
+        }
+        p.eapPassword = pw == null ? "" : pw;
     }
 
     void delete(String id) throws IOException {
@@ -185,6 +234,9 @@ final class WifiControl {
         }
         switch (p.security == null ? "wpa2" : p.security) {
             case "open":
+                break;
+            case "enterprise":
+                b.setWpa2EnterpriseConfig(buildEnterprise(p));
                 break;
             case "wpa3":
                 b.setWpa3Passphrase(p.psk);
@@ -304,6 +356,8 @@ final class WifiControl {
     private static String normalizeSecurity(String s) {
         if (s == null) return "wpa2";
         String v = s.toLowerCase(Locale.US);
+        if (v.contains("eap") || v.contains("enterprise") || v.contains("802.1x")
+                || v.contains("8021x") || v.contains("eduroam")) return "enterprise";
         if (v.contains("3") || v.contains("sae")) return "wpa3";
         if (v.contains("open") || v.contains("none")) return "open";
         return "wpa2";
@@ -329,8 +383,174 @@ final class WifiControl {
                 return "a duplicate network.";
             case WifiManager.STATUS_NETWORK_SUGGESTIONS_ERROR_ADD_EXCEEDS_MAX_PER_APP:
                 return "too many networks saved.";
+            case WifiManager.STATUS_NETWORK_SUGGESTIONS_ERROR_RESTRICTED_BY_ADMIN:
+                return "your device administrator blocked adding Wi-Fi networks.";
             default:
                 return "error " + status + ".";
         }
+    }
+
+    // ---- M3: 802.1X / eduroam enterprise config -------------------------------------------------
+
+    /** Builds the {@link WifiEnterpriseConfig} for an enterprise profile from its stored fields. */
+    private static WifiEnterpriseConfig buildEnterprise(WifiProfile p) {
+        WifiEnterpriseConfig eap = new WifiEnterpriseConfig();
+        eap.setEapMethod(eapMethodInt(p.eapMethod));
+        eap.setPhase2Method(phase2Int(p.phase2));
+        if (p.identity != null) eap.setIdentity(p.identity);
+        if (p.anonymousIdentity != null && !p.anonymousIdentity.isEmpty()) {
+            eap.setAnonymousIdentity(p.anonymousIdentity);
+        }
+        if (p.eapPassword != null) eap.setPassword(p.eapPassword);
+        if (p.domainSuffixMatch != null && !p.domainSuffixMatch.isEmpty()) {
+            eap.setDomainSuffixMatch(p.domainSuffixMatch);
+        }
+        X509Certificate ca = parseCa(p.caCertPem);
+        if (ca != null) eap.setCaCertificate(ca);
+        return eap;
+    }
+
+    private static int eapMethodInt(String m) {
+        if (m == null) return WifiEnterpriseConfig.Eap.PEAP;
+        switch (m.toLowerCase(Locale.US)) {
+            case "ttls": return WifiEnterpriseConfig.Eap.TTLS;
+            case "tls": return WifiEnterpriseConfig.Eap.TLS;
+            case "pwd": return WifiEnterpriseConfig.Eap.PWD;
+            default: return WifiEnterpriseConfig.Eap.PEAP;
+        }
+    }
+
+    private static int phase2Int(String m) {
+        if (m == null) return WifiEnterpriseConfig.Phase2.MSCHAPV2;
+        switch (m.toLowerCase(Locale.US)) {
+            case "pap": return WifiEnterpriseConfig.Phase2.PAP;
+            case "gtc": return WifiEnterpriseConfig.Phase2.GTC;
+            case "mschap": return WifiEnterpriseConfig.Phase2.MSCHAP;
+            case "none": return WifiEnterpriseConfig.Phase2.NONE;
+            default: return WifiEnterpriseConfig.Phase2.MSCHAPV2;
+        }
+    }
+
+    /** Parses a PEM/base64 CA certificate, or returns null when none is set or it cannot be read. */
+    private static X509Certificate parseCa(String pem) {
+        if (pem == null || pem.trim().isEmpty()) return null;
+        try {
+            String body = pem.replace("-----BEGIN CERTIFICATE-----", "")
+                    .replace("-----END CERTIFICATE-----", "")
+                    .replaceAll("\\s", "");
+            byte[] der = Base64.getDecoder().decode(body);
+            CertificateFactory cf = CertificateFactory.getInstance("X.509");
+            return (X509Certificate) cf.generateCertificate(new ByteArrayInputStream(der));
+        } catch (Exception e) {
+            return null; // a malformed cert: connect without pinning it rather than failing the save
+        }
+    }
+
+    /**
+     * Best-effort parse of an eduroam CAT / eap-config XML into profile defaults: the outer EAP type, the
+     * inner (phase 2) method, the server name, the outer identity and the first CA certificate. The user
+     * still supplies their own username and password.
+     */
+    private static Map<String, String> importEapConfig(String xml) {
+        Map<String, String> out = new LinkedHashMap<>();
+        StringBuilder ca = new StringBuilder();
+        boolean inCa = false;
+        boolean caDone = false;
+        boolean outerTypeSeen = false;
+        try {
+            XmlPullParser xp = Xml.newPullParser();
+            xp.setInput(new StringReader(xml));
+            String path = "";
+            String tag = null;
+            for (int ev = xp.getEventType(); ev != XmlPullParser.END_DOCUMENT; ev = xp.next()) {
+                if (ev == XmlPullParser.START_TAG) {
+                    tag = xp.getName();
+                    path = path + "/" + tag.toLowerCase(Locale.US);
+                    if (!caDone && tag.equalsIgnoreCase("ca")) inCa = true;
+                } else if (ev == XmlPullParser.END_TAG) {
+                    if (inCa && xp.getName().equalsIgnoreCase("ca")) {
+                        inCa = false;
+                        caDone = true;
+                    }
+                    int cut = path.lastIndexOf('/');
+                    path = cut < 0 ? "" : path.substring(0, cut);
+                    tag = null;
+                } else if (ev == XmlPullParser.TEXT) {
+                    String text = xp.getText();
+                    if (text == null) continue;
+                    if (inCa) {
+                        ca.append(text.replaceAll("\\s", ""));
+                        continue;
+                    }
+                    text = text.trim();
+                    if (text.isEmpty() || tag == null) continue;
+                    boolean inner = path.contains("innerauthenticationmethod");
+                    switch (tag.toLowerCase(Locale.US)) {
+                        case "type":
+                            if (inner) {
+                                out.put("phase2", innerTypeToPhase2(text));
+                            } else if (!outerTypeSeen) {
+                                out.put("eapMethod", outerTypeToEap(text));
+                                outerTypeSeen = true;
+                            }
+                            break;
+                        case "noneapauthentication":
+                            out.put("phase2", text.toLowerCase(Locale.US));
+                            break;
+                        case "serverid":
+                            if (!out.containsKey("domainSuffixMatch")) out.put("domainSuffixMatch", text);
+                            break;
+                        case "outeridentity":
+                            out.put("anonymousIdentity", text);
+                            break;
+                        case "ssid":
+                            if (!out.containsKey("ssid")) out.put("ssid", text);
+                            break;
+                        default:
+                            break;
+                    }
+                }
+            }
+        } catch (XmlPullParserException | IOException e) {
+            // A malformed file: fall back to whatever the user typed by hand.
+        }
+        if (ca.length() > 0) {
+            out.put("caCertPem", "-----BEGIN CERTIFICATE-----\n" + ca + "\n-----END CERTIFICATE-----\n");
+        }
+        return out;
+    }
+
+    /** CAT outer EAP type number to our method name (13=TLS, 21=TTLS, 25=PEAP, 52=PWD). */
+    private static String outerTypeToEap(String type) {
+        switch (type.trim()) {
+            case "13": return "tls";
+            case "21": return "ttls";
+            case "52": return "pwd";
+            case "25":
+            default: return "peap";
+        }
+    }
+
+    /** CAT inner EAP type number to our phase-2 name (26=MSCHAPv2; others default to MSCHAPv2). */
+    private static String innerTypeToPhase2(String type) {
+        switch (type.trim()) {
+            case "26": return "mschapv2";
+            default: return "mschapv2";
+        }
+    }
+
+    private static String firstNonEmpty(String... vals) {
+        for (String v : vals) {
+            if (v != null && !v.isEmpty()) return v;
+        }
+        return vals.length == 0 ? null : vals[vals.length - 1];
+    }
+
+    private static String get(Map<String, String> m, String key) {
+        return m == null ? null : m.get(key);
+    }
+
+    private static String orEmpty(String s) {
+        return s == null ? "" : s;
     }
 }
