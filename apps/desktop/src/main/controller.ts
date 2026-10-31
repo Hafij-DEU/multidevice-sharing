@@ -1408,7 +1408,11 @@ export class AppController extends EventEmitter {
       // Bluetooth frames arrive in bunches after the link pauses for a moment, so 300 ms may queue there
       // (120 ms cut each bunch and broke the sound up); the phone drops frames before more piles up.
       const maxMs = opusIn ? 300 : 120;
-      const live = kind === 'sound' ? liveAudio(192_000, 4, { maxMs }) : kind === 'mic' ? liveAudio(96_000, 2, { maxMs }) : null;
+      // The microphone starts after 60 ms and keeps at most 150: with the PC not searching for devices
+      // the link pauses at most ~65 ms, and a call needs the voice early (measured: ~60 ms behind, no
+      // gaps in 3 minutes, where 200 ms to start kept it ~230 ms behind).
+      const live =
+        kind === 'sound' ? liveAudio(192_000, 4, { maxMs }) : kind === 'mic' ? liveAudio(96_000, 2, opusIn ? { maxMs: 150, startMs: 60 } : { maxMs }) : null;
       const pcm = codec ? s.req.pipe(codec) : s.req;
       if (opusIn && tracing()) {
         s.req.on('data', rtpTracer(`${kind}-rtp`));
