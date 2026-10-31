@@ -49,6 +49,14 @@ public final class AppController {
         void onState(String json);
     }
 
+    /**
+     * The Wi-Fi tab (M5) plugs its export/merge in here so incoming "wifi-sync" app messages reach it.
+     * It lives in the app module; this keeps the engine from depending on it.
+     */
+    public interface WifiSyncHook {
+        Map<String, Object> handle(String peer, Map<String, Object> msg);
+    }
+
     private static final class Row {
         String key;
         String direction;
@@ -1342,6 +1350,16 @@ public final class AppController {
                 body.put("error", "play-failed");
                 body.put("message", x.getMessage() == null ? x.toString() : x.getMessage());
             }
+        } else if ("wifi-sync".equals(kind)) {
+            // M5: another of the user's own trusted devices pulls or pushes saved Wi-Fi networks.
+            WifiSyncHook h = wifiSync;
+            if (h == null) {
+                status = 404;
+                body.put("error", "no-wifi"); // not an Android build, or the Wi-Fi tab never opened
+            } else {
+                Map<String, Object> r = h.handle(peer, msg);
+                if (r != null) body.putAll(r);
+            }
         } else if ("input".equals(kind) || "action".equals(kind) || "apps".equals(kind)) {
             status = 403;
             body.put("error", "remote-off"); // a phone is the remote, not the controlled device
@@ -1350,6 +1368,31 @@ public final class AppController {
             body.put("error", "unknown-kind");
         }
         return new io.github.hafijbge.meshdrop.engine.recv.MeshServer.Reply(status, Json.stringify(body).getBytes(java.nio.charset.StandardCharsets.UTF_8));
+    }
+
+    // ---- M5: Wi-Fi profile sync ----------------------------------------------------------------
+
+    private volatile WifiSyncHook wifiSync;
+
+    /** The Wi-Fi tab registers its handler so incoming "wifi-sync" app messages reach it. */
+    public void setWifiSyncHook(WifiSyncHook h) {
+        wifiSync = h;
+    }
+
+    /** Device ids of the user's own trusted, reachable MeshDrop devices to sync Wi-Fi networks with. */
+    public List<String> trustedWifiPeers() {
+        List<String> ids = new ArrayList<>();
+        Engine x = engine;
+        if (x == null) return ids;
+        for (EngineDevice d : x.devices()) {
+            if (d.trusted && !d.reach.equals("offline") && !d.role.equals("localsend")) ids.add(d.deviceId);
+        }
+        return ids;
+    }
+
+    /** Sends one app message to a trusted device and returns {status, body}; used by the Wi-Fi sync. */
+    public Map<String, Object> wifiSend(String deviceId, Map<String, Object> msg, int timeoutMs) throws IOException {
+        return e().appSend(deviceId, msg, timeoutMs);
     }
 
     // ---- M14: hotspots ----------------------------------------------------------------------

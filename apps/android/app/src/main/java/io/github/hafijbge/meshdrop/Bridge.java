@@ -147,6 +147,8 @@ public final class Bridge {
                 return wifiControl.status();
             case "wifiScan":
                 return wifiControl.scan(args.isEmpty() || args.get(0) == null ? null : args.get(0).toString());
+            case "wifiSyncNow": // M5: two-way sync of the user's networks across their own trusted devices
+                return wifiControl.syncNow();
             case "takeSharedItems":
                 return new ArrayList<Object>(p.takeShared());
             case "keepAliveAction":
