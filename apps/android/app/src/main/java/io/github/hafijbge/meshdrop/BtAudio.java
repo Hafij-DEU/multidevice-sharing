@@ -69,7 +69,10 @@ final class BtAudio {
         f.addAction(BluetoothA2dp.ACTION_PLAYING_STATE_CHANGED);
         f.addAction(ACTIVE_DEVICE_CHANGED);
         f.addAction(AudioManager.ACTION_AUDIO_BECOMING_NOISY);
-        if (Build.VERSION.SDK_INT >= 33) ctx.registerReceiver(receiver, f, Context.RECEIVER_NOT_EXPORTED);
+        // exported: these come from the Bluetooth app (uid 1002), not the system, so a not-exported
+        // receiver never gets them and the screen kept showing audio that had ended. Other apps cannot
+        // fake them: they are protected broadcasts, and they only trigger a refresh anyway.
+        if (Build.VERSION.SDK_INT >= 33) ctx.registerReceiver(receiver, f, Context.RECEIVER_EXPORTED);
         else ctx.registerReceiver(receiver, f);
     }
 
