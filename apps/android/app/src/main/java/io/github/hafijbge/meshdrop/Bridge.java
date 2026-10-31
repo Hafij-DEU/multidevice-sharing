@@ -21,6 +21,7 @@ public final class Bridge {
     private final Activity activity;
     private final Core core;
     private final Pickers pickers;
+    private final WifiControl wifiControl;
     private final ExecutorService exec = Executors.newCachedThreadPool();
     private final Handler main = new Handler(Looper.getMainLooper());
     private volatile WebView web;
@@ -30,6 +31,7 @@ public final class Bridge {
         this.activity = activity;
         this.core = core;
         this.pickers = pickers;
+        this.wifiControl = new WifiControl(activity, core);
     }
 
     private final AppController.StateListener stateListener = json -> push("window.__mdState(" + Json.stringify(json) + ")");
@@ -129,6 +131,22 @@ public final class Bridge {
                 }
                 return core.controller.call(method, args);
             }
+            case "wifiList": // M1/M2: the user's own saved Wi-Fi networks and band-lock engine
+                return wifiControl.list();
+            case "wifiSave":
+                return wifiControl.save((java.util.Map<?, ?>) args.get(0));
+            case "wifiDelete":
+                wifiControl.delete((String) args.get(0));
+                return null;
+            case "wifiApply":
+                return wifiControl.apply(!args.isEmpty() && args.get(0) instanceof List ? (List<?>) args.get(0) : null);
+            case "wifiForget":
+                wifiControl.forget();
+                return null;
+            case "wifiStatus":
+                return wifiControl.status();
+            case "wifiScan":
+                return wifiControl.scan(args.isEmpty() || args.get(0) == null ? null : args.get(0).toString());
             case "takeSharedItems":
                 return new ArrayList<Object>(p.takeShared());
             case "keepAliveAction":

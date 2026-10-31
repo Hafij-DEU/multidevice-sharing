@@ -335,6 +335,78 @@ export type RemoteEvent =
   | { t: 'key'; k: string; mods?: string[] }
   | { t: 'laser'; x: number; y: number; on: boolean };
 
+/**
+ * M1/M2 Wi-Fi module (Android). A network the user saved into MeshDrop. The passphrase stays sealed on
+ * the device and is never sent to the UI — only `hasPassword` says whether one is stored.
+ */
+export interface WifiProfileView {
+  id: string;
+  ssid: string;
+  security: 'open' | 'wpa2' | 'wpa3';
+  hasPassword: boolean;
+  /** Lowercase AP MAC this network is pinned to (band lock), or null for any AP. */
+  lockBssid?: string | null;
+  /** '2.4' | '5' | '6': the pinned AP's band, or null when not pinned. */
+  band?: string | null;
+  fallback: boolean;
+  hidden: boolean;
+  priority: number;
+  updatedAt: number;
+  /** M3: an 802.1X / eduroam profile (reserved; not yet editable). */
+  enterprise: boolean;
+}
+
+/** M1: the fields the Wi-Fi tab sends to add or edit a network. */
+export interface WifiProfileInput {
+  /** Omit to add a new network; set to edit an existing one. */
+  id?: string;
+  ssid: string;
+  security: 'open' | 'wpa2' | 'wpa3';
+  /** The passphrase; leave blank when editing to keep the stored one. */
+  password?: string;
+  /** Lowercase AP MAC to pin to (band lock); omit for any AP. */
+  lockBssid?: string | null;
+  band?: string | null;
+  fallback?: boolean;
+  hidden?: boolean;
+  priority?: number;
+}
+
+/** M2: the live Wi-Fi connection on this device. */
+export interface WifiStatusView {
+  enabled: boolean;
+  connected: boolean;
+  ssid?: string | null;
+  bssid?: string;
+  freq?: number;
+  band?: string;
+  channel?: number;
+  rssi?: number;
+  linkMbps?: number;
+  /** The current AP is one MeshDrop pinned (band lock in effect). */
+  locked: boolean;
+}
+
+/** M2: one access point seen in a scan, for picking a BSSID to pin. */
+export interface WifiScanAp {
+  ssid: string;
+  bssid: string;
+  freq: number;
+  band: string;
+  channel: number;
+  rssi: number;
+  secure: boolean;
+  wpa3: boolean;
+}
+
+/** M2: the result of applying the saved networks as system suggestions. */
+export interface WifiApplyResult {
+  profiles: number;
+  suggestions: number;
+  /** Pinning a band needs Android 11 (API 30); false below that — the network still connects, unpinned. */
+  canLock: boolean;
+}
+
 export interface DesktopApi {
   getState(): Promise<AppState>;
   onState(cb: (s: AppState) => void): () => void;
@@ -451,6 +523,18 @@ export interface DesktopApi {
   takeSharedItems?(): Promise<SendItemInput[]>;
   /** Android: runs one step of the keep-alive checklist (opens the right system screen). */
   keepAliveAction?(id: string): Promise<void>;
+  /** M1/M2 Android: the user's saved Wi-Fi networks (band lock). Absent on desktop. */
+  wifiList?(): Promise<WifiProfileView[]>;
+  /** Adds a new network (no id) or edits one; returns the saved view (never the passphrase). */
+  wifiSave?(input: WifiProfileInput): Promise<WifiProfileView>;
+  wifiDelete?(id: string): Promise<void>;
+  /** Registers system suggestions for the given ids (or all when omitted) and applies the band lock. */
+  wifiApply?(ids?: string[]): Promise<WifiApplyResult>;
+  /** Removes every suggestion MeshDrop registered (undoes the lock). */
+  wifiForget?(): Promise<void>;
+  wifiStatus?(): Promise<WifiStatusView>;
+  /** Scans for access points (optionally one SSID) so the user can pick a BSSID to pin. */
+  wifiScan?(ssid?: string): Promise<WifiScanAp[]>;
 }
 
 declare global {
