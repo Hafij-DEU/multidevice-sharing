@@ -1369,8 +1369,10 @@ export class AppController extends EventEmitter {
     const bitrate = this.#settings.get().btSoundKbps * 1000;
     const codec = opusOut ? opusEncoder(2, { bitrate }) : opusIn ? opusDecoder(opusIn) : null;
     const id = randomUUID();
-    // over Bluetooth the phone's A2DP link to this PC stays up meanwhile (see holdA2dp), for this PC's sound and the phone's microphone
-    const btAddress = opusOut || (kind === 'mic' && opusIn) ? this.#e.btAddress(s.peer) : undefined;
+    // this PC's sound over Bluetooth: the phone's A2DP link to this PC stays up meanwhile (see holdA2dp). Not
+    // for the phone's microphone: it sends little and was measured smooth without it, and Bluetooth audio
+    // would take over the phone's own sound.
+    const btAddress = opusOut ? this.#e.btAddress(s.peer) : undefined;
     const bt = this.#bt;
     const unhold = btAddress && bt?.audioStart && bt.audioStop
       ? holdA2dp({ audioStart: (a) => bt.audioStart!(a), audioStop: (a) => bt.audioStop!(a) }, btAddress, () => this.#btAudio, (m) => console.warn(m))

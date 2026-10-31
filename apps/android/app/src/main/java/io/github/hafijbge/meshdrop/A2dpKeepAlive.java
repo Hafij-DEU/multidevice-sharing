@@ -10,9 +10,8 @@ import android.media.AudioTrack;
 import java.util.logging.Logger;
 
 /**
- * While a PC's sound comes over the Bluetooth link (or this phone's microphone goes to it), plays silence
- * to that PC as Bluetooth audio (A2DP) and keeps the PC's sound itself on this phone (other headphones,
- * wired ones, or the speaker). Android gives
+ * While a PC's sound comes over the Bluetooth link, plays silence to that PC as Bluetooth audio (A2DP)
+ * and keeps the sound itself on this phone (other headphones, wired ones, or the speaker). Android gives
  * a streaming A2DP link priority on the radio; without it the link stalls for half a second every few
  * seconds and the sound broke up (measured on a POCO X3 Pro: 82-90 % of it arrived, with A2DP streaming
  * all of it). The PC connects the A2DP link when the sound starts (an app cannot); this waits for it. No
@@ -22,7 +21,7 @@ final class A2dpKeepAlive implements AutoCloseable {
     private static final Logger LOG = Logger.getLogger("MeshDropBt");
     private final AudioManager am;
     private final String pc;
-    private final AudioTrack sound; // null: nothing of ours plays here (the microphone)
+    private final AudioTrack sound;
     private final Thread thread;
     private volatile boolean closed;
     private final AudioDeviceCallback watch = new AudioDeviceCallback() {
@@ -65,7 +64,7 @@ final class A2dpKeepAlive implements AutoCloseable {
 
     /** While the PC is an output, the sound plays where it would without it; otherwise Android picks. */
     private synchronized void route() {
-        if (closed || sound == null) return;
+        if (closed) return;
         AudioDeviceInfo p = pcOutput();
         AudioDeviceInfo best = null;
         int rank = Integer.MAX_VALUE;

@@ -48,6 +48,7 @@ interface FakePlatform extends Platform {
   urls: string[];
   camera: Buffer[];
   speaker: Buffer[];
+  mic: Buffer[];
   printed: string[];
 }
 function fakePlatform(): FakePlatform {
@@ -73,6 +74,7 @@ function fakePlatform(): FakePlatform {
     urls: [],
     camera: [],
     speaker: [],
+    mic: [],
     printed: [],
     print: async (f) => void p.printed.push(f),
     captureAudio: (): MediaPipe => {
@@ -88,6 +90,11 @@ function fakePlatform(): FakePlatform {
     cameraSink: (): MediaPipe => {
       const inp = new PassThrough();
       inp.on('data', (c: Buffer) => p.camera.push(c));
+      return { in: inp, stop: () => inp.destroy(), onExit: () => {} };
+    },
+    micSink: (): MediaPipe => {
+      const inp = new PassThrough();
+      inp.on('data', (c: Buffer) => p.mic.push(c));
       return { in: inp, stop: () => inp.destroy(), onExit: () => {} };
     },
     input: async (x) => void p.prims.push(...x),
@@ -736,6 +743,58 @@ describe('AppController internet access', () => {
     // already playing here: nothing to connect
     expect(await A.c.appSend(bId, { kind: 'bt-audio-start' })).toMatchObject({ status: 200 });
     expect(started).toEqual(['DD:DD:DD:DD:DD:DD']);
+  });
+
+  it.skipIf(spawnSync('gst-launch-1.0', ['--version']).status !== 0)("a phone's microphone over Bluetooth leaves its Bluetooth audio alone; this PC's sound holds it", async () => {
+    const { LanTransport } = await import('@meshdrop/core/src/transfer/transport.ts');
+    const { loadOrCreateIdentity } = await import('@meshdrop/core/src/identity.ts');
+    const { opusEncoder, opusType } = await import('../src/main/opus.ts');
+    const A = await make('ay');
+    const aId = A.c.state().self.deviceId;
+    const home = tmpDir();
+    writeFileSync(join(home, 'bt-peers.json'), JSON.stringify({ 'DD:DD:DD:DD:DD:DD': aId }));
+    const started: string[] = [];
+    const bt = {
+      bonded: async () => [],
+      dial: async () => { throw new Error('Host is down'); },
+      listen: async () => undefined,
+      stop: () => undefined,
+      onAudio: () => undefined,
+      audioStop: async () => undefined,
+      audioStart: async (a: string) => void started.push(a),
+    };
+    const p = fakePlatform();
+    const B = new AppController({
+      home,
+      settings: new SettingsStore(join(home, 'desktop-settings.json'), defaultSettings({ alias: 'bee', inbox: join(home, 'inbox'), port: 0, discovery: false })),
+      history: new HistoryStore(join(home, 'desktop-history.json')),
+      platform: p,
+      engineOptions: { hub: { ingressPort: 0 }, guest: { port: 0 } },
+      bt,
+    });
+    ctls.push(B);
+    await B.start();
+    await pair(A.c, B);
+    await B.setSettings({ remoteFrom: [aId] });
+    const enc = opusEncoder(1);
+    const chunks: Buffer[] = [];
+    enc.on('data', (c: Buffer) => chunks.push(c));
+    const done = new Promise((r) => enc.on('end', r));
+    enc.end(Buffer.alloc(48_000 * 2 / 2)); // half a second of silence
+    await done;
+    const idA = await loadOrCreateIdentity(A.home);
+    const lan = new LanTransport(idA, { deviceId: B.state().self.deviceId, host: '127.0.0.1', port: B.state().self.port });
+    const r = await lan.request('POST', '/mesh/v1/stream/mic', Buffer.concat(chunks), { 'content-type': opusType(1) }, { timeoutMs: 10_000 });
+    expect(r.status).toBe(200);
+    await until(() => Buffer.concat(p.mic).length > 0);
+    expect(started).toEqual([]);
+    const { connectPinned } = await import('@meshdrop/core/src/tls.ts');
+    const sock = await connectPinned('127.0.0.1', B.state().self.port, idA, B.state().self.deviceId, { timeoutMs: 5000 });
+    sock.write('GET /mesh/v1/stream/audio?codec=opus HTTP/1.0\r\nHost: x\r\n\r\n');
+    await until(() => started.length > 0);
+    expect(started).toEqual(['DD:DD:DD:DD:DD:DD']);
+    sock.destroy();
+    await new Promise((r) => setTimeout(r, 200));
   });
 
   it('a phone with no Bluetooth link here cannot ask for Bluetooth audio', async () => {

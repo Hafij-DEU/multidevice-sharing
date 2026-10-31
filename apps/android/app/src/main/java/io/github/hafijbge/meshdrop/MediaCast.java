@@ -196,14 +196,13 @@ final class MediaCast {
     }
 
     @android.annotation.SuppressLint("MissingPermission") // checked in starting()
-    void mic(OutputStream out, BooleanSupplier stop, String pcAddress) throws IOException {
+    void mic(OutputStream out, BooleanSupplier stop) throws IOException {
         int min = AudioRecord.getMinBufferSize(RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT);
         AudioRecord r = new AudioRecord(MediaRecorder.AudioSource.VOICE_COMMUNICATION, RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT, Math.max(min, RATE / 5));
         if (r.getState() != AudioRecord.STATE_INITIALIZED) {
             r.release();
             throw new IOException("The microphone is busy.");
         }
-        A2dpKeepAlive keep = pcAddress != null ? new A2dpKeepAlive(ctx, pcAddress, null) : null;
         try {
             r.startRecording();
             byte[] buf = new byte[RATE / 50 * 2]; // 20 ms
@@ -213,7 +212,6 @@ final class MediaCast {
                 out.write(buf, 0, n);
             }
         } finally {
-            if (keep != null) keep.close();
             r.stop();
             r.release();
         }

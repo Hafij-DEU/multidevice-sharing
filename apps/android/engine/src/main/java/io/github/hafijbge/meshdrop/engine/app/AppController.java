@@ -1518,7 +1518,7 @@ public final class AppController {
                 if (kind.equals("audio")) platform.playAudio(sin, stop, opus != null, opus != null ? e().btAddress(deviceId) : null);
                 else if (kind.equals("camera")) CameraRetry.keep(sout, stop, o -> platform.captureCamera(o, stop, back), 30_000, 1_000);
                 else if (kind.equals("sound")) platform.captureSound(sout, stop);
-                else platform.captureMic(sout, stop, opus != null ? e().btAddress(deviceId) : null);
+                else platform.captureMic(sout, stop);
             } catch (IOException | RuntimeException x) {
                 // the PC went away or the stream was stopped
                 java.util.logging.Logger.getLogger("MeshDropBt").info("stream " + kind + " ended: " + x);
