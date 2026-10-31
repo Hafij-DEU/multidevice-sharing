@@ -339,10 +339,15 @@ export type RemoteEvent =
  * M1/M2 Wi-Fi module (Android). A network the user saved into MeshDrop. The passphrase stays sealed on
  * the device and is never sent to the UI — only `hasPassword` says whether one is stored.
  */
+export type WifiSecurity = 'open' | 'wpa2' | 'wpa3' | 'enterprise';
+/** M3: EAP outer method and inner (phase 2) method for 802.1X / eduroam networks. */
+export type WifiEapMethod = 'peap' | 'ttls' | 'tls' | 'pwd';
+export type WifiPhase2 = 'mschapv2' | 'gtc' | 'pap' | 'none';
+
 export interface WifiProfileView {
   id: string;
   ssid: string;
-  security: 'open' | 'wpa2' | 'wpa3';
+  security: WifiSecurity;
   hasPassword: boolean;
   /** Lowercase AP MAC this network is pinned to (band lock), or null for any AP. */
   lockBssid?: string | null;
@@ -352,17 +357,27 @@ export interface WifiProfileView {
   hidden: boolean;
   priority: number;
   updatedAt: number;
-  /** M3: an 802.1X / eduroam profile (reserved; not yet editable). */
+  /** M3: an 802.1X / eduroam profile. The fields below are present only when true. */
   enterprise: boolean;
+  eapMethod?: WifiEapMethod;
+  phase2?: WifiPhase2;
+  /** The user's login (e.g. user@realm); not a secret, so shown. */
+  identity?: string;
+  /** Outer/anonymous identity sent in the clear (e.g. anonymous@realm). */
+  anonymousIdentity?: string;
+  /** Server-name match that guards against rogue APs. */
+  domainSuffixMatch?: string;
+  /** A CA certificate is stored (its contents are never sent to the UI). */
+  hasCaCert?: boolean;
 }
 
-/** M1: the fields the Wi-Fi tab sends to add or edit a network. */
+/** M1/M3: the fields the Wi-Fi tab sends to add or edit a network. */
 export interface WifiProfileInput {
   /** Omit to add a new network; set to edit an existing one. */
   id?: string;
   ssid: string;
-  security: 'open' | 'wpa2' | 'wpa3';
-  /** The passphrase; leave blank when editing to keep the stored one. */
+  security: WifiSecurity;
+  /** The passphrase (personal) or the enterprise password; leave blank when editing to keep the stored one. */
   password?: string;
   /** Lowercase AP MAC to pin to (band lock); omit for any AP. */
   lockBssid?: string | null;
@@ -370,6 +385,16 @@ export interface WifiProfileInput {
   fallback?: boolean;
   hidden?: boolean;
   priority?: number;
+  // M3: 802.1X / eduroam, used only when security === 'enterprise'.
+  eapMethod?: WifiEapMethod;
+  phase2?: WifiPhase2;
+  identity?: string;
+  anonymousIdentity?: string;
+  domainSuffixMatch?: string;
+  /** A CA certificate in PEM; omit to keep the stored one when editing. */
+  caCertPem?: string;
+  /** An eduroam CAT / eap-config XML to prefill method, phase 2, server name and CA cert. */
+  eapXml?: string;
 }
 
 /** M2: the live Wi-Fi connection on this device. */
