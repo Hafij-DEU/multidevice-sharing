@@ -14,6 +14,7 @@ import { Engine, liveListener, type EngineEvent, type EngineOptions, type SendIt
 import { loadOrCreateIdentity } from '@meshdrop/core/src/identity.ts';
 import { writeFileAtomic } from '@meshdrop/core/src/trust.ts';
 import type { BtPlatform, LinkPolicy } from '@meshdrop/core/src/bt/links.ts';
+import { rtpTracer, trace, tracing } from '@meshdrop/core/src/bt/trace.ts';
 import { a2dpStreams, holdA2dp, type BluezPlatform, type BtAudioSource } from './bluetooth.ts';
 import { BUTTONS, KEYSYMS, charKeysym } from './keys.ts';
 import { ensureDir, land } from '@meshdrop/core/src/guest/uploads.ts';
@@ -1409,6 +1410,11 @@ export class AppController extends EventEmitter {
       const maxMs = opusIn ? 300 : 120;
       const live = kind === 'sound' ? liveAudio(192_000, 4, { maxMs }) : kind === 'mic' ? liveAudio(96_000, 2, { maxMs }) : null;
       const pcm = codec ? s.req.pipe(codec) : s.req;
+      if (opusIn && tracing()) {
+        s.req.on('data', rtpTracer(`${kind}-rtp`));
+        pcm.on('data', (b: Buffer) => trace(`${kind}-pcm ${b.length}`));
+        live?.on('data', (b: Buffer) => trace(`${kind}-play ${b.length}`));
+      }
       (live ? pcm.pipe(live) : pcm).pipe(pipe.in! as NodeJS.WritableStream);
       s.req.on('end', () => {
         if (!s.res.headersSent) s.res.writeHead(200, { 'content-type': 'application/json' });

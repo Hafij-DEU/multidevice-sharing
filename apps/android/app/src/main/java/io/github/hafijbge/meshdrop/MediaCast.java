@@ -28,6 +28,7 @@ import android.os.Handler;
 import android.os.HandlerThread;
 import io.github.hafijbge.meshdrop.engine.app.CameraTakenException;
 import io.github.hafijbge.meshdrop.engine.app.LiveTrim;
+import io.github.hafijbge.meshdrop.engine.bt.Trace;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
@@ -205,10 +206,13 @@ final class MediaCast {
         }
         try {
             r.startRecording();
+            // adb shell setprop log.tag.MeshDropTrace DEBUG turns on per-stage timing for this session
+            Trace.on = android.util.Log.isLoggable("MeshDropTrace", android.util.Log.DEBUG);
             byte[] buf = new byte[RATE / 50 * 2]; // 20 ms
             while (!stop.getAsBoolean()) {
                 int n = r.read(buf, 0, buf.length);
                 if (n < 0) throw new IOException("microphone error " + n);
+                if (Trace.on) Trace.log("read " + n);
                 out.write(buf, 0, n);
             }
         } finally {

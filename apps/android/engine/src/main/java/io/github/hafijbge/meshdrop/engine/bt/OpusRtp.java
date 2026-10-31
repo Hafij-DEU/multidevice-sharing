@@ -148,6 +148,7 @@ public final class OpusRtp {
                 len -= n;
                 if (fill == frame.length) {
                     fill = 0;
+                    if (Trace.on) Trace.log("frame");
                     for (byte[] opus : enc.process(frame.clone())) send(opus);
                 }
             }
@@ -157,7 +158,12 @@ public final class OpusRtp {
             byte[] p = packet(seq, ts, ssrc, first, opus);
             seq = (seq + 1) & 0xffff;
             ts = (ts + FRAME_SAMPLES) & 0xffffffffL;
-            if (backlog.getAsLong() + 2 + p.length > maxBytes) return;
+            long queued = backlog.getAsLong();
+            if (queued + 2 + p.length > maxBytes) {
+                if (Trace.on) Trace.log("drop seq=" + ((seq - 1) & 0xffff) + " backlog=" + queued);
+                return;
+            }
+            long t0 = Trace.on ? Trace.us() : 0;
             first = false;
             byte[] f = new byte[2 + p.length];
             f[0] = (byte) (p.length >> 8);
@@ -165,6 +171,7 @@ public final class OpusRtp {
             System.arraycopy(p, 0, f, 2, p.length);
             rtp.write(f); // one write per packet: the link sends it as one piece
             rtp.flush(); // the backlog counts only what reached the link
+            if (Trace.on) Trace.log("send seq=" + ((seq - 1) & 0xffff) + " len=" + p.length + " backlog=" + queued + " writeUs=" + (Trace.us() - t0));
         }
 
         @Override

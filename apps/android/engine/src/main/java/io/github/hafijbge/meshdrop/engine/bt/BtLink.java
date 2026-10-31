@@ -481,6 +481,7 @@ public final class BtLink implements Closeable {
                     lastPing = now;
                     f = BtMux.encode(BtMux.PING, 0);
                 }
+                long t0 = Trace.on ? Trace.us() : 0;
                 out.write(f);
                 lastTx = now;
                 synchronized (lock) {
@@ -488,6 +489,7 @@ public final class BtLink implements Closeable {
                 }
                 // No I/O under the lock: a blocked flush must not stop the reader from taking credits.
                 if (idle) out.flush();
+                if (Trace.on) Trace.log("bt-tx type=" + f[0] + " len=" + f.length + " flush=" + idle + " us=" + (Trace.us() - t0));
             }
         } catch (IOException e) {
             closeWith(e);

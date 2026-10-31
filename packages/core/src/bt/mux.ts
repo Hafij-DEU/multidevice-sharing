@@ -5,6 +5,7 @@
 import { EventEmitter } from 'node:events';
 import { createServer, connect, type Server, type Socket } from 'node:net';
 import type { Duplex } from 'node:stream';
+import { trace, tracing } from './trace.ts';
 
 export const FT = { HELLO: 0, OPEN: 1, DATA: 2, END: 3, CREDIT: 4, PING: 5, PONG: 6, RESET: 7 } as const;
 
@@ -83,7 +84,10 @@ export class Mux extends EventEmitter {
     this.#link = link;
     this.#nextId = opts.dialer ? 1 : 2;
     const pingMs = opts.pingMs ?? 15_000;
-    link.on('data', (c: Buffer) => this.#onData(c));
+    link.on('data', (c: Buffer) => {
+      if (tracing()) trace(`bt-rx ${c.length}`);
+      this.#onData(c);
+    });
     link.on('error', (e: Error) => this.close(e));
     link.on('close', () => this.close());
     link.on('end', () => this.close());
@@ -191,6 +195,7 @@ export class Mux extends EventEmitter {
       for (;;) {
         const f = this.#next();
         if (!f) break;
+        if (tracing()) trace(`bt-tx ${f.length} type=${f[0]}`);
         if (!this.#link.write(f)) break; // 'drain' pumps again
       }
     } finally {
