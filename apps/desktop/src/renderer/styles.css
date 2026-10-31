@@ -113,13 +113,24 @@ button.danger { background: var(--bad); color: #fff; border-color: var(--bad); }
 .modal { background: var(--panel); border-radius: var(--radius); padding: 18px 20px; max-width: 440px; box-shadow: 0 8px 30px rgb(0 0 0 / 0.3); }
 .modal h2 { margin-top: 0; }
 .pair-code { font: 700 2rem/1.2 ui-monospace, monospace; letter-spacing: 0.08em; text-align: center; margin: 8px 0; }
-.settings .field, .reach .field { display: flex; flex-direction: column; gap: 4px; margin: 10px 0; max-width: 560px; }
-.settings .field > span:first-child, .reach .field > span:first-child { font-weight: 600; }
+.settings .field, .reach .field, .wifi .field { display: flex; flex-direction: column; gap: 4px; margin: 10px 0; max-width: 560px; }
+.settings .field > span:first-child, .reach .field > span:first-child, .wifi .field > span:first-child { font-weight: 600; }
 .picker { padding: 14px 16px; }
 .picker h1 { font-size: 17px; }
 .picker .list > li { padding: 6px 10px; }
 .banner { padding: 10px 12px; border-radius: var(--radius); margin-bottom: 14px; border: 1px solid var(--border); }
 .banner.error { border-color: var(--bad); background: color-mix(in srgb, var(--bad) 10%, transparent); }
+
+/* ---- Wi-Fi tab (M4) --------------------------------------------------------------------------- */
+.wifi section { margin-bottom: 14px; }
+.wifi .field textarea { resize: vertical; min-height: 56px; font: inherit; }
+.wifi .wifi-profile, .wifi .wifi-status, .wifi .wifi-editor { padding: 12px 14px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--panel); }
+.wifi .wifi-badge { font-size: 12px; font-weight: 600; padding: 1px 8px; border-radius: 999px; margin-left: 6px; }
+.wifi .wifi-badge.lock { color: var(--ok); background: color-mix(in srgb, var(--ok) 16%, transparent); }
+.wifi .wifi-aps { max-height: 40vh; overflow: auto; }
+.wifi .wifi-aps code { word-break: break-all; }
+.wifi .sig-strong { color: var(--ok); }
+.wifi .sig-weak { color: var(--warn); }
 
 .guest-offer { max-width: 520px; width: 100%; }
 .guest-offer .files { max-height: 50vh; overflow: auto; }
