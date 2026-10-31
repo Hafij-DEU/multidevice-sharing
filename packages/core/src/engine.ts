@@ -2183,17 +2183,20 @@ export class Engine extends EventEmitter {
     return (req, res) => this.watchHandler(req, res) || links(req, res);
   }
 
-  /** Where people open a room: the hub's internet address (if it has one), then this PC on the LAN. */
+  /**
+   * Where people open a room: this PC on the LAN first (same Wi-Fi is direct and fast), then the hub's
+   * internet address (if it has one) for people elsewhere.
+   */
   watchLinks(code: string): string[] {
     const r = this.running;
     const out: string[] = [];
-    if (r?.hub || r?.relayHub) {
-      const base = this.servedLinkBase();
-      if (!/^http:\/\/127\.0\.0\.1/.test(base)) out.push(`${base}/w/${code}`);
-    }
     if (r?.guest) {
       const host = this.lanAddrs(r.port)[0]?.host ?? '127.0.0.1';
       out.push(`http://${host.includes(':') ? `[${host}]` : host}:${r.guestPort}/w/${code}`);
+    }
+    if (r?.hub || r?.relayHub) {
+      const base = this.servedLinkBase();
+      if (!/^http:\/\/127\.0\.0\.1/.test(base)) out.push(`${base}/w/${code}`);
     }
     return out;
   }

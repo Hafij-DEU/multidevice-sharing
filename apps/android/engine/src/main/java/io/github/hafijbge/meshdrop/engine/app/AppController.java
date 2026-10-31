@@ -1689,6 +1689,11 @@ public final class AppController {
         return any;
     }
 
+    private boolean watchPcOnLan(String pc) {
+        for (io.github.hafijbge.meshdrop.engine.EngineDevice d : e().devices()) if (d.deviceId.equals(pc)) return "lan".equals(d.reach);
+        return false;
+    }
+
     @SuppressWarnings("unchecked")
     private Map<String, Object> watchCreate(String name) throws IOException {
         String pc = watchPc();
@@ -1699,6 +1704,13 @@ public final class AppController {
         Map<String, Object> r = e().appSend(pc, m, 15_000);
         if (!Long.valueOf(200).equals(r.get("status")) || !(r.get("body") instanceof Map)) throw new IOException("The PC could not open a room.");
         Map<String, Object> b = new LinkedHashMap<>((Map<String, Object>) r.get("body"));
+        // the PC lists its Wi-Fi link first; a phone away from that Wi-Fi opens the internet one first
+        if (b.get("links") instanceof List && !watchPcOnLan(pc)) {
+            List<Object> links = new ArrayList<>();
+            for (Object l : (List<Object>) b.get("links")) if (String.valueOf(l).startsWith("https:")) links.add(l);
+            for (Object l : (List<Object>) b.get("links")) if (!String.valueOf(l).startsWith("https:")) links.add(l);
+            b.put("links", links);
+        }
         Map<String, Object> keep = new LinkedHashMap<>();
         keep.put("code", b.get("code"));
         keep.put("name", name);

@@ -64,7 +64,7 @@ export function WatchParty({ state, run }: { state: AppState; run: Run }) {
               </div>
             );
           })}
-          {made.links.length > 0 && !/^https:/.test(made.links[0]!) && (
+          {made.links.length > 0 && !made.links.some((l) => /^https:/.test(l)) && (
             <p className="muted">This link works on this Wi-Fi. For friends elsewhere, give the hub PC an internet address (Mesh → Internet access).</p>
           )}
         </>

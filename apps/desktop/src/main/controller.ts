@@ -1922,7 +1922,7 @@ export class AppController extends EventEmitter {
     const code = raw.trim().toUpperCase();
     if (!/^[A-Z0-9]{6}$/.test(code)) throw new Error('A room code has 6 letters or digits.');
     const e = this.#e;
-    if (e.watch.get(code)) return e.watchLinks(code).at(-1) ?? e.watchLinks(code)[0] ?? null;
+    if (e.watch.get(code)) return e.watchLinks(code)[0] ?? null;
     const bases: string[] = [];
     for (const u of e.hubStatus().urls) {
       try {

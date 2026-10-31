@@ -986,7 +986,7 @@ describe('AppController internet access', () => {
     const body = r.body as { code: string; hostToken: string; links: string[] };
     expect(body.code).toMatch(/^[A-Z0-9]{6}$/);
     expect(B.c.state().watch).toEqual([expect.objectContaining({ code: body.code, name: 'Movie night', hostToken: body.hostToken })]);
-    expect(await B.c.watchResolve(body.code.toLowerCase())).toBe(body.links.at(-1));
+    expect(await B.c.watchResolve(body.code.toLowerCase())).toBe(body.links[0]); // the Wi-Fi link comes first
     expect(await B.c.watchResolve('ZZZZZZ')).toBeNull();
     await expect(B.c.watchResolve('nope')).rejects.toThrow(/6 letters/);
     await expect(B.c.watchOpen('https://evil.example/x')).rejects.toThrow(/watch-party link/);

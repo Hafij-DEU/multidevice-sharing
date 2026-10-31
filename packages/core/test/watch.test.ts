@@ -115,4 +115,14 @@ describe('watch party rooms', () => {
     await until(() => G.some((x) => x.event === 'ended'));
     expect((await fetch(`${base}/w/api/${code}`)).status).toBe(404);
   }, 30_000);
+  it('the same-Wi-Fi link comes before the internet one', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'md-watch-'));
+    tmps.push(home);
+    const e = await Engine.create({ home, inbox: join(home, 'inbox'), port: 0, discovery: false, alias: 'pc', hub: { ingressPort: 0 }, guest: { port: 0 }, localsend: false, lanAddrs: () => [{ host: '192.168.1.5', port: 0 }] });
+    engines.push(e);
+    await e.hubInit(['wss://hub.example.ts.net/mesh/v1/hub']);
+    await e.start();
+    const { code, links } = e.watchCreate('Wi-Fi first');
+    expect(links).toEqual([expect.stringMatching(new RegExp(`^http://192\\.168\\.1\\.5:\\d+/w/${code}$`)), `https://hub.example.ts.net/w/${code}`]);
+  });
 });
