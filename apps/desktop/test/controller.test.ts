@@ -992,6 +992,12 @@ describe('AppController internet access', () => {
     await expect(B.c.watchOpen('https://evil.example/x')).rejects.toThrow(/watch-party link/);
     await A.c.appSend(bId, { kind: 'watch-end', code: body.code });
     expect(B.c.state().watch).toEqual([]);
+    // a room made here has a QR code for every link: the internet one and this Wi-Fi's
+    const mine = await B.c.watchCreate('Here');
+    expect(mine.links.length).toBeGreaterThan(0);
+    expect(mine.qrSvgs).toHaveLength(mine.links.length);
+    for (const q of mine.qrSvgs) expect(q).toContain('<svg');
+    await B.c.watchEnd(mine.code);
   });
 
   it('M13 handoff: a phone takes the browser page (fresh from the extension); a phone hands one over', async () => {

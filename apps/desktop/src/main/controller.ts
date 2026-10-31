@@ -1891,12 +1891,14 @@ export class AppController extends EventEmitter {
   /** Host keys of the rooms made here or for a phone (the host opens its room with #h=<key>). */
   #watchHosts = new Map<string, string>();
 
-  async watchCreate(name: string): Promise<{ code: string; links: string[]; hostToken: string; qrSvg: string }> {
+  async watchCreate(name: string): Promise<{ code: string; links: string[]; hostToken: string; qrSvg: string; qrSvgs: string[] }> {
     this.#notClientOnly();
     const r = this.#e.watchCreate(name);
     this.#watchHosts.set(r.code, r.hostToken);
     this.#changed();
-    return { ...r, qrSvg: r.links[0] ? await QRCode.toString(r.links[0], { type: 'svg', margin: 1 }) : '' };
+    // one QR code per link: the internet address and this Wi-Fi's
+    const qrSvgs = await Promise.all(r.links.map((l) => QRCode.toString(l, { type: 'svg', margin: 1 })));
+    return { ...r, qrSvg: qrSvgs[0] ?? '', qrSvgs };
   }
 
   async watchEnd(code: string): Promise<void> {

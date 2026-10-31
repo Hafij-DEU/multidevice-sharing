@@ -376,7 +376,8 @@ export interface DesktopApi {
   /** PC: puts the browser extension in a folder your browser can load (returns the folder). */
   handoffExtension?(): Promise<string>;
   /** M12 watch party: host a room (here, or on a PC from a phone); returns its code and links. */
-  watchCreate?(name: string): Promise<{ code: string; links: string[]; hostToken: string; qrSvg: string }>;
+  /** `qrSvgs[i]` is the QR code of `links[i]`; `qrSvg` is the first one (older phones send only that). */
+  watchCreate?(name: string): Promise<{ code: string; links: string[]; hostToken: string; qrSvg: string; qrSvgs?: string[] }>;
   /** The link to open for a code (this device's rooms, the hub, PCs on this network); null: not found. */
   watchResolve?(code: string): Promise<string | null>;
   /** Opens the player: a window on the PC, the browser on a phone. */

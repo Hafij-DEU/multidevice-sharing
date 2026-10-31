@@ -1708,7 +1708,13 @@ public final class AppController {
         synchronized (watchRooms) {
             watchRooms.add(keep);
         }
-        b.put("qrSvg", b.get("links") instanceof List && !((List<Object>) b.get("links")).isEmpty() ? io.github.hafijbge.meshdrop.engine.guest.GuestPage.qrSvg(String.valueOf(((List<Object>) b.get("links")).get(0))) : "");
+        // one QR code per link: the internet address and the PC's Wi-Fi one
+        List<Object> qrs = new ArrayList<>();
+        if (b.get("links") instanceof List) {
+            for (Object l : (List<Object>) b.get("links")) qrs.add(io.github.hafijbge.meshdrop.engine.guest.GuestPage.qrSvg(String.valueOf(l)));
+        }
+        b.put("qrSvgs", qrs);
+        b.put("qrSvg", qrs.isEmpty() ? "" : qrs.get(0));
         changed();
         return b;
     }

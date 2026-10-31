@@ -7,7 +7,7 @@ export function WatchParty({ state, run }: { state: AppState; run: Run }) {
   const android = state.platform === 'android';
   const [name, setName] = useState('');
   const [code, setCode] = useState('');
-  const [made, setMade] = useState<{ code: string; links: string[]; hostToken: string; qrSvg: string } | null>(null);
+  const [made, setMade] = useState<{ code: string; links: string[]; hostToken: string; qrSvg: string; qrSvgs?: string[] } | null>(null);
   const rooms = state.watch ?? [];
   const open = (url: string) => run(() => window.meshdrop.watchOpen!(url));
   const hostLink = (links: string[], token?: string) => {
@@ -40,23 +40,34 @@ export function WatchParty({ state, run }: { state: AppState; run: Run }) {
         </button>
       </div>
       {made && (
-        <div className="invite">
-          {made.qrSvg && <img className="qr" src={`data:image/svg+xml;base64,${btoa(made.qrSvg)}`} alt="Watch party QR code" width={180} height={180} />}
-          <div className="invite-side">
-            <p className="watch-code" aria-label="Room code">
-              {made.code}
-            </p>
-            {made.links.map((l) => (
-              <div key={l} className="row">
-                <input readOnly value={l} className="grow" aria-label="Room link" onFocus={(e) => e.target.select()} />
-                <button onClick={() => void run(() => navigator.clipboard.writeText(l), 'Copied')}>Copy</button>
+        <>
+          <p className="watch-code" aria-label="Room code">
+            {made.code}
+          </p>
+          {made.links.map((l, i) => {
+            // every link gets its own QR code: the internet one and the Wi-Fi one
+            const svg = made.qrSvgs?.[i] ?? (i === 0 ? made.qrSvg : '');
+            const net = /^https:/.test(l);
+            return (
+              <div key={l} className="invite">
+                {svg && <img className="qr" src={`data:image/svg+xml;base64,${btoa(svg)}`} alt={net ? 'Internet link QR code' : 'Wi-Fi link QR code'} width={180} height={180} />}
+                <div className="invite-side">
+                  <p>
+                    <b>{net ? 'From anywhere' : `On the same Wi-Fi as ${android ? 'the PC' : 'this PC'}`}</b>
+                  </p>
+                  <div className="row">
+                    <input readOnly value={l} className="grow" aria-label="Room link" onFocus={(e) => e.target.select()} />
+                    <button onClick={() => void run(() => navigator.clipboard.writeText(l), 'Copied')}>Copy</button>
+                  </div>
+                  {!net && <p className="muted">Phones on the PC's Wi-Fi or hotspot open this one, no internet needed.</p>}
+                </div>
               </div>
-            ))}
-            {made.links.length > 0 && !/^https:/.test(made.links[0]!) && (
-              <p className="muted">This link works on this Wi-Fi. For friends elsewhere, give the hub PC an internet address (Mesh → Internet access).</p>
-            )}
-          </div>
-        </div>
+            );
+          })}
+          {made.links.length > 0 && !/^https:/.test(made.links[0]!) && (
+            <p className="muted">This link works on this Wi-Fi. For friends elsewhere, give the hub PC an internet address (Mesh → Internet access).</p>
+          )}
+        </>
       )}
 
       {rooms.length > 0 && (

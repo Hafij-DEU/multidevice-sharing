@@ -16,6 +16,10 @@ test('watch party: start a room from Home, the player opens as host, a code join
     await win.getByRole('button', { name: 'Start a room' }).click();
     const code = (await win.getByLabel('Room code', { exact: true }).innerText()).trim();
     expect(code).toMatch(/^[A-Z0-9]{6}$/);
+    // a QR code for every link, the Wi-Fi one included
+    const links = await win.getByLabel('Room link').count();
+    expect(links).toBeGreaterThan(0);
+    await expect(win.locator('img.qr')).toHaveCount(links);
     const p = await player;
     await expect(p.locator('#status')).toContainText('You are the host');
     expect(p.url()).toMatch(new RegExp(`/w/${code}$`)); // the host key left the address bar
