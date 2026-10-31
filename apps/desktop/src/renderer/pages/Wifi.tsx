@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import type { AppState, WifiEapMethod, WifiPhase2, WifiProfileView, WifiScanAp, WifiSecurity, WifiStatusView } from '../../shared/api.ts';
 import type { Run } from '../App.tsx';
-import { fmtTime } from '../format.ts';
 
 const api = window.meshdrop;
 
