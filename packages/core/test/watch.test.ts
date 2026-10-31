@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { Engine } from '../src/engine.ts';
+import { SYNC_STEP_JS, WATCH_PAGE } from '../src/watch/page.ts';
 import { CODE_RE, newCode, parseSource, positionAt } from '../src/watch/rooms.ts';
 
 const tmps: string[] = [];
@@ -59,6 +60,37 @@ const until = async (c: () => boolean, ms = 5000) => {
     await new Promise((r) => setTimeout(r, 20));
   }
 };
+
+describe('watch party drift', () => {
+  type Step = { seek: boolean; rate: number };
+  const step = new Function(`${SYNC_STEP_JS}; return syncStep;`)() as (drift: number, playing: boolean, kind: string) => Step;
+
+  it('a video a little out of step speeds up or slows down (10% at most) instead of jumping', () => {
+    expect(step(0.02, true, 'video')).toEqual({ seek: false, rate: 1 });
+    const behind = step(0.3, true, 'video');
+    expect(behind.seek).toBe(false);
+    expect(behind.rate).toBeGreaterThan(1);
+    expect(step(1.8, true, 'video')).toEqual({ seek: false, rate: 1.1 });
+    const ahead = step(-0.3, true, 'video');
+    expect(ahead.seek).toBe(false);
+    expect(ahead.rate).toBeLessThan(1);
+    expect(step(-1.8, true, 'video').rate).toBeCloseTo(0.9);
+  });
+
+  it('far out of step, or YouTube (whose speeds come in big steps) past half a second: a jump', () => {
+    expect(step(2.5, true, 'video')).toEqual({ seek: true, rate: 1 });
+    expect(step(0.3, true, 'youtube')).toEqual({ seek: false, rate: 1 });
+    expect(step(0.7, true, 'youtube')).toEqual({ seek: true, rate: 1 });
+    expect(step(-0.7, true, 'youtube')).toEqual({ seek: true, rate: 1 });
+    // paused: only the place matters
+    expect(step(0.3, false, 'video')).toEqual({ seek: false, rate: 1 });
+    expect(step(0.6, false, 'youtube')).toEqual({ seek: true, rate: 1 });
+  });
+
+  it('the page runs the same step', () => {
+    expect(WATCH_PAGE.js).toContain(SYNC_STEP_JS);
+  });
+});
 
 describe('watch party rooms', () => {
   it('everyone gets the same state; the host can lock control; the host shares a video', async () => {

@@ -1,8 +1,25 @@
 // The watch party page (M12), the same in the app and in any browser. No framework.
 // Sync: the server keeps one state {source, position at updatedAt, playing, rate}; this page measures
-// its clock offset to the server and keeps its player where the state says, correcting drift by
-// seeking. What the viewer does on the player (play, pause, seek, speed) becomes a command, but only
+// its clock offset to the server and keeps its player where the state says, correcting drift (see
+// syncStep). What the viewer does on the player (play, pause, seek, speed) becomes a command, but only
 // when it differs from the room's state, so applying the room's own changes never echoes back.
+
+/**
+ * One drift correction, run in the page (kept as source so tests run the same code). `drift` is
+ * seconds the player is behind the room (negative: ahead). A video a little out of step plays up to
+ * 10% faster or slower until it is back; far out (2 s) it jumps. YouTube's speeds come in big steps,
+ * so it jumps past half a second. Paused, only the place matters.
+ */
+export const SYNC_STEP_JS = `function syncStep(drift, playing, kind) {
+  const off = Math.abs(drift);
+  if (!playing) return { seek: off > 0.4, rate: 1 };
+  if (kind === 'video') {
+    if (off > 2) return { seek: true, rate: 1 };
+    return { seek: false, rate: off < 0.04 ? 1 : Math.round((1 + Math.max(-0.1, Math.min(0.1, drift * 0.4))) * 1000) / 1000 };
+  }
+  return { seek: off > 0.5, rate: 1 };
+}`;
+
 export const WATCH_PAGE = {
   html: `<!doctype html>
 <html lang="en">
@@ -187,7 +204,7 @@ export const WATCH_PAGE = {
     if (what === 'play' && !(state.playing && Math.abs(t - expected()) < 1.5)) send({ type: 'play', position: t });
     else if (what === 'pause' && (state.playing || Math.abs(t - state.position) > 1)) send({ type: 'pause', position: t });
     else if (what === 'seek' && Math.abs(t - expected()) > 1.5) send({ type: 'seek', position: t });
-    else if (what === 'rate' && vid.playbackRate !== state.rate) send({ type: 'rate', rate: vid.playbackRate });
+    else if (what === 'rate' && Math.abs(vid.playbackRate - nudgedTo) > 1e-3 && vid.playbackRate !== state.rate) send({ type: 'rate', rate: vid.playbackRate });
   }
   vid.addEventListener('play', () => onLocal('play'));
   vid.addEventListener('pause', () => onLocal('pause'));
@@ -197,12 +214,23 @@ export const WATCH_PAGE = {
   vid.addEventListener('error', () => { if (state && state.source && player.kind === 'video') say('This video cannot be played here (a private Drive or Dropbox file, or a format this browser does not play).'); });
 
   // keep the player where the room is
+  ${SYNC_STEP_JS}
+  // a YouTube jump takes a moment to play again: it learns how far ahead to jump
+  let ytLead = 0, ytSeekAt = 0;
+  let nudgedTo = 1;
   function apply() {
     if (!state || !state.source || !player.ready()) return;
     const want = expected();
-    const t = player.time();
-    player.rate(state.rate);
-    if (Math.abs(t - want) > (state.playing ? 1.0 : 0.4)) player.seek(want);
+    const drift = want - player.time();
+    const running = state.playing && !player.paused();
+    const step = syncStep(drift, running, player.kind);
+    nudgedTo = state.rate * step.rate;
+    player.rate(nudgedTo);
+    if (step.seek && running && player.kind === 'youtube') {
+      if (Date.now() - ytSeekAt < 6000) ytLead = Math.max(0, Math.min(2, ytLead + drift));
+      ytSeekAt = Date.now();
+      player.seek(want + ytLead);
+    } else if (step.seek) player.seek(want);
     if (state.playing && player.paused()) {
       playAskedAt = Date.now();
       const p = player.play();
@@ -210,7 +238,7 @@ export const WATCH_PAGE = {
       if (player.kind === 'youtube' && !unlocked) setTimeout(() => { if (player.paused() && state.playing) $('tap').hidden = false; }, 1500);
     } else if (!state.playing && !player.paused()) player.pause();
   }
-  setInterval(apply, 700);
+  setInterval(apply, 500);
   // read-only view for tests and troubleshooting (where this player is, against the room)
   window.meshdropWatch = { time: () => player.time(), paused: () => player.paused(), kind: () => player.kind, expected: () => (state ? expected() : 0), state: () => state };
   $('tap').addEventListener('click', () => { unlocked = true; $('tap').hidden = true; apply(); });
