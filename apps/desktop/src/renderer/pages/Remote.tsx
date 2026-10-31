@@ -391,6 +391,12 @@ export function Remote({ state, run }: { state: AppState; run: Run }) {
       {!android && (state.streams ?? []).length > 0 && (
         <>
           <h2>Live now</h2>
+          {state.btScanning && (
+            <div className="banner warn" role="alert">
+              This PC is searching for Bluetooth devices, so sound over Bluetooth breaks up. Close the Bluetooth settings window
+              on this PC (the search stops with it).
+            </div>
+          )}
           <ul className="list">
             {(state.streams ?? []).map((st) => (
               <li key={st.id} className="row space">

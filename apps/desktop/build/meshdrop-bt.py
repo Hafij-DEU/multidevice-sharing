@@ -15,6 +15,8 @@
 #   {"id":3,"ok":true}                      (also for audio-start)
 #   {"audio":[{"address":"AA:...","name":"Pixel"}]}  devices playing their sound here as Bluetooth
 #                                            audio (A2DP), at start and on every change
+#   {"scanning":true}                        whether this PC searches for Bluetooth devices (an
+#                                            adapter's Discovering), at start and on every change
 # Each connection opens the unix socket and starts with one JSON line, {"address":"AA:...","dial":2}
 # ("dial" only for a connection this helper dialled), then carries the RFCOMM bytes both ways.
 # Stops when stdin closes.
@@ -62,6 +64,7 @@ dialing = {}
 # device path -> open sockets (closed on RequestDisconnection)
 conns = {}
 last_audio = None
+last_scanning = None
 
 
 def out(obj):
@@ -217,6 +220,20 @@ def report_audio(*_args):
         out({"audio": audio})
 
 
+def report_scanning(*_args):
+    # Someone else's search (Bluetooth settings open): only that client may stop it, so MeshDrop just
+    # tells the user. It takes the radio from the link for ~10 s at a time.
+    global last_scanning
+    try:
+        objs = objects()
+    except GLib.Error:
+        return
+    on = any(bool(i.get("org.bluez.Adapter1", {}).get("Discovering")) for i in objs.values())
+    if on != last_scanning:
+        last_scanning = on
+        out({"scanning": on})
+
+
 def audio_profile(req, method):
     rid = req["id"]
     try:
@@ -277,6 +294,9 @@ def main():
     # transports come and go as the phone picks this PC as its audio output, or leaves it
     bus.signal_subscribe("org.bluez", "org.freedesktop.DBus.ObjectManager", None, "/", None, Gio.DBusSignalFlags.NONE, report_audio)
     report_audio()
+    bus.signal_subscribe("org.bluez", "org.freedesktop.DBus.Properties", "PropertiesChanged", None, "org.bluez.Adapter1",
+                         Gio.DBusSignalFlags.NONE, report_scanning)
+    report_scanning()
     threading.Thread(target=read_stdin, daemon=True).start()
     loop.run()
     try:

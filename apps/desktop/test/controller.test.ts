@@ -669,6 +669,32 @@ describe('AppController internet access', () => {
     expect(c.state().streams).toEqual([]);
   });
 
+  it('a search for Bluetooth devices warns only while a stream goes over the Bluetooth link', async () => {
+    const home = tmpDir();
+    let scan: (on: boolean) => void = () => undefined;
+    const bt = {
+      bonded: async () => [],
+      dial: async () => { throw new Error('Host is down'); },
+      listen: async () => undefined,
+      stop: () => undefined,
+      onScanning: (cb: typeof scan) => { scan = cb; },
+    };
+    const p = fakePlatform();
+    const c = new AppController({
+      home,
+      settings: new SettingsStore(join(home, 'desktop-settings.json'), defaultSettings({ alias: 'pc', inbox: join(home, 'inbox'), port: 0, discovery: false })),
+      history: new HistoryStore(join(home, 'desktop-history.json')),
+      platform: p,
+      engineOptions: { hub: { ingressPort: 0 }, guest: { port: 0 } },
+      bt,
+    });
+    ctls.push(c);
+    await c.start();
+    scan(true);
+    expect(c.state().btScanning).toBeUndefined(); // nothing streams over Bluetooth: nothing to break up
+    expect(p.notes).toEqual([]);
+  });
+
   it('a phone asks the PC to stop its own Bluetooth audio, and only its own', async () => {
     const A = await make('ay');
     const aId = A.c.state().self.deviceId;

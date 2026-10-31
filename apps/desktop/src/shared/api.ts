@@ -271,6 +271,8 @@ export interface AppState {
   notifyAccess?: boolean;
   /** M10b: live streams (PC sound to a phone; a phone's camera or microphone used here; sound between devices). */
   streams?: { id: string; kind: StreamKind; peer: string; alias?: string }[];
+  /** M14: this PC searches for Bluetooth devices while a stream goes over the Bluetooth link, which breaks it up. */
+  btScanning?: boolean;
   /** M13 handoff: the PC's browser extension is connected, and the page it last saw. */
   handoff?: { extension: boolean; page?: { title: string; url: string } };
   /** M12 watch parties this device hosts (or, on a phone, made on a PC). */

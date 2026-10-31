@@ -32,6 +32,11 @@ export interface BluezPlatform extends BtPlatform {
   audioStop(address: string): Promise<void>;
   /** Connects a device's Bluetooth audio to this PC (a phone cannot ask for that itself). */
   audioStart(address: string): Promise<void>;
+  /**
+   * `cb` hears whether this PC searches for Bluetooth devices (Bluetooth settings open, say). The search
+   * takes the radio away for ~10 s at a time, and sound over the Bluetooth link breaks up meanwhile.
+   */
+  onScanning(cb: (on: boolean) => void): void;
 }
 
 /**
@@ -93,6 +98,13 @@ export function bluezPlatform(opts: BluezOptions): BluezPlatform {
     audio = s;
     onAudio?.(s);
   };
+  let onScanning: ((on: boolean) => void) | null = null;
+  let scanning = false;
+  const setScanning = (on: boolean) => {
+    if (on === scanning) return;
+    scanning = on;
+    onScanning?.(on);
+  };
   const pending = new Map<number, Pending>();
 
   const fail = (e: Error) => {
@@ -118,7 +130,7 @@ export function bluezPlatform(opts: BluezOptions): BluezPlatform {
   };
 
   const onLine = (line: string, ready: (e?: Error) => void) => {
-    let m: { ready?: boolean; error?: string; id?: number; bonded?: BtBonded[]; ok?: boolean; audio?: BtAudioSource[] };
+    let m: { ready?: boolean; error?: string; id?: number; bonded?: BtBonded[]; ok?: boolean; audio?: BtAudioSource[]; scanning?: boolean };
     try {
       m = JSON.parse(line) as typeof m;
     } catch {
@@ -127,6 +139,7 @@ export function bluezPlatform(opts: BluezOptions): BluezPlatform {
     if (m.id === undefined) {
       if (m.ready) ready();
       else if (m.error) ready(new Error(m.error));
+      else if (typeof m.scanning === 'boolean') setScanning(m.scanning);
       else if (Array.isArray(m.audio)) setAudio(m.audio.filter((a) => typeof a?.address === 'string').map((a) => ({ address: a.address.toUpperCase(), name: typeof a.name === 'string' ? a.name : a.address })));
       return;
     }
@@ -188,6 +201,7 @@ export function bluezPlatform(opts: BluezOptions): BluezPlatform {
     proc?.kill();
     proc = null;
     setAudio([]);
+    setScanning(false);
     server?.close();
     server = null;
     if (dir) rmSync(dir, { recursive: true, force: true });
@@ -251,6 +265,9 @@ export function bluezPlatform(opts: BluezOptions): BluezPlatform {
     },
     onAudio(cb) {
       onAudio = cb;
+    },
+    onScanning(cb) {
+      onScanning = cb;
     },
     async audioStop(address) {
       await ask<unknown>({ t: 'audio-stop', address }, REPLY_TIMEOUT_MS);

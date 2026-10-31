@@ -159,7 +159,7 @@ export interface ControllerOptions {
   platform: Platform;
   engineOptions?: Partial<EngineOptions>;
   /** M14: this PC's Bluetooth (BlueZ); none: no Bluetooth links. With onAudio, phones playing their sound here as Bluetooth audio show under Live now. */
-  bt?: BtPlatform & Partial<Pick<BluezPlatform, 'onAudio' | 'audioStop' | 'audioStart'>>;
+  bt?: BtPlatform & Partial<Pick<BluezPlatform, 'onAudio' | 'audioStop' | 'audioStart' | 'onScanning'>>;
   /** M14: NetworkManager for hotspots and the tether guard (Linux); gets the controller's change callback. */
   net?: (onChange: () => void) => NetMan;
   /** Tests: shorter M11 timings (burn after reading, the sweep, the time-capsule threshold). */
@@ -261,6 +261,8 @@ export class AppController extends EventEmitter {
   readonly #bt: ControllerOptions['bt'];
   /** Phones playing their sound here as Bluetooth audio (A2DP) now. */
   #btAudio: BtAudioSource[] = [];
+  /** This PC searches for Bluetooth devices now (see BluezPlatform.onScanning). */
+  #btScanning = false;
   #engine: Engine | null = null;
   #mode: AppState['mode'] = 'serving';
   #ownsPid = false;
@@ -300,7 +302,7 @@ export class AppController extends EventEmitter {
   #scheduled: (ScheduledView & { items: SendItemInput[] })[] = [];
   #m11Timer: NodeJS.Timeout | null = null;
   /** M10b: live streams now (PC sound to a phone, a phone's camera or microphone here). */
-  #streams = new Map<string, { kind: StreamKind; peer: string; alias?: string; stop: () => void }>();
+  #streams = new Map<string, { kind: StreamKind; peer: string; alias?: string; bt?: boolean; stop: () => void }>();
   #linkTimer: NodeJS.Timeout | null = null;
 
   constructor(opts: ControllerOptions) {
@@ -313,6 +315,13 @@ export class AppController extends EventEmitter {
     this.#bt = opts.bt;
     this.#bt?.onAudio?.((s) => {
       this.#btAudio = s;
+      this.#changed();
+    });
+    this.#bt?.onScanning?.((on) => {
+      this.#btScanning = on;
+      if (on && this.#settings.get().notifications && [...this.#streams.values()].some((s) => s.bt)) {
+        this.#platform.notify('Bluetooth sound may break up', 'This PC is searching for Bluetooth devices. Close the Bluetooth settings window to stop it.');
+      }
       this.#changed();
     });
     this.#net = opts.net?.(() => this.#changed());
@@ -516,6 +525,7 @@ export class AppController extends EventEmitter {
         ...[...this.#streams].map(([id, s]) => ({ id, kind: s.kind, peer: s.peer, ...(s.alias ? { alias: s.alias } : {}) })),
         ...a2dpStreams(this.#btAudio, (a) => e.btDevice(a), (id) => e.devices().find((d) => d.deviceId === id)?.alias),
       ],
+      ...(this.#btScanning && [...this.#streams.values()].some((s) => s.bt) ? { btScanning: true } : {}),
       platform: 'desktop',
       ...(this.#shared.length > 0 ? { sharedPending: this.#shared.length } : {}),
       receiving: this.#mode === 'serving' && !this.#paused && this.#error === undefined,
@@ -1390,7 +1400,9 @@ export class AppController extends EventEmitter {
       this.#changed();
     };
     codec?.on('error', end);
-    this.#streams.set(id, { kind, peer: s.peer, ...(alias ? { alias } : {}), stop: end });
+    // came over the Bluetooth link (its socket is one of the link's): a search for devices breaks it up
+    const overBt = this.#e.btBacklog(s.peer, s.req.socket.remotePort) !== undefined;
+    this.#streams.set(id, { kind, peer: s.peer, ...(alias ? { alias } : {}), ...(overBt ? { bt: true } : {}), stop: end });
     pipe.onExit(end);
     // a finished Opus upload still has its tail in the decoder: that ends once the sink has it
     const flushing = () => opusIn !== null && s.req.complete;
@@ -1470,7 +1482,7 @@ export class AppController extends EventEmitter {
       this.#streams.delete(id);
       this.#changed();
     };
-    this.#streams.set(id, { kind: 'sound-out', peer: deviceId, ...(alias ? { alias } : {}), stop: end });
+    this.#streams.set(id, { kind: 'sound-out', peer: deviceId, ...(alias ? { alias } : {}), ...(codec ? { bt: true } : {}), stop: end });
     pipe.onExit(end);
     this.#changed();
     const done = this.#e
