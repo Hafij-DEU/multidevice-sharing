@@ -1355,8 +1355,8 @@ export class AppController extends EventEmitter {
     const bitrate = this.#settings.get().btSoundKbps * 1000;
     const codec = opusOut ? opusEncoder(2, { bitrate }) : opusIn ? opusDecoder(opusIn) : null;
     const id = randomUUID();
-    // over Bluetooth the phone's A2DP link to this PC stays up meanwhile (see holdA2dp)
-    const btAddress = opusOut ? this.#e.btAddress(s.peer) : undefined;
+    // over Bluetooth the phone's A2DP link to this PC stays up meanwhile (see holdA2dp), for this PC's sound and the phone's microphone
+    const btAddress = opusOut || (kind === 'mic' && opusIn) ? this.#e.btAddress(s.peer) : undefined;
     const bt = this.#bt;
     const unhold = btAddress && bt?.audioStart && bt.audioStop
       ? holdA2dp({ audioStart: (a) => bt.audioStart!(a), audioStop: (a) => bt.audioStop!(a) }, btAddress, () => this.#btAudio, (m) => console.warn(m))
@@ -1420,8 +1420,15 @@ export class AppController extends EventEmitter {
     if (kind !== 'sound') throw new Error('unknown stream');
     const p = this.#platform;
     if (!p.captureAudio) throw new Error("This PC's sound cannot be captured here.");
-    if ([...this.#streams.values()].some((s) => s.kind === 'sound-out' && s.peer === deviceId)) return;
+    if ([...this.#streams.values()].some((s) => (s.kind === 'sound-out' || s.kind === 'audio') && s.peer === deviceId)) return;
     const alias = this.#e.devices().find((d) => d.deviceId === deviceId)?.alias;
+    // a phone takes no pushed sound: asked, it plays this PC's sound as from its own Remote page (older ones answer 404)
+    const asked = await this.#e.appSend(deviceId, { kind: 'play-sound' }).catch(() => null);
+    if (asked?.status === 200) return;
+    if (asked?.status === 502) {
+      const m = (asked.body as { message?: unknown } | null)?.message;
+      throw new Error(`${alias ?? 'That device'} could not play it: ${typeof m === 'string' ? m : 'it failed'}`);
+    }
     // M14: Opus over a Bluetooth link (raw PCM needs 1.5 Mbit/s)
     const codec = (await this.#e.viaBluetooth(deviceId)) ? opusEncoder(2, { bitrate: this.#settings.get().btSoundKbps * 1000 }) : null;
     const pipe = p.captureAudio();

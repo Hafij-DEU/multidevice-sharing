@@ -661,8 +661,8 @@ public class AndroidPlatform implements Platform {
     }
 
     @Override
-    public void captureMic(java.io.OutputStream out, java.util.function.BooleanSupplier stop) throws java.io.IOException {
-        cast().mic(out, stop);
+    public void captureMic(java.io.OutputStream out, java.util.function.BooleanSupplier stop, String pcAddress) throws java.io.IOException {
+        cast().mic(out, stop, pcAddress);
     }
 
     @Override

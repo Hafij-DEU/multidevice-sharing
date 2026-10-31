@@ -1332,6 +1332,16 @@ public final class AppController {
                 if (settings.get().notifications) platform.notify((who == null || who.isEmpty() ? "A device" : who) + " shares a hotspot", "Settings → No Wi-Fi: join " + ssid + ".", null);
                 body.put("ok", true);
             }
+        } else if ("play-sound".equals(kind)) {
+            // the PC's "Play this PC's sound there": this phone takes it, as from its own Remote page
+            try {
+                streamStart(peer, "audio", false);
+                body.put("ok", true);
+            } catch (IOException | RuntimeException x) {
+                status = 502;
+                body.put("error", "play-failed");
+                body.put("message", x.getMessage() == null ? x.toString() : x.getMessage());
+            }
         } else if ("input".equals(kind) || "action".equals(kind) || "apps".equals(kind)) {
             status = 403;
             body.put("error", "remote-off"); // a phone is the remote, not the controlled device
@@ -1508,7 +1518,7 @@ public final class AppController {
                 if (kind.equals("audio")) platform.playAudio(sin, stop, opus != null, opus != null ? e().btAddress(deviceId) : null);
                 else if (kind.equals("camera")) CameraRetry.keep(sout, stop, o -> platform.captureCamera(o, stop, back), 30_000, 1_000);
                 else if (kind.equals("sound")) platform.captureSound(sout, stop);
-                else platform.captureMic(sout, stop);
+                else platform.captureMic(sout, stop, opus != null ? e().btAddress(deviceId) : null);
             } catch (IOException | RuntimeException x) {
                 // the PC went away or the stream was stopped
                 java.util.logging.Logger.getLogger("MeshDropBt").info("stream " + kind + " ended: " + x);

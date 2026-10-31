@@ -267,7 +267,8 @@ function PcActions({ target, run }: { target: string; run: Run }) {
 
 /** Sends this device's sound to another one, where it plays (a toggle). */
 function SoundTo({ state, run, to, label }: { state: AppState; run: Run; to: string; label: string }) {
-  const out = (state.streams ?? []).find((s) => s.kind === 'sound-out' && s.peer === to);
+  // a phone asked to play it takes this PC's sound itself ("audio")
+  const out = (state.streams ?? []).find((s) => (s.kind === 'sound-out' || s.kind === 'audio') && s.peer === to);
   const on = state.platform === 'android' ? state.casting?.soundTo === to : !!out;
   return (
     <button

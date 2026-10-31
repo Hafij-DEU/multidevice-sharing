@@ -116,8 +116,8 @@ public interface Platform {
         throw new java.io.IOException("Not available on this device.");
     }
 
-    /** Writes s16le 48 kHz mono from the microphone to `out` until `stop` says so. */
-    default void captureMic(java.io.OutputStream out, java.util.function.BooleanSupplier stop) throws java.io.IOException {
+    /** Writes s16le 48 kHz mono from the microphone to `out` until `stop` says so; `pcAddress` as in {@link #playAudio}. */
+    default void captureMic(java.io.OutputStream out, java.util.function.BooleanSupplier stop, String pcAddress) throws java.io.IOException {
         throw new java.io.IOException("Not available on this device.");
     }
 
