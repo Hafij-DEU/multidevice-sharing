@@ -127,6 +127,7 @@ button.danger { background: var(--bad); color: #fff; border-color: var(--bad); }
 .wifi .wifi-profile, .wifi .wifi-status, .wifi .wifi-editor { padding: 12px 14px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--panel); }
 .wifi .wifi-badge { font-size: 12px; font-weight: 600; padding: 1px 8px; border-radius: 999px; margin-left: 6px; }
 .wifi .wifi-badge.lock { color: var(--ok); background: color-mix(in srgb, var(--ok) 16%, transparent); }
+.wifi .wifi-badge.ok { color: var(--ok); background: color-mix(in srgb, var(--ok) 16%, transparent); }
 .wifi .wifi-aps { max-height: 40vh; overflow: auto; }
 .wifi .wifi-aps code { word-break: break-all; }
 .wifi .sig-strong { color: var(--ok); }

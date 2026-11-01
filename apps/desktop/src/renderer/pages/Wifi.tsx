@@ -59,15 +59,12 @@ function draftFromWifiUri(text: string): SimpleDraft | null {
 }
 
 /** The live Wi-Fi connection on this device, and whether a MeshDrop band lock is in effect. */
-function StatusCard({ run }: { run: Run }) {
-  const [s, setS] = useState<WifiStatusView | null>(null);
-  const refresh = useCallback(() => void run(() => api.wifiStatus!()).then((r) => r && setS(r)), [run]);
-  useEffect(refresh, [refresh]);
+function StatusCard({ s, onRefresh }: { s: WifiStatusView | null; onRefresh: () => void }) {
   return (
     <section className="wifi-status">
       <div className="row space">
         <h2>This device</h2>
-        <button onClick={refresh}>Refresh</button>
+        <button onClick={onRefresh}>Refresh</button>
       </div>
       {!s ? (
         <p className="muted">Reading…</p>
@@ -292,13 +289,16 @@ function EnterpriseEditor({ draft, run, onSaved, onCancel }: { draft: EntDraft; 
 // ---- Saved networks ----------------------------------------------------------------------------
 
 /** One saved network: its name, how it is secured, its band-lock state and edit/delete actions. */
-function ProfileCard({ p, run, onEdit, onChanged }: { p: WifiProfileView; run: Run; onEdit: () => void; onChanged: () => void }) {
+function ProfileCard({ p, run, onEdit, onChanged, connected }: { p: WifiProfileView; run: Run; onEdit: () => void; onChanged: () => void; connected?: boolean }) {
   const [confirm, setConfirm] = useState(false);
   const [qr, setQr] = useState<string | null>(null);
   return (
     <section className="wifi-profile" data-ssid={p.ssid}>
       <div className="row space">
-        <span className="menu-title">{p.ssid}</span>
+        <span className="menu-title">
+          {p.ssid}
+          {connected && <span className="wifi-badge ok"> Connected</span>}
+        </span>
         <span className="muted">{SEC_LABEL[p.security]}</span>
       </div>
       <div className="row space">
@@ -453,9 +453,27 @@ export function Wifi({ state: _state, run }: { state: AppState; run: Run }) {
   const [profiles, setProfiles] = useState<WifiProfileView[] | null>(null);
   const [simple, setSimple] = useState<SimpleDraft | null>(null);
   const [enterprise, setEnterprise] = useState<EntDraft | null>(null);
+  const [status, setStatus] = useState<WifiStatusView | null>(null);
 
   const reload = useCallback(() => void run(() => api.wifiList!()).then((r) => r && setProfiles(r)), [run]);
   useEffect(reload, [reload]);
+
+  // The live link for this device: drives the status card and badges the saved network we are actually on.
+  const refreshStatus = useCallback(() => {
+    if (!api.wifiStatus) return;
+    void run(() => api.wifiStatus!()).then((r) => r && setStatus(r));
+  }, [run]);
+  useEffect(refreshStatus, [refreshStatus]);
+
+  // "Connect" hands off to Android's own dialog and the link comes up a few seconds later, so keep the
+  // badge honest with a quiet poll while this tab is open (no toasts: a failed read just keeps the last one).
+  useEffect(() => {
+    if (!api.wifiStatus) return;
+    const t = setInterval(() => {
+      api.wifiStatus!().then(setStatus, () => {});
+    }, 4000);
+    return () => clearInterval(t);
+  }, []);
 
   // Catch up with the user's other devices on open: pull their networks and push ours, quietly.
   useEffect(() => {
@@ -473,6 +491,7 @@ export function Wifi({ state: _state, run }: { state: AppState; run: Run }) {
   // The desktop app is view-only: it shows the networks synced from the phone and lets the user copy a
   // password, show a join QR or copy the sharable details, but never saves, edits or connects (no api.wifiSave).
   const canEdit = !!api.wifiSave;
+  const connectedSsid = status?.connected ? status.ssid : undefined;
 
   const syncNow = () =>
     void run(() => api.wifiSyncNow!(), undefined).then((r) => {
@@ -510,7 +529,7 @@ export function Wifi({ state: _state, run }: { state: AppState; run: Run }) {
 
   return (
     <section className="wifi">
-      {api.wifiStatus && <StatusCard run={run} />}
+      {api.wifiStatus && <StatusCard s={status} onRefresh={refreshStatus} />}
 
       {canEdit && (
         <div className="banner" role="note">
@@ -541,7 +560,7 @@ export function Wifi({ state: _state, run }: { state: AppState; run: Run }) {
         </p>
       ) : (
         profiles.map((p) => (
-          <ProfileCard key={p.id} p={p} run={run} onEdit={() => (p.enterprise ? setEnterprise(entFromProfile(p)) : setSimple(simpleFromProfile(p)))} onChanged={reload} />
+          <ProfileCard key={p.id} p={p} run={run} connected={!!connectedSsid && p.ssid === connectedSsid} onEdit={() => (p.enterprise ? setEnterprise(entFromProfile(p)) : setSimple(simpleFromProfile(p)))} onChanged={reload} />
         ))
       )}
 
