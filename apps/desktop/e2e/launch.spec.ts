@@ -32,3 +32,20 @@ test('the app starts on Home; its tiles and tabs lead to every page', async () =
     rmSync(home, { recursive: true, force: true });
   }
 });
+
+test('the desktop shows the Wi-Fi page: view-only, with the networks synced from the phones', async () => {
+  const home = mkdtempSync(join(tmpdir(), 'md-e2e-'));
+  const app = await electron.launch({ args: [MAIN], env: appEnv(home) });
+  try {
+    const win = await app.firstWindow();
+    await expect(win.getByText('Starting…')).toHaveCount(0);
+    await win.getByRole('button', { name: 'More', exact: true }).click();
+    await win.getByRole('button', { name: /^Wi-Fi/ }).click();
+    await expect(win.getByRole('heading', { name: 'Saved networks' })).toBeVisible();
+    await expect(win.getByText(/Add them on your phone, then use Sync now/)).toBeVisible();
+    await expect(win.getByRole('button', { name: 'Add a network' })).toHaveCount(0);
+  } finally {
+    await app.close();
+    rmSync(home, { recursive: true, force: true });
+  }
+});

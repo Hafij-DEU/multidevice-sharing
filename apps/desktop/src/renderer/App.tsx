@@ -148,7 +148,8 @@ export function App() {
       !(p === 'Guests' && !state?.guest) &&
       !(p === 'Sync' && !state?.sync) &&
       !(p === 'Watch party' && !window.meshdrop.watchCreate) &&
-      !(p === 'Wi-Fi' && !window.meshdrop.wifiSave),
+      // The desktop has no wifiSave (it is view-only) but still shows the synced networks.
+      !(p === 'Wi-Fi' && !window.meshdrop.wifiList),
   );
   const status = !state
     ? ''
