@@ -1,7 +1,9 @@
 import { useEffect, useState } from 'react';
 import type { AppState } from '../../shared/api.ts';
 import { errorText } from '../format.ts';
+import { t } from '../i18n.ts';
 import { Peer } from './Peer.tsx';
+import { QuickPrefs } from './QuickPrefs.tsx';
 
 const LAST = 'meshdrop.picker.last';
 
@@ -22,7 +24,7 @@ export function ClipboardPicker() {
   const [sending, setSending] = useState(false);
 
   useEffect(() => {
-    document.title = 'Send clipboard';
+    document.title = t('Send clipboard');
     const off = window.meshdrop.onState(setState);
     const poll = () => void window.meshdrop.getState().then(setState, () => setTimeout(poll, 300));
     poll();
@@ -60,11 +62,14 @@ export function ClipboardPicker() {
 
   return (
     <div className="picker">
-      <h1>Send clipboard</h1>
+      <div className="picker-head">
+        <h1>{t('Send clipboard')}</h1>
+        <QuickPrefs />
+      </div>
       {!state ? (
-        <p className="muted">Starting…</p>
+        <p className="muted">{t('Starting…')}</p>
       ) : online.length === 0 ? (
-        <p className="muted">No device is online.</p>
+        <p className="muted">{t('No device is online.')}</p>
       ) : (
         <ul className="list">
           {online.map((d) => (
@@ -90,9 +95,9 @@ export function ClipboardPicker() {
       )}
       {error && <p className="error-text">{error}</p>}
       <div className="row space">
-        <span className="muted">Enter sends · Esc closes</span>
+        <span className="muted">{t('Enter sends · Esc closes')}</span>
         <button className="primary" disabled={targets.length === 0 || sending} onClick={() => void send()}>
-          Send
+          {t('Send')}
         </button>
       </div>
     </div>

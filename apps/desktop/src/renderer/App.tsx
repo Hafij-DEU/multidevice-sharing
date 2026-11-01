@@ -3,7 +3,9 @@ import { BgArt } from './components/BgArt.tsx';
 import type { AppState } from '../shared/api.ts';
 import { Toasts, type ToastItem } from './components/Toast.tsx';
 import { errorText } from './format.ts';
+import { mark, t } from './i18n.ts';
 import { GuestOffer } from './components/GuestOffer.tsx';
+import { QuickPrefs } from './components/QuickPrefs.tsx';
 import { Devices } from './pages/Devices.tsx';
 import { Guests } from './pages/Guests.tsx';
 import { Home } from './pages/Home.tsx';
@@ -37,19 +39,34 @@ const ICON: Record<Sub, string> = {
   Settings: 'M4 7h10M18 7h2M4 17h4M12 17h8M16 5v4M10 15v4',
   About: 'M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18zM12 11v5M12 8h.01',
 };
+/** The names shown for the pages (the English names above are the logic values). */
+const SUB_NAME: Record<Sub, string> = {
+  Remote: mark('Remote'),
+  Continue: mark('Continue'),
+  'Watch party': mark('Watch party'),
+  'Wi-Fi': mark('Wi-Fi'),
+  'Share to Xiaomi': mark('Share to Xiaomi'),
+  Devices: mark('Devices'),
+  Sync: mark('Sync'),
+  Guests: mark('Guests'),
+  Mesh: mark('Mesh'),
+  Transfers: mark('Transfers'),
+  Settings: mark('Settings'),
+  About: mark('About'),
+};
 const MORE_HINT: Record<Sub, string> = {
-  Remote: 'Touchpad, keyboard, slides and media for your PC; find a device; notifications',
-  'Watch party': 'Watch YouTube or any video together, in step: share a 6-character code',
-  Continue: 'Carry on with a page on another device, at the same spot',
-  'Wi-Fi': 'Save your own networks, lock to a band, add eduroam / 802.1X',
-  'Share to Xiaomi': 'Send to and receive from Xiaomi phones (ShareMe)',
-  Devices: 'Paired devices: unpair, or pair again',
-  Sync: 'Keep one folder the same on your devices; phone photo backup',
-  Guests: 'Let someone without the app send or get files from a browser',
-  Mesh: 'Link your devices so they reach each other from anywhere',
-  Transfers: 'Unfinished sends and transfer history',
-  Settings: 'Name, port, notifications',
-  About: 'Version, licence, source code',
+  Remote: mark('Touchpad, keyboard, slides and media for your PC; find a device; notifications'),
+  'Watch party': mark('Watch YouTube or any video together, in step: share a 6-character code'),
+  Continue: mark('Carry on with a page on another device, at the same spot'),
+  'Wi-Fi': mark('Save your own networks, lock to a band, add eduroam / 802.1X'),
+  'Share to Xiaomi': mark('Send to and receive from Xiaomi phones (ShareMe)'),
+  Devices: mark('Paired devices: unpair, or pair again'),
+  Sync: mark('Keep one folder the same on your devices; phone photo backup'),
+  Guests: mark('Let someone without the app send or get files from a browser'),
+  Mesh: mark('Link your devices so they reach each other from anywhere'),
+  Transfers: mark('Unfinished sends and transfer history'),
+  Settings: mark('Name, port, notifications'),
+  About: mark('Version, licence, source code'),
 };
 /** On a wide window these sit in the sidebar, so the More page leaves them out. */
 const IN_SIDEBAR: readonly Sub[] = ['Devices', 'Transfers', 'Settings', 'About'];
@@ -115,12 +132,12 @@ export function App() {
   // Where a page's back step goes: Home when it was opened from Home, else the More list.
   const [backTo, setBackTo] = useState<'Home' | 'More'>('More');
   const [usage, setUsage] = useState(readUsage);
-  const open = (t: Tab, s: Sub | null = null, from: 'Home' | 'More' = 'More') => {
-    setTab(t);
+  const open = (to: Tab, s: Sub | null = null, from: 'Home' | 'More' = 'More') => {
+    setTab(to);
     setSub(s);
     setBackTo(from);
     if (s) setUsage(countUse(s));
-    else if (t === 'Send' || t === 'Received') setUsage(countUse(t));
+    else if (to === 'Send' || to === 'Received') setUsage(countUse(to));
   };
   const [state, setState] = useState<AppState | null>(null);
   const [toasts, setToasts] = useState<ToastItem[]>([]);
@@ -128,8 +145,8 @@ export function App() {
 
   const toast = useCallback((text: string, kind: ToastItem['kind']) => {
     const id = nextId.current++;
-    setToasts((t) => [...t.slice(-3), { id, text, kind }]);
-    setTimeout(() => setToasts((t) => t.filter((x) => x.id !== id)), kind === 'error' ? 8000 : 3000);
+    setToasts((l) => [...l.slice(-3), { id, text, kind }]);
+    setTimeout(() => setToasts((l) => l.filter((x) => x.id !== id)), kind === 'error' ? 8000 : 3000);
   }, []);
 
   const run: Run = useCallback(
@@ -167,14 +184,14 @@ export function App() {
   useEffect(() => {
     const w = window as unknown as { __mdBack?: () => boolean };
     w.__mdBack = () => {
-      const { tab: t, sub: s, backTo: b } = nav.current;
+      const { tab: cur, sub: s, backTo: b } = nav.current;
       // nav.current moves at once too: a second back before the next render must see this step.
       if (s !== null && b === 'More') {
-        nav.current = { tab: t, sub: null, backTo: b };
+        nav.current = { tab: cur, sub: null, backTo: b };
         setSub(null);
         return true;
       }
-      if (t !== 'Home' || s !== null) {
+      if (cur !== 'Home' || s !== null) {
         nav.current = { tab: 'Home', sub: null, backTo: 'More' };
         open('Home');
         return true;
@@ -206,8 +223,8 @@ export function App() {
       }
     };
     tick();
-    const t = setInterval(tick, 10_000);
-    return () => clearInterval(t);
+    const timer = setInterval(tick, 10_000);
+    return () => clearInterval(timer);
   }, [state?.platform]);
 
   // Files shared into MeshDrop (Android share menu, Files → Send with MeshDrop): show the Send page.
@@ -243,24 +260,24 @@ export function App() {
   const status = !state
     ? ''
     : state.mode === 'client-only'
-      ? 'Receiving is handled by the MeshDrop background service'
+      ? t('Receiving is handled by the MeshDrop background service')
       : state.error
-        ? 'Not receiving'
+        ? t('Not receiving')
         : state.receiving
-          ? `Receiving as ${state.self.alias}`
-          : 'Receiving paused';
+          ? t('Receiving as {name}', { name: state.self.alias })
+          : t('Receiving paused');
   const trusted = state ? state.devices.filter((d) => d.trusted && d.role !== 'localsend' && d.role !== 'addon') : [];
   const online = trusted.filter((d) => d.reach !== 'offline').length;
   const notes = (state?.phoneNotes ?? []).length;
-  const page = (s: Sub): NavItem => ({ label: s, icon: ICON[s], active: tab === 'More' && sub === s, onOpen: () => open('More', s) });
+  const page = (s: Sub): NavItem => ({ label: SUB_NAME[s], icon: ICON[s], active: tab === 'More' && sub === s, onOpen: () => open('More', s) });
   const navItems: NavItem[] = [
-    { label: 'Home', icon: 'M3 11l9-7 9 7M5 10v10h5v-6h4v6h5V10', active: tab === 'Home', core: true, onOpen: () => open('Home') },
-    { label: 'Send', icon: 'M4 12l16-8-6 16-2-7-8-1z', active: tab === 'Send', core: true, onOpen: () => open('Send') },
-    { label: 'Received', icon: 'M12 4v11M7 10l5 5 5-5M5 20h14', active: tab === 'Received', core: true, onOpen: () => open('Received') },
+    { label: mark('Home'), icon: 'M3 11l9-7 9 7M5 10v10h5v-6h4v6h5V10', active: tab === 'Home', core: true, onOpen: () => open('Home') },
+    { label: mark('Send'), icon: 'M4 12l16-8-6 16-2-7-8-1z', active: tab === 'Send', core: true, onOpen: () => open('Send') },
+    { label: mark('Received'), icon: 'M12 4v11M7 10l5 5 5-5M5 20h14', active: tab === 'Received', core: true, onOpen: () => open('Received') },
     page('Devices'),
-    ...(state?.guest ? [{ ...page('Guests'), label: 'Room', icon: 'M16 19a4 4 0 0 0-8 0M12 12a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM20 18a3 3 0 0 0-3-3M17 11a2.5 2.5 0 1 0 0-5M4 18a3 3 0 0 1 3-3M7 11a2.5 2.5 0 1 1 0-5' }] : []),
+    ...(state?.guest ? [{ ...page('Guests'), label: mark('Room'), icon: 'M16 19a4 4 0 0 0-8 0M12 12a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM20 18a3 3 0 0 0-3-3M17 11a2.5 2.5 0 1 0 0-5M4 18a3 3 0 0 1 3-3M7 11a2.5 2.5 0 1 1 0-5' }] : []),
     page('Transfers'),
-    { label: 'More', icon: 'M5 12h.01M12 12h.01M19 12h.01', active: tab === 'More' && (sub === null || !wide || !IN_SIDEBAR.includes(sub)), core: true, onOpen: () => open('More') },
+    { label: mark('More'), icon: 'M5 12h.01M12 12h.01M19 12h.01', active: tab === 'More' && (sub === null || !wide || !IN_SIDEBAR.includes(sub)), core: true, onOpen: () => open('More') },
   ];
   const navEnd: NavItem[] = [page('Settings'), page('About')];
   // Home's "Most used": the four pages opened most here (at least 3 times), only those this device shows.
@@ -277,19 +294,20 @@ export function App() {
   const navButton = (n: NavItem) => (
     <button key={n.label} className={`nav-item${n.active ? ' active' : ''}${n.core ? '' : ' side-only'}`} onClick={n.onOpen} aria-current={n.active ? 'page' : undefined}>
       <Icon d={n.icon} className={n.label === 'More' ? 'nav-icon dots' : 'nav-icon'} />
-      <span>{n.label}</span>
+      <span>{t(n.label)}</span>
     </button>
   );
 
   return (
     <div className="app">
       <BgArt />
+      <QuickPrefs className="qp-float" />
       <aside className="sidebar">
         <div className="brand">
           <span className="logo" aria-hidden="true" />
           MeshDrop
         </div>
-        <nav className="nav" aria-label="Pages">
+        <nav className="nav" aria-label={t('Pages')}>
           {navItems.map(navButton)}
           <hr className="nav-rule side-only" />
           {navEnd.map(navButton)}
@@ -298,9 +316,9 @@ export function App() {
           <div className="mesh-card">
             <Icon d="M5 12.5a10 10 0 0 1 14 0M8 15.5a6 6 0 0 1 8 0M12 19h.01" className="mesh-card-icon" />
             <div>
-              <div className="mesh-card-title">Mesh Network</div>
+              <div className="mesh-card-title">{t('Mesh Network')}</div>
               <div className="muted">
-                {online} device{online === 1 ? '' : 's'} online
+                {online === 1 ? t('1 device online') : t('{n} devices online', { n: online })}
               </div>
               <div className="muted mesh-card-status">{status}</div>
             </div>
@@ -312,11 +330,12 @@ export function App() {
           <span className="logo" aria-hidden="true" />
           MeshDrop
         </span>
-        <button className="icon-btn" aria-label={notes ? `${notes} notifications from your phone` : 'Notifications'} onClick={() => open('More', 'Remote')}>
+        <QuickPrefs />
+        <button className="icon-btn" aria-label={notes ? t('{n} notifications from your phone', { n: notes }) : t('Notifications')} onClick={() => open('More', 'Remote')}>
           <Icon d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9M10.3 21a1.94 1.94 0 0 0 3.4 0" />
           {notes > 0 && <span className="icon-badge">{notes}</span>}
         </button>
-        <button className="icon-btn" aria-label="Menu" onClick={() => open('More')}>
+        <button className="icon-btn" aria-label={t('Menu')} onClick={() => open('More')}>
           <Icon d="M12 5h.01M12 12h.01M12 19h.01" className="dots" />
         </button>
       </header>
@@ -327,7 +346,7 @@ export function App() {
           </div>
         )}
         {!state ? (
-          <p className="muted">Starting…</p>
+          <p className="muted">{t('Starting…')}</p>
         ) : tab === 'Home' ? (
           <Home state={state} run={run} wide={wide} frequent={frequent} go={(to) => ('tab' in to ? open(to.tab) : open('More', to.sub as Sub, 'Home'))} />
         ) : tab === 'Send' ? (
@@ -336,7 +355,7 @@ export function App() {
           <Inbox state={state} run={run} />
         ) : sub === null ? (
           <>
-            <h1 className="page-title">More</h1>
+            <h1 className="page-title">{t('More')}</h1>
             <ul className="menu">
               {subs.map((p) => (
                 <li key={p}>
@@ -345,8 +364,8 @@ export function App() {
                       <Icon d={ICON[p]} />
                     </span>
                     <span className="menu-text">
-                      <span className="menu-title">{p}</span>
-                      <span className="muted">{MORE_HINT[p]}</span>
+                      <span className="menu-title">{t(SUB_NAME[p])}</span>
+                      <span className="muted">{t(MORE_HINT[p])}</span>
                     </span>
                   </button>
                 </li>
@@ -358,10 +377,10 @@ export function App() {
             <div className="subhead">
               {!(wide && IN_SIDEBAR.includes(sub)) && (
                 <button className="link" onClick={() => (backTo === 'Home' ? open('Home') : setSub(null))}>
-                  ‹ {backTo}
+                  ‹ {t(backTo)}
                 </button>
               )}
-              <h1>{sub}</h1>
+              <h1>{t(SUB_NAME[sub])}</h1>
             </div>
             {sub === 'Remote' ? (
               <Remote state={state} run={run} />
@@ -394,7 +413,7 @@ export function App() {
         )}
       </main>
       {state?.guest?.offers[0] && <GuestOffer key={state.guest.offers[0].id} offer={state.guest.offers[0]} run={run} />}
-      <Toasts items={toasts} onClose={(id) => setToasts((t) => t.filter((x) => x.id !== id))} />
+      <Toasts items={toasts} onClose={(id) => setToasts((l) => l.filter((x) => x.id !== id))} />
     </div>
   );
 }

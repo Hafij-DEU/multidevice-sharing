@@ -1,10 +1,22 @@
 // Light, dark (plain, midnight blue or true black), or the system's choice (the default). The
 // resolved theme goes on <html data-theme> and a dark shade on <html data-shade>, which styles.css
 // keys its colours on; the choice is kept per device.
+import { mark } from './i18n.ts';
+
 export type ThemeChoice = 'system' | 'light' | 'dark' | 'midnight' | 'black';
 const CHOICES: ThemeChoice[] = ['light', 'dark', 'midnight', 'black'];
 
+/** Every choice with its name, for Settings and the corner switch. */
+export const THEMES: [ThemeChoice, string][] = [
+  ['system', mark('System')],
+  ['light', mark('Light')],
+  ['dark', mark('Dark')],
+  ['midnight', mark('Midnight')],
+  ['black', mark('Black')],
+];
+
 const KEY = 'md.theme';
+const listeners = new Set<() => void>();
 const dark = matchMedia('(prefers-color-scheme: dark)');
 
 export function themeChoice(): ThemeChoice {
@@ -32,6 +44,13 @@ export function setThemeChoice(c: ThemeChoice): void {
     // no storage: the choice lasts until the window closes
   }
   apply();
+  for (const f of listeners) f();
+}
+
+/** Called after the theme changes here or in another window. */
+export function onThemeChange(f: () => void): () => void {
+  listeners.add(f);
+  return () => listeners.delete(f);
 }
 
 apply();
@@ -62,3 +81,12 @@ export function setPalette(p: Palette): void {
 }
 
 document.documentElement.dataset.palette = palette();
+
+// Another window (the clipboard picker, the main window) changed a choice: follow it.
+window.addEventListener('storage', (e) => {
+  if (e.key === KEY || e.key === null) {
+    apply();
+    for (const f of listeners) f();
+  }
+  if (e.key === PKEY || e.key === null) document.documentElement.dataset.palette = palette();
+});

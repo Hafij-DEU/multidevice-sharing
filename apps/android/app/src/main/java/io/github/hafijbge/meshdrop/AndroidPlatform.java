@@ -1,5 +1,6 @@
 package io.github.hafijbge.meshdrop;
 
+import io.github.hafijbge.meshdrop.engine.app.Tr;
 import android.app.Activity;
 import android.content.ClipData;
 import android.content.Intent;
@@ -523,14 +524,14 @@ public class AndroidPlatform implements Platform {
             ringer = null;
         }
         if (nm.getNotificationChannel(RING) == null) {
-            nm.createNotificationChannel(new android.app.NotificationChannel(RING, "Find my device", android.app.NotificationManager.IMPORTANCE_HIGH));
+            nm.createNotificationChannel(new android.app.NotificationChannel(RING, Tr.t("Find my device"), android.app.NotificationManager.IMPORTANCE_HIGH));
         }
         android.app.PendingIntent stop = android.app.PendingIntent.getBroadcast(ctx, 0, new Intent(ctx, RingStopReceiver.class), android.app.PendingIntent.FLAG_IMMUTABLE);
         android.app.PendingIntent open = android.app.PendingIntent.getActivity(ctx, 0, new Intent(ctx, MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK), android.app.PendingIntent.FLAG_IMMUTABLE);
         android.app.Notification n = new android.app.Notification.Builder(ctx, RING)
                 .setSmallIcon(R.drawable.ic_notify)
-                .setContentTitle("Find my device")
-                .setContentText("Another of your devices is looking for this one.")
+                .setContentTitle(Tr.t("Find my device"))
+                .setContentText(Tr.t("Another of your devices is looking for this one."))
                 .setContentIntent(open)
                 .setDeleteIntent(stop)
                 .addAction(new android.app.Notification.Action.Builder(null, "Stop", stop).build())
@@ -603,12 +604,12 @@ public class AndroidPlatform implements Platform {
         // In the background Android does not let an app open a page by itself: offer it instead.
         android.app.NotificationManager nm = ctx.getSystemService(android.app.NotificationManager.class);
         if (nm.getNotificationChannel(LINKS) == null) {
-            nm.createNotificationChannel(new android.app.NotificationChannel(LINKS, "Links from your devices", android.app.NotificationManager.IMPORTANCE_HIGH));
+            nm.createNotificationChannel(new android.app.NotificationChannel(LINKS, Tr.t("Links from your devices"), android.app.NotificationManager.IMPORTANCE_HIGH));
         }
         android.app.PendingIntent pi = android.app.PendingIntent.getActivity(ctx, nextNote, view, android.app.PendingIntent.FLAG_IMMUTABLE);
         android.app.Notification n = new android.app.Notification.Builder(ctx, LINKS)
                 .setSmallIcon(R.drawable.ic_notify)
-                .setContentTitle("Open link")
+                .setContentTitle(Tr.t("Open link"))
                 .setContentText(url)
                 .setContentIntent(pi)
                 .setAutoCancel(true)

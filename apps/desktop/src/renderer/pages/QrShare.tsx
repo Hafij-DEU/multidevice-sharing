@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import type { AppState, QrShareStatus } from '../../shared/api.ts';
 import type { Run } from '../App.tsx';
 import { fmtBytes } from '../format.ts';
+import { t } from '../i18n.ts';
 
 /** Polls the Share to Xiaomi add-on while the page is open. */
 function useQrShare(): [QrShareStatus | null, (s: QrShareStatus) => void] {
@@ -15,10 +16,10 @@ function useQrShare(): [QrShareStatus | null, (s: QrShareStatus) => void] {
         .then((s) => live && setSt(s))
         .catch(() => undefined);
     void tick();
-    const t = setInterval(tick, 700);
+    const timer = setInterval(tick, 700);
     return () => {
       live = false;
-      clearInterval(t);
+      clearInterval(timer);
     };
   }, []);
   return [st, setSt];
@@ -32,7 +33,7 @@ export function QrShareSwitch({ run }: { run: Run }) {
   const set = api.qrShareSetEnabled;
   return (
     <>
-      <h2>Add-ons</h2>
+      <h2>{t('Add-ons')}</h2>
       <label className="toggle">
         <input
           type="checkbox"
@@ -43,7 +44,8 @@ export function QrShareSwitch({ run }: { run: Run }) {
           }}
         />
         <span>
-          <b>Share to Xiaomi</b> <span className="muted">— send to and receive from Xiaomi phones (ShareMe), using the app they already have (More → Share to Xiaomi)</span>
+          <b>{t('Share to Xiaomi')}</b>{' '}
+          <span className="muted">{t('— send to and receive from Xiaomi phones (ShareMe), using the app they already have (More → Share to Xiaomi)')}</span>
         </span>
       </label>
     </>
@@ -56,16 +58,16 @@ export function QrShare({ run }: { state: AppState; run: Run }) {
   const [st, setSt] = useQrShare();
   const [showLog, setShowLog] = useState(false);
   const api = window.meshdrop;
-  if (!st) return <p className="muted">Loading…</p>;
+  if (!st) return <p className="muted">{t('Loading…')}</p>;
 
   if (!st.enabled)
     return (
       <div className="sm-card sm-off">
-        <p className="lead">Share to Xiaomi is off</p>
-        <p className="muted">Swap files with Xiaomi phones (ShareMe): they use their app, you use MeshDrop.</p>
-        <p className="muted" style={{ fontSize: 12 }}>Not affiliated with Xiaomi. ShareMe is a trademark of Xiaomi.</p>
+        <p className="lead">{t('Share to Xiaomi is off')}</p>
+        <p className="muted">{t('Swap files with Xiaomi phones (ShareMe): they use their app, you use MeshDrop.')}</p>
+        <p className="muted" style={{ fontSize: 12 }}>{t('Not affiliated with Xiaomi. ShareMe is a trademark of Xiaomi.')}</p>
         <button className="primary" onClick={() => void run(() => api.qrShareSetEnabled!(true)).then((s) => s && setSt(s))}>
-          Turn on Share to Xiaomi
+          {t('Turn on Share to Xiaomi')}
         </button>
       </div>
     );
@@ -100,25 +102,25 @@ export function QrShare({ run }: { state: AppState; run: Run }) {
             <svg viewBox="0 0 24 24" aria-hidden="true">
               <path d="M4 12l16-8-6 16-2-7-8-1z" />
             </svg>
-            <span className="sm-big-title">Send</span>
-            <span className="sm-big-hint">On their phone: open ShareMe → Receive. Scan its code, pick files.</span>
+            <span className="sm-big-title">{t('Send')}</span>
+            <span className="sm-big-hint">{t('On their phone: open ShareMe → Receive. Scan its code, pick files.')}</span>
           </button>
           <button className="sm-big sm-recv" onClick={() => void receive()}>
             <svg viewBox="0 0 24 24" aria-hidden="true">
               <path d="M12 4v11M7 10l5 5 5-5M5 20h14" />
             </svg>
-            <span className="sm-big-title">Receive</span>
-            <span className="sm-big-hint">Shows a code. On their phone: open ShareMe → Send, pick files, scan it.</span>
+            <span className="sm-big-title">{t('Receive')}</span>
+            <span className="sm-big-hint">{t('Shows a code. On their phone: open ShareMe → Send, pick files, scan it.')}</span>
           </button>
         </div>
       ) : (
         <div className="sm-card">
           <div className="sm-head">
-            <span className={`sm-badge sm-${st.phase}`}>{st.mode === 'send' ? 'Sending' : 'Receiving'}</span>
+            <span className={`sm-badge sm-${st.phase}`}>{st.mode === 'send' ? t('Sending') : t('Receiving')}</span>
             {st.peer && <b>{st.peer}</b>}
             <span className="space" />
             <button className={busy ? 'danger' : ''} onClick={() => void stop()}>
-              {busy ? 'Cancel' : st.phase === 'ready' || st.mode === 'receive' ? 'Stop' : 'Done'}
+              {busy ? t('Cancel') : st.phase === 'ready' || st.mode === 'receive' ? t('Stop') : t('Done')}
             </button>
           </div>
           <p className={st.phase === 'error' ? 'error-text' : st.phase === 'done' ? 'ok-text' : ''}>{st.text}</p>
@@ -144,7 +146,7 @@ export function QrShare({ run }: { state: AppState; run: Run }) {
                   <span className="muted">{fmtBytes(f.size)}</span>
                   {f.located && api.qrShareOpen && (
                     <button className="link" onClick={() => void run(() => api.qrShareOpen!(f.located!))}>
-                      Open
+                      {t('Open')}
                     </button>
                   )}
                 </li>
@@ -155,7 +157,7 @@ export function QrShare({ run }: { state: AppState; run: Run }) {
       )}
       {st.log.length > 0 && (
         <details className="sm-log" open={showLog} onToggle={(e) => setShowLog((e.target as HTMLDetailsElement).open)}>
-          <summary className="muted">Details</summary>
+          <summary className="muted">{t('Details')}</summary>
           <pre>{st.log.join('\n')}</pre>
         </details>
       )}

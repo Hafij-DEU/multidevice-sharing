@@ -133,6 +133,9 @@ public final class Bridge {
                 activity.runOnUiThread(() -> activity.requestPermissions(perms, 9));
                 return null;
             }
+            case "setLang":
+                io.github.hafijbge.meshdrop.engine.app.Tr.set(args.isEmpty() ? null : args.get(0), new java.io.File(core.home, "lang.json"));
+                return null;
             case "qrShareStatus":
                 return QrShare.of(activity, p).status();
             case "qrShareSetEnabled": {

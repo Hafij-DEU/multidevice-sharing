@@ -1,17 +1,18 @@
 import { useCallback, useEffect, useState } from 'react';
 import type { AppState, WifiEapMethod, WifiPhase2, WifiProfileView, WifiScanAp, WifiSecurity, WifiStatusView } from '../../shared/api.ts';
 import type { Run } from '../App.tsx';
+import { mark, t } from '../i18n.ts';
 
 const api = window.meshdrop;
 
 const SEC_LABEL: Record<WifiSecurity, string> = {
-  open: 'Open (no password)',
-  wpa2: 'Password (WPA/WPA2)',
-  wpa3: 'Password (WPA3)',
-  enterprise: 'eduroam / 802.1X',
+  open: mark('Open (no password)'),
+  wpa2: mark('Password (WPA/WPA2)'),
+  wpa3: mark('Password (WPA3)'),
+  enterprise: mark('eduroam / 802.1X'),
 };
-const EAP_LABEL: Record<WifiEapMethod, string> = { peap: 'PEAP', ttls: 'TTLS', tls: 'TLS (needs a client certificate)', pwd: 'PWD' };
-const PHASE2_LABEL: Record<WifiPhase2, string> = { mschapv2: 'MSCHAPv2', gtc: 'GTC', pap: 'PAP', none: 'None' };
+const EAP_LABEL: Record<WifiEapMethod, string> = { peap: 'PEAP', ttls: 'TTLS', tls: mark('TLS (needs a client certificate)'), pwd: 'PWD' };
+const PHASE2_LABEL: Record<WifiPhase2, string> = { mschapv2: 'MSCHAPv2', gtc: 'GTC', pap: 'PAP', none: mark('None') };
 
 function signal(rssi: number): string {
   if (rssi >= -55) return 'strong';
@@ -63,33 +64,34 @@ function StatusCard({ s, onRefresh }: { s: WifiStatusView | null; onRefresh: () 
   return (
     <section className="wifi-status">
       <div className="row space">
-        <h2>This device</h2>
-        <button onClick={onRefresh}>Refresh</button>
+        <h2>{t('This device')}</h2>
+        <button onClick={onRefresh}>{t('Refresh')}</button>
       </div>
       {!s ? (
-        <p className="muted">Reading…</p>
+        <p className="muted">{t('Reading…')}</p>
       ) : !s.enabled ? (
-        <p className="error-text">Wi-Fi is off on this device.</p>
+        <p className="error-text">{t('Wi-Fi is off on this device.')}</p>
       ) : !s.connected ? (
-        <p className="muted">Not connected to Wi-Fi.{s.locked ? ' A band lock is set and waiting for its access point.' : ''}</p>
+        <p className="muted">
+          {t('Not connected to Wi-Fi.')}
+          {s.locked ? ` ${t('A band lock is set and waiting for its access point.')}` : ''}
+        </p>
       ) : s.nameHidden ? (
         <>
-          <p>
-            Connected to Wi-Fi · {s.band} GHz, channel {s.channel} · {s.rssi} dBm · {s.linkMbps} Mbps
-          </p>
+          <p>{t('Connected to Wi-Fi · {band} GHz, channel {channel} · {rssi} dBm · {mbps} Mbps', { band: s.band ?? '', channel: s.channel ?? '', rssi: s.rssi ?? '', mbps: s.linkMbps ?? '' })}</p>
           {s.nameHidden === 'permission' ? (
             <div className="row space">
-              <span className="muted">Android shows MeshDrop the network's name only with Location allowed.</span>
-              {api.wifiAskLocation && <button onClick={() => void api.wifiAskLocation!()}>Allow location</button>}
+              <span className="muted">{t("Android shows MeshDrop the network's name only with Location allowed.")}</span>
+              {api.wifiAskLocation && <button onClick={() => void api.wifiAskLocation!()}>{t('Allow location')}</button>}
             </div>
           ) : (
-            <p className="muted">Turn on Location in Android's quick settings to see which network this is.</p>
+            <p className="muted">{t("Turn on Location in Android's quick settings to see which network this is.")}</p>
           )}
         </>
       ) : (
         <p>
-          On <strong>{s.ssid}</strong> · {s.band} GHz, channel {s.channel} · {s.rssi} dBm · {s.linkMbps} Mbps
-          {s.locked ? <span className="wifi-badge lock"> band-locked</span> : <span className="muted"> · not locked</span>}
+          {t('On')} <strong>{s.ssid}</strong> · {t('{band} GHz, channel {channel} · {rssi} dBm · {mbps} Mbps', { band: s.band ?? '', channel: s.channel ?? '', rssi: s.rssi ?? '', mbps: s.linkMbps ?? '' })}
+          {s.locked ? <span className="wifi-badge lock"> {t('band-locked')}</span> : <span className="muted"> · {t('not locked')}</span>}
         </p>
       )}
     </section>
@@ -134,38 +136,38 @@ function SimpleEditor({ draft, run, onSaved, onCancel }: { draft: SimpleDraft; r
         password: d.open ? undefined : d.password || undefined,
         hidden: d.hidden,
       });
-    }, editing ? 'Network updated' : 'Network saved').then((r) => r && onSaved());
+    }, editing ? t('Network updated') : t('Network saved')).then((r) => r && onSaved());
 
   return (
     <section className="wifi-editor">
-      <h2>{editing ? 'Edit network' : 'Add a network'}</h2>
+      <h2>{editing ? t('Edit network') : t('Add a network')}</h2>
 
       <label className="field">
-        <span>Network name</span>
-        <input value={d.ssid} maxLength={64} autoCapitalize="none" onChange={(e) => set('ssid', e.target.value)} placeholder="Home 5G" />
+        <span>{t('Network name')}</span>
+        <input value={d.ssid} maxLength={64} autoCapitalize="none" onChange={(e) => set('ssid', e.target.value)} placeholder={t('Home 5G')} />
       </label>
 
       {!d.open && (
         <label className="field">
-          <span>Password{editing ? ' (leave blank to keep the saved one)' : ''}</span>
+          <span>{editing ? t('Password (leave blank to keep the saved one)') : t('Password')}</span>
           <input type="password" value={d.password} autoCapitalize="none" onChange={(e) => set('password', e.target.value)} placeholder={editing ? '••••••••' : ''} />
         </label>
       )}
 
       <label className="toggle">
-        <input type="checkbox" checked={d.open} onChange={(e) => set('open', e.target.checked)} /> Open network (no password)
+        <input type="checkbox" checked={d.open} onChange={(e) => set('open', e.target.checked)} /> {t('Open network (no password)')}
       </label>
       <label className="toggle">
-        <input type="checkbox" checked={d.hidden} onChange={(e) => set('hidden', e.target.checked)} /> This is a hidden network
+        <input type="checkbox" checked={d.hidden} onChange={(e) => set('hidden', e.target.checked)} /> {t('This is a hidden network')}
       </label>
 
       <div className="row">
         <button className="primary" onClick={save}>
-          {editing ? 'Save changes' : 'Save network'}
+          {editing ? t('Save changes') : t('Save network')}
         </button>
-        <button onClick={onCancel}>Cancel</button>
+        <button onClick={onCancel}>{t('Cancel')}</button>
       </div>
-      <p className="muted hint">Saved here and synced to your trusted devices. To connect, use Copy password or Show QR and join from Android. A band lock lets MeshDrop connect for you.</p>
+      <p className="muted hint">{t('Saved here and synced to your trusted devices. To connect, use Copy password or Show QR and join from Android. A band lock lets MeshDrop connect for you.')}</p>
     </section>
   );
 }
@@ -228,73 +230,72 @@ function EnterpriseEditor({ draft, run, onSaved, onCancel }: { draft: EntDraft; 
         caCertPem: d.caCertPem.trim() || undefined,
         eapXml: d.eapXml.trim() || undefined,
       }),
-    editing ? 'Network updated' : 'Network saved').then((r) => r && onSaved());
+    editing ? t('Network updated') : t('Network saved')).then((r) => r && onSaved());
 
   return (
     <section className="wifi-editor">
-      <h2>{editing ? 'Edit eduroam / 802.1X' : 'Add eduroam / 802.1X'}</h2>
+      <h2>{editing ? t('Edit eduroam / 802.1X') : t('Add eduroam / 802.1X')}</h2>
       <p className="muted hint">
-        You can paste your university&apos;s configuration below to fill in the method, server name and certificate; then just type your own username and
-        password. PEAP or TTLS with MSCHAPv2 is the usual choice.
+        {t("You can paste your university's configuration below to fill in the method, server name and certificate; then just type your own username and password. PEAP or TTLS with MSCHAPv2 is the usual choice.")}
       </p>
 
       <label className="field">
-        <span>Network name</span>
+        <span>{t('Network name')}</span>
         <input value={d.ssid} maxLength={64} autoCapitalize="none" onChange={(e) => set('ssid', e.target.value)} placeholder="eduroam" />
       </label>
       <label className="field">
-        <span>EAP method</span>
+        <span>{t('EAP method')}</span>
         <select value={d.eapMethod} onChange={(e) => set('eapMethod', e.target.value as WifiEapMethod)}>
           {(Object.keys(EAP_LABEL) as WifiEapMethod[]).map((k) => (
             <option key={k} value={k}>
-              {EAP_LABEL[k]}
+              {t(EAP_LABEL[k])}
             </option>
           ))}
         </select>
       </label>
       {showPhase2 && (
         <label className="field">
-          <span>Inner method (phase 2)</span>
+          <span>{t('Inner method (phase 2)')}</span>
           <select value={d.phase2} onChange={(e) => set('phase2', e.target.value as WifiPhase2)}>
             {(Object.keys(PHASE2_LABEL) as WifiPhase2[]).map((k) => (
               <option key={k} value={k}>
-                {PHASE2_LABEL[k]}
+                {t(PHASE2_LABEL[k])}
               </option>
             ))}
           </select>
         </label>
       )}
       <label className="field">
-        <span>Username (identity)</span>
+        <span>{t('Username (identity)')}</span>
         <input value={d.identity} autoCapitalize="none" onChange={(e) => set('identity', e.target.value)} placeholder="you@uni.edu" />
       </label>
       {d.eapMethod !== 'tls' && (
         <label className="field">
-          <span>Password{editing ? ' (leave blank to keep the saved one)' : ''}</span>
+          <span>{editing ? t('Password (leave blank to keep the saved one)') : t('Password')}</span>
           <input type="password" value={d.password} autoCapitalize="none" onChange={(e) => set('password', e.target.value)} placeholder={editing ? '••••••••' : ''} />
         </label>
       )}
       <label className="field">
-        <span>Outer identity (optional)</span>
+        <span>{t('Outer identity (optional)')}</span>
         <input value={d.anonymousIdentity} autoCapitalize="none" onChange={(e) => set('anonymousIdentity', e.target.value)} placeholder="anonymous@uni.edu" />
       </label>
       <label className="field">
-        <span>Server name to verify (optional)</span>
+        <span>{t('Server name to verify (optional)')}</span>
         <input value={d.domainSuffixMatch} autoCapitalize="none" onChange={(e) => set('domainSuffixMatch', e.target.value)} placeholder="radius.uni.edu" />
       </label>
       <label className="field">
-        <span>Paste configuration (.eap-config / CAT XML, optional)</span>
+        <span>{t('Paste configuration (.eap-config / CAT XML, optional)')}</span>
         <textarea rows={3} value={d.eapXml} onChange={(e) => set('eapXml', e.target.value)} placeholder="<EAPIdentityProviderList>…" />
       </label>
       <label className="toggle">
-        <input type="checkbox" checked={d.hidden} onChange={(e) => set('hidden', e.target.checked)} /> This is a hidden network
+        <input type="checkbox" checked={d.hidden} onChange={(e) => set('hidden', e.target.checked)} /> {t('This is a hidden network')}
       </label>
 
       <div className="row">
         <button className="primary" onClick={save}>
-          {editing ? 'Save changes' : 'Save network'}
+          {editing ? t('Save changes') : t('Save network')}
         </button>
-        <button onClick={onCancel}>Cancel</button>
+        <button onClick={onCancel}>{t('Cancel')}</button>
       </div>
     </section>
   );
@@ -311,7 +312,7 @@ function ProfileCard({ p, run, onEdit, onChanged, connected }: { p: WifiProfileV
       <div className="row space">
         <span className="menu-title">
           {p.ssid}
-          {connected && <span className="wifi-badge ok"> Connected</span>}
+          {connected && <span className="wifi-badge ok"> {t('Connected')}</span>}
         </span>
         <span className="muted">{SEC_LABEL[p.security]}</span>
       </div>
@@ -319,38 +320,38 @@ function ProfileCard({ p, run, onEdit, onChanged, connected }: { p: WifiProfileV
         <span className="muted">
           {p.lockBssid ? (
             <>
-              Band-locked to <code>{p.lockBssid}</code>
+              {t('Band-locked to')} <code>{p.lockBssid}</code>
               {p.band ? ` (${p.band} GHz)` : ''}
-              {p.fallback ? ' · with fallback' : ''}
+              {p.fallback ? ` · ${t('with fallback')}` : ''}
             </>
           ) : (
-            'Any access point'
+            t('Any access point')
           )}
           {p.enterprise && p.identity ? ` · ${p.identity}` : ''}
-          {p.hidden ? ' · hidden' : ''}
+          {p.hidden ? ` · ${t('hidden')}` : ''}
         </span>
         <span className="row">
           {api.wifiAddToSystem && !p.enterprise && (
-            <button onClick={() => void run(() => api.wifiAddToSystem!(p.id), 'Opening Android to save and connect…')}>
-              Connect
+            <button onClick={() => void run(() => api.wifiAddToSystem!(p.id), t('Opening Android to save and connect…'))}>
+              {t('Connect')}
             </button>
           )}
           {api.wifiCopy && p.hasPassword && !p.enterprise && (
-            <button onClick={() => void run(() => api.wifiCopy!(p.id), 'Password copied — paste it into your Wi-Fi settings')}>
-              Copy password
+            <button onClick={() => void run(() => api.wifiCopy!(p.id), t('Password copied — paste it into your Wi-Fi settings'))}>
+              {t('Copy password')}
             </button>
           )}
           {api.wifiQr && !p.enterprise && (
             <button onClick={() => (qr ? setQr(null) : void run(() => api.wifiQr!(p.id)).then((svg) => svg && setQr(svg)))}>
-              {qr ? 'Hide QR' : 'Show QR'}
+              {qr ? t('Hide QR') : t('Show QR')}
             </button>
           )}
           {api.wifiShare && !p.enterprise && (
             <button onClick={() => void run(() => api.wifiShare!(p.id), undefined)}>
-              Share
+              {t('Share')}
             </button>
           )}
-          {api.wifiSave && <button onClick={onEdit}>Edit</button>}
+          {api.wifiSave && <button onClick={onEdit}>{t('Edit')}</button>}
           {api.wifiDelete && (
             <button
               className={confirm ? 'danger' : ''}
@@ -360,18 +361,18 @@ function ProfileCard({ p, run, onEdit, onChanged, connected }: { p: WifiProfileV
                   setTimeout(() => setConfirm(false), 4000);
                   return;
                 }
-                void run(() => api.wifiDelete!(p.id), 'Network deleted').then(onChanged);
+                void run(() => api.wifiDelete!(p.id), t('Network deleted')).then(onChanged);
               }}
             >
-              {confirm ? 'Tap again to delete' : 'Delete'}
+              {confirm ? t('Tap again to delete') : t('Delete')}
             </button>
           )}
         </span>
       </div>
       {qr && (
         <div className="wifi-qr">
-          <img alt={`Wi-Fi QR for ${p.ssid}`} src={`data:image/svg+xml;base64,${btoa(qr)}`} />
-          <p className="muted hint">Scan with another phone&apos;s camera to join {p.ssid}.</p>
+          <img alt={t('Wi-Fi QR for {ssid}', { ssid: p.ssid })} src={`data:image/svg+xml;base64,${btoa(qr)}`} />
+          <p className="muted hint">{t("Scan with another phone's camera to join {ssid}.", { ssid: p.ssid })}</p>
         </div>
       )}
     </section>
@@ -389,11 +390,11 @@ function BandLockRow({ p, run, onChanged }: { p: WifiProfileView; run: Run; onCh
       if (r) setAps([...r].sort((a, b) => b.rssi - a.rssi));
     });
   const pin = (ap: WifiScanAp) =>
-    void run(() => api.wifiLock!(p.id, ap.bssid, ap.band, p.fallback), `Pinned ${p.ssid} to ${ap.band} GHz`).then(() => {
+    void run(() => api.wifiLock!(p.id, ap.bssid, ap.band, p.fallback), t('Pinned {ssid} to {band} GHz', { ssid: p.ssid, band: ap.band })).then(() => {
       setAps(null);
       onChanged();
     });
-  const unpin = () => void run(() => api.wifiLock!(p.id, null, null, false), `${p.ssid}: using any access point`).then(onChanged);
+  const unpin = () => void run(() => api.wifiLock!(p.id, null, null, false), t('{ssid}: using any access point', { ssid: p.ssid })).then(onChanged);
   const toggleFallback = (v: boolean) => void run(() => api.wifiLock!(p.id, p.lockBssid ?? null, p.band ?? null, v)).then(onChanged);
 
   return (
@@ -403,30 +404,30 @@ function BandLockRow({ p, run, onChanged }: { p: WifiProfileView; run: Run; onCh
         <span className="muted">
           {p.lockBssid ? (
             <>
-              Pinned to <code>{p.lockBssid}</code>
+              {t('Pinned to')} <code>{p.lockBssid}</code>
               {p.band ? ` · ${p.band} GHz` : ''}
             </>
           ) : (
-            'Any access point'
+            t('Any access point')
           )}
         </span>
       </div>
       <div className="row">
-        <button onClick={scan}>{p.lockBssid ? 'Change access point' : 'Pin an access point'}</button>
-        {p.lockBssid && <button onClick={unpin}>Use any access point</button>}
+        <button onClick={scan}>{p.lockBssid ? t('Change access point') : t('Pin an access point')}</button>
+        {p.lockBssid && <button onClick={unpin}>{t('Use any access point')}</button>}
       </div>
       {aps && (
         <ul className="list wifi-aps">
           {aps.length === 0 ? (
-            <li className="muted">No access points found. Make sure Wi-Fi is on and try again.</li>
+            <li className="muted">{t('No access points found. Make sure Wi-Fi is on and try again.')}</li>
           ) : (
             aps.map((ap) => (
               <li key={ap.bssid} className="row space">
                 <button className={p.lockBssid === ap.bssid ? 'primary' : ''} onClick={() => pin(ap)}>
-                  {ap.band} GHz · ch {ap.channel}
+                  {t('{band} GHz · ch {channel}', { band: ap.band, channel: ap.channel })}
                 </button>
                 <span className={`muted sig-${signal(ap.rssi)}`}>
-                  {ap.ssid || '(hidden)'} · {ap.bssid} · {ap.rssi} dBm
+                  {ap.ssid || t('(hidden)')} · {ap.bssid} · {ap.rssi} dBm
                 </span>
               </li>
             ))
@@ -434,8 +435,7 @@ function BandLockRow({ p, run, onChanged }: { p: WifiProfileView; run: Run; onCh
         </ul>
       )}
       <label className="toggle">
-        <input type="checkbox" checked={p.fallback} disabled={!p.lockBssid} onChange={(e) => toggleFallback(e.target.checked)} /> Still join on another band when this access point
-        is out of range
+        <input type="checkbox" checked={p.fallback} disabled={!p.lockBssid} onChange={(e) => toggleFallback(e.target.checked)} /> {t('Still join on another band when this access point is out of range')}
       </label>
     </section>
   );
@@ -447,15 +447,13 @@ function BandLockSection({ profiles, run, onChanged }: { profiles: WifiProfileVi
   return (
     <section className="wifi-band-lock">
       <div className="banner" role="note">
-        For a band lock to take effect, open Android&apos;s own Wi-Fi settings and forget that network there first. A network saved in the system beats
-        MeshDrop&apos;s pin, so the system one would win otherwise.
+        {t("For a band lock to take effect, open Android's own Wi-Fi settings and forget that network there first. A network saved in the system beats MeshDrop's pin, so the system one would win otherwise.")}
       </div>
       <p className="muted hint">
-        Pin a saved network to one access point so your device cannot drop to a slower band. Scan, then pick the 5 GHz (or 6 GHz) access point you want. Pinning
-        needs Android 11 or newer.
+        {t('Pin a saved network to one access point so your device cannot drop to a slower band. Scan, then pick the 5 GHz (or 6 GHz) access point you want. Pinning needs Android 11 or newer.')}
       </p>
       {profiles.length === 0 ? (
-        <p className="muted">No saved network matches.</p>
+        <p className="muted">{t('No saved network matches.')}</p>
       ) : (
         profiles.map((p) => <BandLockRow key={p.id} p={p} run={run} onChanged={onChanged} />)
       )}
@@ -510,14 +508,14 @@ export function Wifi({ state: _state, run }: { state: AppState; run: Run }) {
   useEffect(() => {
     if (!api.wifiSyncNow) return;
     void run(() => api.wifiSyncNow!(), undefined).then((r) => {
-      if (r && r.merged > 0) run(async () => `${r.merged} network change(s) came in from your devices.`);
+      if (r && r.merged > 0) run(async () => t('{n} network change(s) came in from your devices.', { n: r.merged }));
       reload();
     });
     // Runs once when the tab opens.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  if (!api.wifiList) return <p className="muted">The Wi-Fi tools are available on Android.</p>;
+  if (!api.wifiList) return <p className="muted">{t('The Wi-Fi tools are available on Android.')}</p>;
 
   // The desktop app is view-only: it shows the networks synced from the phone and lets the user copy a
   // password, show a join QR or copy the sharable details, but never saves, edits or connects (no api.wifiSave).
@@ -532,7 +530,10 @@ export function Wifi({ state: _state, run }: { state: AppState; run: Run }) {
   const syncNow = () =>
     void run(() => api.wifiSyncNow!(), undefined).then((r) => {
       if (!r) return;
-      const msg = r.devices === 0 ? 'No other trusted devices online to sync with.' : `Synced with ${r.reached}/${r.devices} device(s). ${r.merged} change(s) came in.`;
+      const msg =
+        r.devices === 0
+          ? t('No other trusted devices online to sync with.')
+          : t('Synced with {reached}/{devices} device(s). {merged} change(s) came in.', { reached: r.reached, devices: r.devices, merged: r.merged });
       run(async () => msg).then(reload);
     });
 
@@ -542,7 +543,7 @@ export function Wifi({ state: _state, run }: { state: AppState; run: Run }) {
       if (!text) return;
       const d = draftFromWifiUri(text);
       if (!d) {
-        void run(() => Promise.reject(new Error('That QR code is not a Wi-Fi network.')));
+        void run(() => Promise.reject(new Error(t('That QR code is not a Wi-Fi network.'))));
         return;
       }
       setSimple(d);
@@ -568,12 +569,12 @@ export function Wifi({ state: _state, run }: { state: AppState; run: Run }) {
       {api.wifiStatus && <StatusCard s={status} onRefresh={refreshStatus} />}
 
       {api.wifiLock && (
-        <div className="wifi-tabs" role="tablist" aria-label="Wi-Fi">
+        <div className="wifi-tabs" role="tablist" aria-label={t('Wi-Fi')}>
           <button role="tab" aria-selected={view === 'saved'} className={view === 'saved' ? 'active' : ''} onClick={() => setView('saved')}>
-            Saved networks
+            {t('Saved networks')}
           </button>
           <button role="tab" aria-selected={view === 'lock'} className={view === 'lock' ? 'active' : ''} onClick={() => setView('lock')}>
-            Band lock
+            {t('Band lock')}
           </button>
         </div>
       )}
@@ -581,39 +582,39 @@ export function Wifi({ state: _state, run }: { state: AppState; run: Run }) {
       {profiles && profiles.length > 1 && (
         <div className="wifi-more">
           {(showAll || !current) && profiles.length > 4 && (
-            <input type="search" aria-label="Find a network" placeholder={`Find among ${profiles.length} networks`} value={filter} onChange={(e) => setFilter(e.target.value)} />
+            <input type="search" aria-label={t('Find a network')} placeholder={t('Find among {n} networks', { n: profiles.length })} value={filter} onChange={(e) => setFilter(e.target.value)} />
           )}
           {current && (
             <button className="link" onClick={() => { setShowAll(!showAll); setFilter(''); }}>
-              {showAll ? 'Only the connected network' : `Show all ${profiles.length} networks`}
+              {showAll ? t('Only the connected network') : t('Show all {n} networks', { n: profiles.length })}
             </button>
           )}
         </div>
       )}
 
       {view === 'lock' && api.wifiLock ? (
-        profiles === null ? <p className="muted">Loading…</p> : profiles.length === 0 ? <p className="muted">Save a network first, then pin it here.</p> : <BandLockSection profiles={shown} run={run} onChanged={reload} />
+        profiles === null ? <p className="muted">{t('Loading…')}</p> : profiles.length === 0 ? <p className="muted">{t('Save a network first, then pin it here.')}</p> : <BandLockSection profiles={shown} run={run} onChanged={reload} />
       ) : (
       <>
       <div className="row space">
-        <h2>Saved networks</h2>
+        <h2>{t('Saved networks')}</h2>
         <span className="row">
-          {api.scanQr && <button onClick={scanToAdd}>Scan a QR</button>}
+          {api.scanQr && <button onClick={scanToAdd}>{t('Scan a QR')}</button>}
           {canEdit && (
             <button className="primary" onClick={() => setSimple(blankSimple())}>
-              Add a network
+              {t('Add a network')}
             </button>
           )}
         </span>
       </div>
 
       {profiles === null ? (
-        <p className="muted">Loading…</p>
+        <p className="muted">{t('Loading…')}</p>
       ) : profiles.length === 0 ? (
         <p className="muted">
           {canEdit
-            ? 'No networks yet. Add one — type a password you know, even one you forgot elsewhere and are re-entering here.'
-            : 'No networks yet. Add them on your phone, then use Sync now — they appear here, passwords included.'}
+            ? t('No networks yet. Add one — type a password you know, even one you forgot elsewhere and are re-entering here.')
+            : t('No networks yet. Add them on your phone, then use Sync now — they appear here, passwords included.')}
         </p>
       ) : (
         shown.map((p) => (
@@ -622,16 +623,16 @@ export function Wifi({ state: _state, run }: { state: AppState; run: Run }) {
       )}
 
       <div className="row">
-        {canEdit && <button onClick={() => setEnterprise(blankEnt())}>Add eduroam / 802.1X</button>}
-        {api.wifiSyncNow ? <button onClick={syncNow}>Sync now</button> : null}
+        {canEdit && <button onClick={() => setEnterprise(blankEnt())}>{t('Add eduroam / 802.1X')}</button>}
+        {api.wifiSyncNow ? <button onClick={syncNow}>{t('Sync now')}</button> : null}
         {api.wifiForget && (
-          <button onClick={() => void run(() => api.wifiForget!(), "Removed MeshDrop's Wi-Fi suggestions")}>Remove suggestions</button>
+          <button onClick={() => void run(() => api.wifiForget!(), t("Removed MeshDrop's Wi-Fi suggestions"))}>{t('Remove suggestions')}</button>
         )}
       </div>
       <p className="muted hint">
         {canEdit
-          ? 'Saved networks are stored and synced to your own trusted devices, passwords included, over the encrypted link. To join one, use Copy password or Show QR and connect from Android; only a band-locked network is connected by MeshDrop itself. Sync now pulls in networks you added on another device; Remove suggestions clears the band-lock connections MeshDrop registered (your saved networks stay).'
-          : 'These networks sync from your phone over the encrypted link, passwords included. To join one here, use Copy password or Show QR and connect from your system Wi-Fi settings — MeshDrop does not connect for you. Sync now pulls in the latest from your other devices.'}
+          ? t('Saved networks are stored and synced to your own trusted devices, passwords included, over the encrypted link. To join one, use Copy password or Show QR and connect from Android; only a band-locked network is connected by MeshDrop itself. Sync now pulls in networks you added on another device; Remove suggestions clears the band-lock connections MeshDrop registered (your saved networks stay).')
+          : t('These networks sync from your phone over the encrypted link, passwords included. To join one here, use Copy password or Show QR and connect from your system Wi-Fi settings — MeshDrop does not connect for you. Sync now pulls in the latest from your other devices.')}
       </p>
       </>
       )}

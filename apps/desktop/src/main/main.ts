@@ -25,6 +25,7 @@ import { bluezPlatform } from './bluetooth.ts';
 import { CLIP_HELPER_ENV, ClipReader, runClipHelper } from './cliphelper.ts';
 import { NetMan, run as nmRun } from './netman.ts';
 import { loadAddons } from './addons.ts';
+import { loadLangFile, setLangTable, t } from './i18n.ts';
 
 const execFileP = promisify(execFile);
 const TEST = process.env.MESHDROP_TEST === '1';
@@ -104,7 +105,7 @@ function showPicker(): void {
     picker.focus();
     return;
   }
-  picker = makeWindow({ width: 380, height: 460, title: 'Send clipboard', alwaysOnTop: true, resizable: false, minimizable: false, maximizable: false, skipTaskbar: true }, 'picker');
+  picker = makeWindow({ width: 380, height: 460, title: t('Send clipboard'), alwaysOnTop: true, resizable: false, minimizable: false, maximizable: false, skipTaskbar: true }, 'picker');
   picker.on('closed', () => {
     picker = null;
   });
@@ -126,16 +127,16 @@ function rebuildTray(): void {
   const receiving = controller?.receiving ?? true;
   tray.setContextMenu(
     Menu.buildFromTemplate([
-      { label: 'Open MeshDrop', click: showMain },
-      { label: 'Send clipboard…', click: showPicker },
+      { label: t('Open MeshDrop'), click: showMain },
+      { label: t('Send clipboard…'), click: showPicker },
       { type: 'separator' },
       {
-        label: receiving ? 'Pause receiving' : 'Resume receiving',
+        label: receiving ? t('Pause receiving') : t('Resume receiving'),
         enabled: st?.mode === 'serving' && st.error === undefined,
         click: () => void controller?.setReceiving(!receiving).finally(rebuildTray),
       },
       { type: 'separator' },
-      { label: 'Quit', click: quit },
+      { label: t('Quit'), click: quit },
     ]),
   );
 }
@@ -262,7 +263,7 @@ const platform: Platform = {
   ...(WIN ? {} : mediaPlatform()),
   openWindow: (url) => {
     // the watch-party player: an ordinary web page in its own window (no app powers)
-    const w = new BrowserWindow({ width: 1280, height: 800, title: 'Watch party', autoHideMenuBar: true, webPreferences: { contextIsolation: true, sandbox: true, nodeIntegration: false } });
+    const w = new BrowserWindow({ width: 1280, height: 800, title: t('Watch party'), autoHideMenuBar: true, webPreferences: { contextIsolation: true, sandbox: true, nodeIntegration: false } });
     w.webContents.setWindowOpenHandler(({ url: u }) => {
       if (/^https:\/\//.test(u)) void shell.openExternal(u);
       return { action: 'deny' };
@@ -396,6 +397,10 @@ function wireIpc(): void {
     });
   };
   handle('getState', (_e) => ctl().state());
+  handle('setLang', (_e, table) => {
+    setLangTable(table);
+    rebuildTray();
+  });
   handle('pickFiles', async (e) => {
     if (TEST && picked) {
       const p = picked;
@@ -631,6 +636,7 @@ if (CLIP_HELPER) {
     const over: Partial<Settings> = {};
     if (process.env.MESHDROP_INBOX) over.inbox = process.env.MESHDROP_INBOX;
     settings = new SettingsStore(join(HOME, 'desktop-settings.json'), defaultSettings(over));
+    loadLangFile(join(HOME, 'lang.json'));
     if (process.env.MESHDROP_PORT !== undefined) settings.set({ port: Number(process.env.MESHDROP_PORT) });
     wireIpc();
     createTray();

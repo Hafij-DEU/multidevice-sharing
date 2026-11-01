@@ -2,9 +2,10 @@ import type { CSSProperties } from 'react';
 import type { DeviceStatus, DeviceView } from '../../shared/api.ts';
 import { Battery } from './HubBanner.tsx';
 import { Peer } from './Peer.tsx';
+import { mark, t } from '../i18n.ts';
 
-const REACH: Record<DeviceView['reach'], string> = { lan: 'On this network', bt: 'Over Bluetooth', hub: 'Via hub', offline: 'Offline' };
-const ROLE: Record<DeviceView['role'], string> = { hub: 'Hub', member: 'Mesh member', paired: 'Paired', nearby: 'Nearby', localsend: 'LocalSend', addon: 'Add-on' };
+const REACH: Record<DeviceView['reach'], string> = { lan: mark('On this network'), bt: mark('Over Bluetooth'), hub: mark('Via hub'), offline: mark('Offline') };
+const ROLE: Record<DeviceView['role'], string> = { hub: mark('Hub'), member: mark('Mesh member'), paired: mark('Paired'), nearby: mark('Nearby'), localsend: mark('LocalSend'), addon: mark('Add-on') };
 
 /** A stable hue per device, so each one keeps its color everywhere. */
 function hueOf(id: string): number {
@@ -25,9 +26,9 @@ export function DeviceCard({ d, checked, disabled, onToggle, onPair, status }: {
       </span>
       <span className="device-main">
         <Peer text={d.alias} className="device-alias" />
-        <span className="device-sub" title={`${d.transport ?? ROLE[d.role]} · ${d.deviceId.slice(0, 8)}`}>
+        <span className="device-sub" title={`${d.transport ?? t(ROLE[d.role])} · ${d.deviceId.slice(0, 8)}`}>
           <span className={`dot reach-${d.reach}`} aria-hidden="true" />
-          {REACH[d.reach]} · {d.transport ?? ROLE[d.role]}
+          {t(REACH[d.reach])} · {d.transport ?? t(ROLE[d.role])}
           {status?.battery && d.reach !== 'offline' && (
             <>
               {' · '}
@@ -38,7 +39,7 @@ export function DeviceCard({ d, checked, disabled, onToggle, onPair, status }: {
       </span>
       {onPair && (
         <button type="button" className="primary" onClick={onPair}>
-          Pair
+          {t('Pair')}
         </button>
       )}
     </Card>

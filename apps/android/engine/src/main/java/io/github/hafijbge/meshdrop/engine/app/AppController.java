@@ -510,8 +510,8 @@ public final class AppController {
             else if (ev.source.equals("guest")) onGuest(ev);
             else if (ev.source.equals("sync") && ev.type.equals("round") && ev.data.get("conflicts") instanceof Long && (Long) ev.data.get("conflicts") > 0
                     && settings.get().notifications) {
-                platform.notify("Sync conflict", "A file in \"" + ev.data.get("folder") + "\" changed on both " + aliasOf((String) ev.data.get("partner"))
-                        + " and this phone. Both versions are kept: look for \"(conflict from …)\".", null);
+                platform.notify(Tr.t("Sync conflict"), Tr.t("A file in \"{folder}\" changed on both {name} and this phone. Both versions are kept: look for \"(conflict from …)\".",
+                        "folder", ev.data.get("folder"), "name", aliasOf((String) ev.data.get("partner"))), null);
             }
         } catch (RuntimeException ignored) {
             // never let a bookkeeping error break the engine thread
@@ -526,10 +526,12 @@ public final class AppController {
         if (ev.type.equals("offer") && s.notifications) {
             List<Object> files = (List<Object>) ev.data.get("files");
             int n = files == null ? 0 : files.size();
-            String what = n > 0 ? n + " file" + (n == 1 ? "" : "s") + (ev.data.get("text") != null ? " and a message" : "") : "a message";
-            platform.notify("A guest wants to send", what + ": open MeshDrop to accept or decline.", null);
+            boolean msg = ev.data.get("text") != null;
+            String what = n == 0 ? Tr.t("A message") : n == 1 ? (msg ? Tr.t("1 file and a message") : Tr.t("1 file"))
+                    : msg ? Tr.t("{n} files and a message", "n", n) : Tr.t("{n} files", "n", n);
+            platform.notify(Tr.t("A guest wants to send"), Tr.t("{what}: open MeshDrop to accept or decline.", "what", what), null);
         }
-        if (ev.type.equals("failed") && s.notifications) platform.notify("A guest send could not be saved", "The files were uploaded but could not be saved (" + ev.data.get("error") + ").", null);
+        if (ev.type.equals("failed") && s.notifications) platform.notify(Tr.t("A guest send could not be saved"), Tr.t("The files were uploaded but could not be saved ({error}).", "error", ev.data.get("error")), null);
         if (ev.type.equals("received")) {
             List<String> files = new ArrayList<>();
             for (Object f : (List<Object>) ev.data.get("files")) files.add((String) f);
@@ -538,7 +540,7 @@ public final class AppController {
             } catch (IOException ignored) {
                 // the files are in the inbox either way
             }
-            if (s.notifications) platform.notify("From a guest", files.size() + " file" + (files.size() == 1 ? "" : "s") + " received", files.isEmpty() ? null : files.get(0));
+            if (s.notifications) platform.notify(Tr.t("From a guest"), files.size() == 1 ? Tr.t("1 file received") : Tr.t("{n} files received", "n", files.size()), files.isEmpty() ? null : files.get(0));
         }
     }
 
@@ -546,10 +548,11 @@ public final class AppController {
         if (ev.type.equals("held-delivered") || ev.type.equals("held-failed")) refreshOutbox();
         if (!settings.get().notifications) return;
         Object to = ev.data.get("to");
-        String who = to instanceof String ? aliasOf((String) to) : "a device";
-        if (ev.type.equals("held-delivered")) platform.notify("Delivered", "The hub delivered your files to " + who + ".", null);
-        else if (ev.type.equals("held-failed")) platform.notify("Delivery failed", "The hub could not deliver your files to " + who + (ev.data.get("error") != null ? " (" + ev.data.get("error") + ")" : "") + ".", null);
-        else if (ev.type.equals("revoked")) platform.notify("Removed from the mesh", "The hub removed this device from the mesh.", null);
+        String who = to instanceof String ? aliasOf((String) to) : Tr.t("a device");
+        if (ev.type.equals("held-delivered")) platform.notify(Tr.t("Delivered"), Tr.t("The hub delivered your files to {name}.", "name", who), null);
+        else if (ev.type.equals("held-failed")) platform.notify(Tr.t("Delivery failed"), ev.data.get("error") != null ? Tr.t("The hub could not deliver your files to {name} ({error}).", "name", who, "error", ev.data.get("error"))
+                : Tr.t("The hub could not deliver your files to {name}.", "name", who), null);
+        else if (ev.type.equals("revoked")) platform.notify(Tr.t("Removed from the mesh"), Tr.t("The hub removed this device from the mesh."), null);
     }
 
     /** The outgoing row of an event: by the send()'s tag, else by session (a resume gets a row on its first progress). */
@@ -696,18 +699,20 @@ public final class AppController {
         }
         if (!s.notifications) return;
         if (clipboard) {
-            platform.notify("Clipboard", s.clipboardReceive ? "Copied text from " + alias : "Text from " + alias + " (see Inbox)", null);
+            platform.notify(Tr.t("Clipboard"), s.clipboardReceive ? Tr.t("Copied text from {name}", "name", alias) : Tr.t("Text from {name} (see Inbox)", "name", alias), null);
             return;
         }
         if (clipboardFiles) {
-            String what = fs.size() == 1 ? "a file" : fs.size() + " files";
-            platform.notify("Clipboard", s.clipboardReceive ? "Copied " + what + " from " + alias + ": paste it anywhere" : what + " from " + alias + " (see Received)", null);
+            String what = fs.size() == 1 ? Tr.t("a file") : Tr.t("{n} files", "n", fs.size());
+            platform.notify(Tr.t("Clipboard"), s.clipboardReceive ? Tr.t("Copied {what} from {name}: paste it anywhere", "what", what, "name", alias)
+                    : Tr.t("{what} from {name} (see Received)", "what", what, "name", alias), null);
             return;
         }
         int n = fs.size();
-        String body = n > 0 ? n + " file" + (n == 1 ? "" : "s") + " received" + (text != null ? " with a message" : "")
-                : "Text: " + (text == null ? "" : text.length() > 120 ? text.substring(0, 120) : text);
-        platform.notify("From " + alias, body, n > 0 ? fs.get(0) : null);
+        String body = n == 0 ? Tr.t("Text: {text}", "text", text == null ? "" : text.length() > 120 ? text.substring(0, 120) : text)
+                : n == 1 ? (text != null ? Tr.t("1 file received with a message") : Tr.t("1 file received"))
+                : text != null ? Tr.t("{n} files received with a message", "n", n) : Tr.t("{n} files received", "n", n);
+        platform.notify(Tr.t("From {name}", "name", alias), body, n > 0 ? fs.get(0) : null);
     }
 
     // ---- actions --------------------------------------------------------------------------------
@@ -1183,7 +1188,7 @@ public final class AppController {
                 if (Boolean.TRUE.equals(j.get("print"))) opts.put("print", true);
                 send(j.get("targets"), asItems(j.get("items")), opts);
             } catch (Exception x) {
-                if (settings.get().notifications) platform.notify("Scheduled send failed", String.valueOf(x.getMessage()), null);
+                if (settings.get().notifications) platform.notify(Tr.t("Scheduled send failed"), String.valueOf(x.getMessage()), null);
             }
             changed();
         }
@@ -1309,7 +1314,7 @@ public final class AppController {
                 }
             }
             if (any) {
-                if (settings.get().notifications) platform.notify("Opened", aliasOf(peer) + " opened what you sent.", null);
+                if (settings.get().notifications) platform.notify(Tr.t("Opened"), Tr.t("{name} opened what you sent.", "name", aliasOf(peer)), null);
                 changed();
             }
             body.put("ok", true);
@@ -1337,7 +1342,7 @@ public final class AppController {
                 o.put("hosts", hosts);
                 hotspotOffer = o;
                 changed();
-                if (settings.get().notifications) platform.notify((who == null || who.isEmpty() ? "A device" : who) + " shares a hotspot", "Settings → No Wi-Fi: join " + ssid + ".", null);
+                if (settings.get().notifications) platform.notify(Tr.t("{name} shares a hotspot", "name", who == null || who.isEmpty() ? Tr.t("A device") : who), Tr.t("Settings → No Wi-Fi: join {network}.", "network", ssid), null);
                 body.put("ok", true);
             }
         } else if ("play-sound".equals(kind)) {

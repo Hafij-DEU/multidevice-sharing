@@ -1,4 +1,5 @@
 import type { AppState } from '../../shared/api.ts';
+import { t } from '../i18n.ts';
 import { Peer } from './Peer.tsx';
 
 /** The gradient card on top of Home and Send: this device, its mesh, and who is online (with battery). */
@@ -8,14 +9,14 @@ export function HubBanner({ state }: { state: AppState }) {
   const hub = state.hub;
   const hubLine =
     hub.role === 'none'
-      ? 'No mesh: devices reach each other on this network'
+      ? t('No mesh: devices reach each other on this network')
       : hub.role === 'hub'
-        ? 'This is the hub of your mesh'
+        ? t('This is the hub of your mesh')
         : hub.online
           ? hub.linkedTo === 'relay'
-            ? 'Linked through a relay hub (the hub PC is away)'
-            : 'Linked to your hub'
-          : 'Hub not reachable: sends wait until it is';
+            ? t('Linked through a relay hub (the hub PC is away)')
+            : t('Linked to your hub')
+          : t('Hub not reachable: sends wait until it is');
   return (
     <div className="hub-banner">
       <span className="hub-icon" aria-hidden="true">
@@ -32,7 +33,7 @@ export function HubBanner({ state }: { state: AppState }) {
       <div className="hub-pills">
         <span className="pill">
           <span className="live" aria-hidden="true" />
-          {online.length} / {trusted.length} device{trusted.length === 1 ? '' : 's'} online
+          {trusted.length === 1 ? t('{online} / {total} device online', { online: online.length, total: trusted.length }) : t('{online} / {total} devices online', { online: online.length, total: trusted.length })}
         </span>
         {online.slice(0, 6).map((d) => {
           const b = state.deviceStatus?.[d.deviceId]?.battery;
@@ -51,7 +52,7 @@ export function HubBanner({ state }: { state: AppState }) {
 /** A small battery glyph and its level. */
 export function Battery({ level, charging }: { level: number; charging: boolean }) {
   return (
-    <span className={`batt${level <= 15 ? ' low' : ''}`} title={charging ? 'Charging' : undefined}>
+    <span className={`batt${level <= 15 ? ' low' : ''}`} title={charging ? t('Charging') : undefined}>
       <svg aria-hidden="true" viewBox="0 0 10 16">
         <rect x="1" y="2" width="8" height="13" rx="1.6" fill="none" stroke="currentColor" strokeWidth="1.3" />
         <rect x="3.5" y="0.3" width="3" height="1.7" rx="0.5" fill="currentColor" />

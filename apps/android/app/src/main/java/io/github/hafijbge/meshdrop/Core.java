@@ -23,6 +23,7 @@ public final class Core {
     Core(Context ctx) {
         this.app = ctx.getApplicationContext();
         this.home = new File(app.getFilesDir(), "meshdrop");
+        io.github.hafijbge.meshdrop.engine.app.Tr.load(new File(home, "lang.json")); // notifications before the page loads
         this.platform = new AndroidPlatform(app);
         SettingsStore settings = new SettingsStore(new File(home, "android-settings.json"), Settings.defaults(Build.MODEL == null ? "Android" : Build.MODEL));
         HistoryStore history = new HistoryStore(new File(home, "desktop-history.json"));

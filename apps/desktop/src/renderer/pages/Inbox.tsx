@@ -3,6 +3,7 @@ import type { AppState, ReceivedRecord } from '../../shared/api.ts';
 import { Peer } from '../components/Peer.tsx';
 import { baseName, fmtTime } from '../format.ts';
 import type { Run } from '../App.tsx';
+import { t } from '../i18n.ts';
 
 const SHOWN = 5;
 const MEDIA = /\.(png|jpe?g|webp|gif|bmp|heic|mp4|mkv|webm|mov|avi|3gp)$/i;
@@ -16,9 +17,9 @@ function Thumb({ path, onOpen }: { path: string; onOpen: () => void }) {
     if (!media || thumbs.has(path)) return;
     let live = true;
     window.meshdrop.thumb(path).then(
-      (t) => {
-        thumbs.set(path, t);
-        if (live) setSrc(t);
+      (th) => {
+        thumbs.set(path, th);
+        if (live) setSrc(th);
       },
       () => thumbs.set(path, null),
     );
@@ -28,7 +29,7 @@ function Thumb({ path, onOpen }: { path: string; onOpen: () => void }) {
   }, [path, media]);
   if (!src) return null;
   return (
-    <button className="thumb-btn" onClick={onOpen} aria-label={`Open ${baseName(path)}`}>
+    <button className="thumb-btn" onClick={onOpen} aria-label={t('Open {name}', { name: baseName(path) })}>
       <img className="thumb" src={src} alt="" />
     </button>
   );
@@ -37,29 +38,29 @@ function Thumb({ path, onOpen }: { path: string; onOpen: () => void }) {
 function Record({ r, run, android }: { r: ReceivedRecord; run: Run; android: boolean }) {
   const more = r.files.length - SHOWN;
   const [deleting, setDeleting] = useState(false);
-  const del = (files: boolean) => void run(() => window.meshdrop.receivedDelete(r.at, r.from, files), files ? 'Deleted' : 'Removed from the list');
+  const del = (files: boolean) => void run(() => window.meshdrop.receivedDelete(r.at, r.from, files), files ? t('Deleted') : t('Removed from the list'));
   return (
     <li className={`record${r.pinned ? ' pinned' : ''}`}>
       <div className="row space">
         <span>
-          {r.pinned && <span className="badge pin-badge">Pinned</span>}
-          From <Peer text={r.alias} /> <span className="muted">· {fmtTime(r.at)}</span>
-          {r.clipboard && <span className="badge">Clipboard</span>}
+          {r.pinned && <span className="badge pin-badge">{t('Pinned')}</span>}
+          {t('From')} <Peer text={r.alias} /> <span className="muted">· {fmtTime(r.at)}</span>
+          {r.clipboard && <span className="badge">{t('Clipboard')}</span>}
           {r.burn && !r.burned && (
-            <span className="badge burn" title="Burn after reading">
-              🔥 {r.burnAt ? `deleted ${fmtTime(r.burnAt)}` : 'deleted 5 min after you open it'}
+            <span className="badge burn" title={t('Burn after reading')}>
+              🔥 {r.burnAt ? t('deleted {time}', { time: fmtTime(r.burnAt) }) : t('deleted 5 min after you open it')}
             </span>
           )}
-          {r.burned && <span className="badge">Deleted after reading</span>}
+          {r.burned && <span className="badge">{t('Deleted after reading')}</span>}
         </span>
         <span className="record-actions">
-          {r.files.length > 0 && <span className="muted">{r.files.length} file{r.files.length === 1 ? '' : 's'}</span>}
-          <button className="icon-btn small" aria-pressed={!!r.pinned} aria-label={r.pinned ? 'Unpin' : 'Pin'} title={r.pinned ? 'Unpin' : 'Pin to the top'} onClick={() => void run(() => window.meshdrop.receivedPin(r.at, r.from, !r.pinned))}>
+          {r.files.length > 0 && <span className="muted">{r.files.length === 1 ? t('1 file') : t('{n} files', { n: r.files.length })}</span>}
+          <button className="icon-btn small" aria-pressed={!!r.pinned} aria-label={r.pinned ? t('Unpin') : t('Pin')} title={r.pinned ? t('Unpin') : t('Pin to the top')} onClick={() => void run(() => window.meshdrop.receivedPin(r.at, r.from, !r.pinned))}>
             <svg aria-hidden="true" viewBox="0 0 24 24" fill={r.pinned ? 'currentColor' : 'none'} stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <path d="M12 17v5M9 3h6l-1 7 4 3v2H6v-2l4-3z" />
             </svg>
           </button>
-          <button className="icon-btn small" aria-label="Delete" title="Delete" onClick={() => setDeleting(!deleting)}>
+          <button className="icon-btn small" aria-label={t('Delete')} title={t('Delete')} onClick={() => setDeleting(!deleting)}>
             <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6M10 11v6M14 11v6" />
             </svg>
@@ -67,15 +68,15 @@ function Record({ r, run, android }: { r: ReceivedRecord; run: Run; android: boo
         </span>
       </div>
       {deleting && (
-        <div className="row delete-ask" role="group" aria-label="Delete">
+        <div className="row delete-ask" role="group" aria-label={t('Delete')}>
           {r.files.length > 0 && (
             <button className="danger" onClick={() => del(true)}>
-              Delete the file{r.files.length === 1 ? '' : 's'}
+              {r.files.length === 1 ? t('Delete the file') : t('Delete the files')}
             </button>
           )}
-          <button onClick={() => del(false)}>{r.files.length > 0 ? 'Only remove from the list' : 'Remove from the list'}</button>
+          <button onClick={() => del(false)}>{r.files.length > 0 ? t('Only remove from the list') : t('Remove from the list')}</button>
           <button className="link" onClick={() => setDeleting(false)}>
-            Cancel
+            {t('Cancel')}
           </button>
         </div>
       )}
@@ -89,12 +90,12 @@ function Record({ r, run, android }: { r: ReceivedRecord; run: Run; android: boo
               </button>
               {!android && (
                 <button className="link" onClick={() => void run(() => window.meshdrop.reveal(f))}>
-                  Show in folder
+                  {t('Show in folder')}
                 </button>
               )}
             </li>
           ))}
-          {more > 0 && <li className="muted">and {more} more</li>}
+          {more > 0 && <li className="muted">{t('and {n} more', { n: more })}</li>}
         </ul>
       )}
       {r.text !== undefined && (
@@ -102,7 +103,7 @@ function Record({ r, run, android }: { r: ReceivedRecord; run: Run; android: boo
           <pre dir="auto" className="peer">
             {r.text}
           </pre>
-          <button onClick={() => void run(() => navigator.clipboard.writeText(r.text!), 'Copied')}>Copy</button>
+          <button onClick={() => void run(() => navigator.clipboard.writeText(r.text!), t('Copied'))}>{t('Copy')}</button>
         </div>
       )}
     </li>
@@ -118,10 +119,10 @@ export function Inbox({ state, run }: { state: AppState; run: Run }) {
     <section>
       <div className="row space">
         <p className="muted">
-          Saved in <code>{state.settings.inbox}</code>
+          {t('Saved in')} <code>{state.settings.inbox}</code>
         </p>
         <span className="row">
-          <button onClick={() => void run(() => window.meshdrop.openInbox())}>Open folder</button>
+          <button onClick={() => void run(() => window.meshdrop.openInbox())}>{t('Open folder')}</button>
           {unpinned > 0 && (
             <button
               className={clearing ? 'danger' : ''}
@@ -129,16 +130,16 @@ export function Inbox({ state, run }: { state: AppState; run: Run }) {
               onClick={() => {
                 if (!clearing) return setClearing(true);
                 setClearing(false);
-                void run(() => window.meshdrop.receivedClear(), 'History cleared (pinned items and the files stay)');
+                void run(() => window.meshdrop.receivedClear(), t('History cleared (pinned items and the files stay)'));
               }}
             >
-              {clearing ? 'Tap again to clear' : 'Clear history'}
+              {clearing ? t('Tap again to clear') : t('Clear history')}
             </button>
           )}
         </span>
       </div>
       {state.received.length === 0 ? (
-        <p className="muted">Nothing received yet.</p>
+        <p className="muted">{t('Nothing received yet.')}</p>
       ) : (
         <ul className="list">
           {list.map((r) => (

@@ -1,5 +1,6 @@
 package io.github.hafijbge.meshdrop;
 
+import io.github.hafijbge.meshdrop.engine.app.Tr;
 import android.Manifest;
 import android.app.Activity;
 import android.content.Intent;
@@ -60,7 +61,7 @@ public final class ScannerActivity extends Activity {
         preview = new TextureView(this);
         root.addView(preview, new FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
         TextView hint = new TextView(this);
-        hint.setText("Point at the QR code on your PC (MeshDrop → Mesh → Invite a device)");
+        hint.setText(Tr.t("Point at the QR code on your PC (MeshDrop → Mesh → Invite a device)"));
         hint.setTextColor(0xffffffff);
         hint.setBackgroundColor(0x99000000);
         hint.setPadding(32, 24, 32, 24);

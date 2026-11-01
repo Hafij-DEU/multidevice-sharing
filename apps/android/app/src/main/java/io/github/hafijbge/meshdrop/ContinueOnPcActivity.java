@@ -1,5 +1,6 @@
 package io.github.hafijbge.meshdrop;
 
+import io.github.hafijbge.meshdrop.engine.app.Tr;
 import android.app.Activity;
 import android.content.ComponentName;
 import android.content.Intent;
@@ -26,7 +27,7 @@ public final class ContinueOnPcActivity extends Activity {
         CharSequence text = getIntent().getCharSequenceExtra(Intent.EXTRA_TEXT);
         Matcher m = URL.matcher(text == null ? "" : text);
         if (!m.find()) {
-            Toast.makeText(this, "Share a link to continue it on the PC.", Toast.LENGTH_SHORT).show();
+            Toast.makeText(this, Tr.t("Share a link to continue it on the PC."), Toast.LENGTH_SHORT).show();
             finish();
             return;
         }
@@ -37,9 +38,11 @@ public final class ContinueOnPcActivity extends Activity {
             String msg;
             try {
                 core.ensureStarted();
-                msg = "Opening on " + core.controller.handoffPush(url, time) + (time > 0 ? " at " + time / 60 + ":" + String.format(java.util.Locale.ROOT, "%02d", time % 60) : "");
+                String pc = core.controller.handoffPush(url, time);
+                msg = time > 0 ? Tr.t("Opening on {name} at {time}", "name", pc, "time", time / 60 + ":" + String.format(java.util.Locale.ROOT, "%02d", time % 60))
+                        : Tr.t("Opening on {name}", "name", pc);
             } catch (Exception e) {
-                msg = e.getMessage() == null ? "Could not reach the PC." : e.getMessage();
+                msg = e.getMessage() == null ? Tr.t("Could not reach the PC.") : e.getMessage();
             }
             String shown = msg;
             runOnUiThread(() -> Toast.makeText(getApplicationContext(), shown, Toast.LENGTH_SHORT).show());

@@ -1,5 +1,6 @@
 package io.github.hafijbge.meshdrop;
 
+import io.github.hafijbge.meshdrop.engine.app.Tr;
 import android.app.Notification;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
@@ -137,12 +138,12 @@ public final class MeshService extends Service {
         return new Notification.Builder(this, CHANNEL)
                 .setSmallIcon(R.drawable.ic_notify)
                 .setContentTitle("MeshDrop")
-                .setContentText(receiving ? "Ready to receive on this network" : "Receiving paused")
+                .setContentText(receiving ? Tr.t("Ready to receive on this network") : Tr.t("Receiving paused"))
                 .setContentIntent(open)
                 .setOngoing(true)
                 .setShowWhen(false)
-                .addAction(new Notification.Action.Builder(null, "Send clipboard", clip).build())
-                .addAction(new Notification.Action.Builder(null, receiving ? "Pause receiving" : "Resume", pause).build())
+                .addAction(new Notification.Action.Builder(null, Tr.t("Send clipboard"), clip).build())
+                .addAction(new Notification.Action.Builder(null, receiving ? Tr.t("Pause receiving") : Tr.t("Resume"), pause).build())
                 .build();
     }
 

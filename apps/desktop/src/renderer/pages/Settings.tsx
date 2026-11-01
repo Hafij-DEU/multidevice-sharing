@@ -1,27 +1,21 @@
-import { useState, type ReactNode } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import type { AppState, Settings as S } from '../../shared/api.ts';
 import type { Run } from '../App.tsx';
 import { QrShareSwitch } from './QrShare.tsx';
-import { PALETTES, palette, setPalette, setThemeChoice, themeChoice, type Palette, type ThemeChoice } from '../theme.ts';
+import { LANGS, langChoice, mark, setLangChoice, t, type Lang, type LangChoice } from '../i18n.ts';
+import { PALETTES, THEMES, onThemeChange, palette, setPalette, setThemeChoice, themeChoice, type Palette } from '../theme.ts';
 
 const DEFAULT_BINDING = '<Primary><Alt>c';
 /** Windows: MeshDrop holds the shortcut itself (GNOME keeps it in its settings on Linux). */
 const WINDOWS = /Windows NT/.test(navigator.userAgent);
-const THEMES: [ThemeChoice, string][] = [
-  ['system', 'System'],
-  ['light', 'Light'],
-  ['dark', 'Dark'],
-  ['midnight', 'Midnight'],
-  ['black', 'Black'],
-];
-
 /** Appearance: kept on this device, applied at once. */
 function Theme() {
   const [choice, setChoice] = useState(themeChoice);
+  useEffect(() => onThemeChange(() => setChoice(themeChoice())), []);
   return (
     <div className="field">
-      <span>Theme</span>
-      <div className="segmented" role="radiogroup" aria-label="Theme">
+      <span>{t('Theme')}</span>
+      <div className="segmented" role="radiogroup" aria-label={t('Theme')}>
         {THEMES.map(([v, label]) => (
           <button
             key={v}
@@ -33,7 +27,7 @@ function Theme() {
               setChoice(v);
             }}
           >
-            {label}
+            {t(label)}
           </button>
         ))}
       </div>
@@ -41,14 +35,40 @@ function Theme() {
   );
 }
 
+/** Language: kept on this device; the app redraws in it at once. Names stay in their own language. */
+function Language() {
+  const [choice, setChoice] = useState(langChoice);
+  return (
+    <label className="field">
+      <span>{t('Language')}</span>
+      <select
+        aria-label={t('Language')}
+        value={choice}
+        onChange={(e) => {
+          const v = e.target.value as LangChoice;
+          setChoice(v);
+          void setLangChoice(v);
+        }}
+      >
+        <option value="system">{t('System')}</option>
+        {(Object.keys(LANGS) as Lang[]).map((l) => (
+          <option key={l} value={l} lang={l}>
+            {LANGS[l]}
+          </option>
+        ))}
+      </select>
+    </label>
+  );
+}
+
 const PALETTE_NAME: Record<Palette, string> = {
-  aurora: 'Aurora',
-  ocean: 'Ocean',
-  sunset: 'Sunset',
-  forest: 'Forest',
-  candy: 'Candy',
-  neon: 'Neon',
-  graphite: 'Graphite',
+  aurora: mark('Aurora'),
+  ocean: mark('Ocean'),
+  sunset: mark('Sunset'),
+  forest: mark('Forest'),
+  candy: mark('Candy'),
+  neon: mark('Neon'),
+  graphite: mark('Graphite'),
 };
 
 /** Colours: one swatch per palette, kept on this device, applied at once. */
@@ -56,8 +76,8 @@ function Colours() {
   const [choice, setChoice] = useState(palette);
   return (
     <div className="field">
-      <span>Colours</span>
-      <div className="swatches" role="radiogroup" aria-label="Colours">
+      <span>{t('Colours')}</span>
+      <div className="swatches" role="radiogroup" aria-label={t('Colours')}>
         {PALETTES.map((p) => (
           <button
             key={p}
@@ -71,7 +91,7 @@ function Colours() {
             }}
           >
             <span className="swatch-chip" aria-hidden="true" />
-            {PALETTE_NAME[p]}
+            {t(PALETTE_NAME[p])}
           </button>
         ))}
       </div>
@@ -80,23 +100,23 @@ function Colours() {
 }
 
 const SWITCHES: [keyof S, string][] = [
-  ['discovery', 'Find devices on this network automatically'],
-  ['clipboardReceive', 'Put received clipboard text on my clipboard'],
-  ['clipboardSync', 'Shared clipboard: text I copy goes to my online devices'],
-  ['notifications', 'Show notifications'],
-  ['closeToTray', 'Keep running in the tray when the window is closed'],
-  ['autostart', 'Start MeshDrop when I log in'],
-  ['startHidden', 'Start in the tray (no window)'],
-  ['sortInbox', 'Smart inbox: put received files in Images, Videos, Audio, Documents, Archives or Other'],
-  ['sendReceipts', 'Read receipts: tell the sender when I open what it sent'],
-  ['printFromDevices', 'Print files my devices send with "Print on PC"'],
+  ['discovery', mark('Find devices on this network automatically')],
+  ['clipboardReceive', mark('Put received clipboard text on my clipboard')],
+  ['clipboardSync', mark('Shared clipboard: text I copy goes to my online devices')],
+  ['notifications', mark('Show notifications')],
+  ['closeToTray', mark('Keep running in the tray when the window is closed')],
+  ['autostart', mark('Start MeshDrop when I log in')],
+  ['startHidden', mark('Start in the tray (no window)')],
+  ['sortInbox', mark('Smart inbox: put received files in Images, Videos, Audio, Documents, Archives or Other')],
+  ['sendReceipts', mark('Read receipts: tell the sender when I open what it sent')],
+  ['printFromDevices', mark('Print files my devices send with "Print on PC"')],
 ];
 
 /** M14 No Wi-Fi switches, shown in their own section. */
 const NO_WIFI: [keyof S, string][] = [
-  ['bluetooth', 'Use Bluetooth when there is no shared network'],
-  ['allBluetooth', 'Everything over Bluetooth (even on the same network)'],
-  ['tetherNoData', "When MeshDrop joins a phone's hotspot, never use the phone's mobile data"],
+  ['bluetooth', mark('Use Bluetooth when there is no shared network')],
+  ['allBluetooth', mark('Everything over Bluetooth (even on the same network)')],
+  ['tetherNoData', mark("When MeshDrop joins a phone's hotspot, never use the phone's mobile data")],
 ];
 
 const DESKTOP_ONLY: (keyof S)[] = ['autostart', 'startHidden', 'closeToTray', 'printFromDevices', 'sortInbox', 'tetherNoData'];
@@ -106,8 +126,8 @@ function KeepAlive({ state, run }: { state: AppState; run: Run }) {
   if (!k) return null;
   return (
     <>
-      <h2>Keep MeshDrop alive</h2>
-      <p className="muted">Phones stop apps in the background to save battery. These steps keep MeshDrop reachable.</p>
+      <h2>{t('Keep MeshDrop alive')}</h2>
+      <p className="muted">{t('Phones stop apps in the background to save battery. These steps keep MeshDrop reachable.')}</p>
       <ul className="list">
         {k.steps.map((s) => (
           <li key={s.id} className="row space">
@@ -116,7 +136,7 @@ function KeepAlive({ state, run }: { state: AppState; run: Run }) {
               {s.label}
             </span>
             {!s.done && window.meshdrop.keepAliveAction && (
-              <button onClick={() => void run(() => window.meshdrop.keepAliveAction!(s.id))}>Open</button>
+              <button onClick={() => void run(() => window.meshdrop.keepAliveAction!(s.id))}>{t('Open')}</button>
             )}
           </li>
         ))}
@@ -129,25 +149,29 @@ function KeepAlive({ state, run }: { state: AppState; run: Run }) {
 function NoWifiHelp({ android }: { android: boolean }) {
   return (
     <details className="help">
-      <summary>How to connect with no Wi-Fi router</summary>
+      <summary>{t('How to connect with no Wi-Fi router')}</summary>
       <ul>
         <li>
-          <b>Bluetooth</b>: pair the devices once in the {android ? "phone's" : "system's"} Bluetooth settings. Paired MeshDrop devices then connect by
-          themselves when they share no network. Files, clipboard, remote control, media keys, notifications and sound work over Bluetooth; the camera needs
-          Wi-Fi. Choose Auto, Wi-Fi only or Bluetooth only per device under Paired devices.
+          <b>{t('Bluetooth')}</b>:{' '}
+          {android
+            ? t("pair the devices once in the phone's Bluetooth settings. Paired MeshDrop devices then connect by themselves when they share no network. Files, clipboard, remote control, media keys, notifications and sound work over Bluetooth; the camera needs Wi-Fi. Choose Auto, Wi-Fi only or Bluetooth only per device under Paired devices.")
+            : t("pair the devices once in the system's Bluetooth settings. Paired MeshDrop devices then connect by themselves when they share no network. Files, clipboard, remote control, media keys, notifications and sound work over Bluetooth; the camera needs Wi-Fi. Choose Auto, Wi-Fi only or Bluetooth only per device under Paired devices.")}
         </li>
         <li>
-          <b>Phone hotspot</b>: start a hotspot on a phone and join it from the other devices. MeshDrop finds them as on any network; if it does not,
-          add the device by its address (Send → Add a device).
+          <b>{t('Phone hotspot')}</b>:{' '}
+          {t('start a hotspot on a phone and join it from the other devices. MeshDrop finds them as on any network; if it does not, add the device by its address (Send → Add a device).')}
         </li>
         <li>
-          <b>USB tethering</b>: plug the phone into the PC and turn on Settings → Network → Hotspot &amp; tethering → USB tethering.{' '}
-          <b>Bluetooth tethering</b> works the same way over a paired phone. Both give a small network between the phone and the PC.
+          <b>{t('USB tethering')}</b>:{' '}
+          {t('plug the phone into the PC and turn on Settings → Network → Hotspot & tethering → USB tethering.')}{' '}
+          <b>{t('Bluetooth tethering')}</b>{' '}
+          {t('works the same way over a paired phone. Both give a small network between the phone and the PC.')}
         </li>
         {!android && (
           <li>
-            With "never use the phone's mobile data" on, this PC keeps its internet and DNS off a phone's hotspot that MeshDrop joined: MeshDrop works
-            over it, nothing else does. A hotspot or tether you join yourself works as usual.
+            {t(
+              'With "never use the phone\'s mobile data" on, this PC keeps its internet and DNS off a phone\'s hotspot that MeshDrop joined: MeshDrop works over it, nothing else does. A hotspot or tether you join yourself works as usual.',
+            )}
           </li>
         )}
       </ul>
@@ -178,56 +202,56 @@ function Hotspot({ state, run }: { state: AppState; run: Run }) {
   const offer = nw.offer;
   return (
     <>
-      {nw.guarded && nw.guarded.length > 0 && <p className="muted">Not using the phone's mobile data on: {nw.guarded.join(', ')}.</p>}
+      {nw.guarded && nw.guarded.length > 0 && <p className="muted">{t("Not using the phone's mobile data on: {list}.", { list: nw.guarded.join(', ') })}</p>}
       {ask && (
         <div className="sync-folder">
-          <p>This device's Wi-Fi is on "{ask.network}". It leaves that network until the hotspot is stopped.</p>
+          <p>{t('This device\'s Wi-Fi is on "{network}". It leaves that network until the hotspot is stopped.', { network: ask.network })}</p>
           <div className="row">
-            <button className="primary" onClick={() => { const go = ask.go; setAsk(null); void run(go); }}>Continue</button>
-            <button onClick={() => setAsk(null)}>Cancel</button>
+            <button className="primary" onClick={() => { const go = ask.go; setAsk(null); void run(go); }}>{t('Continue')}</button>
+            <button onClick={() => setAsk(null)}>{t('Cancel')}</button>
           </div>
         </div>
       )}
       {h?.role === 'host' && (
         <div className="sync-folder">
           <p>
-            Hotspot <b>{h.ssid}</b> is on. Password: <b>{h.psk}</b>
+            {t('Hotspot')} <b>{h.ssid}</b> {t('is on. Password:')} <b>{h.psk}</b>
           </p>
-          {h.qrSvg && <img className="qr" src={`data:image/svg+xml;base64,${btoa(h.qrSvg)}`} alt="Wi-Fi QR code" width={180} height={180} />}
-          <p className="muted">Devices linked over Bluetooth got the password and join on their own. Others scan the code or type it.</p>
-          <button onClick={() => void run(hotspotStop)}>Stop hotspot</button>
+          {h.qrSvg && <img className="qr" src={`data:image/svg+xml;base64,${btoa(h.qrSvg)}`} alt={t('Wi-Fi QR code')} width={180} height={180} />}
+          <p className="muted">{t('Devices linked over Bluetooth got the password and join on their own. Others scan the code or type it.')}</p>
+          <button onClick={() => void run(hotspotStop)}>{t('Stop hotspot')}</button>
         </div>
       )}
       {h?.role === 'joined' && (
         <div className="row space">
-          <span>On hotspot <b>{h.ssid}</b>.</span>
-          <button onClick={() => void run(hotspotStop)}>Leave</button>
+          <span>{t('On hotspot')} <b>{h.ssid}</b>.</span>
+          <button onClick={() => void run(hotspotStop)}>{t('Leave')}</button>
         </div>
       )}
       {!h && offer && (
         <div className="sync-folder">
           <p>
-            {offer.alias ?? 'A device'} shares hotspot <b>{offer.ssid}</b>.
+            {offer.alias ?? t('A device')} {t('shares hotspot')} <b>{offer.ssid}</b>.
           </p>
           {offer.error && <p className="error-text">{offer.error}</p>}
           <div className="row">
             <button className="primary" disabled={offer.joining} onClick={() => void leaving((leave) => hotspotJoin(offer.ssid, offer.psk, offer.hosts, leave))()}>
-              {offer.joining ? 'Joining…' : 'Join'}
+              {offer.joining ? t('Joining…') : t('Join')}
             </button>
-            <button onClick={() => void run(hotspotStop)}>Dismiss</button>
+            <button onClick={() => void run(hotspotStop)}>{t('Dismiss')}</button>
           </div>
         </div>
       )}
       {!h && (
         <>
           <div className="row">
-            <button onClick={() => void leaving((leave) => hotspotStart(leave))()}>Start a hotspot here</button>
+            <button onClick={() => void leaving((leave) => hotspotStart(leave))()}>{t('Start a hotspot here')}</button>
           </div>
           <div className="row">
-            <input placeholder="Hotspot name" value={ssid} maxLength={32} onChange={(e) => setSsid(e.target.value)} />
-            <input placeholder="Password" type="password" value={psk} maxLength={63} onChange={(e) => setPsk(e.target.value)} />
+            <input placeholder={t('Hotspot name')} value={ssid} maxLength={32} onChange={(e) => setSsid(e.target.value)} />
+            <input placeholder={t('Password')} type="password" value={psk} maxLength={63} onChange={(e) => setPsk(e.target.value)} />
             <button disabled={ssid === '' || psk.length < 8} onClick={() => void leaving((leave) => hotspotJoin(ssid, psk, [], leave))()}>
-              Join hotspot
+              {t('Join hotspot')}
             </button>
           </div>
         </>
@@ -243,17 +267,17 @@ export function About() {
   );
   return (
     <>
-      <h2>About</h2>
+      <h2>{t('About')}</h2>
       <p><b>MeshDrop</b> {__APP_VERSION__}</p>
-      <p>Developed by Md. Hafijur Rahman</p>
-      <p>GitHub: {link('https://github.com/Hafij-DEU/multidevice-sharing')}</p>
-      <p>License: GPL-3.0</p>
-      <p>Privacy: {link('https://github.com/Hafij-DEU/multidevice-sharing/blob/main/PRIVACY.md', 'PRIVACY.md')}</p>
+      <p>{t('Developed by Md. Hafijur Rahman')}</p>
+      <p>{t('GitHub:')} {link('https://github.com/Hafij-DEU/multidevice-sharing')}</p>
+      <p>{t('License: GPL-3.0')}</p>
+      <p>{t('Privacy:')} {link('https://github.com/Hafij-DEU/multidevice-sharing/blob/main/PRIVACY.md', 'PRIVACY.md')}</p>
       <p className="muted">
-        Third-party software: Electron, React, ws, qrcode (MIT/ISC), ZXing and AndroidX (Apache-2.0). Speaks the LocalSend
-        protocol (MIT) to talk to LocalSend apps. {link('https://github.com/Hafij-DEU/multidevice-sharing/blob/main/THIRD_PARTY_NOTICES.md', 'Full notices')}
+        {t('Third-party software: Electron, React, ws, qrcode (MIT/ISC), ZXing and AndroidX (Apache-2.0). Speaks the LocalSend protocol (MIT) to talk to LocalSend apps.')}{' '}
+        {link('https://github.com/Hafij-DEU/multidevice-sharing/blob/main/THIRD_PARTY_NOTICES.md', t('Full notices'))}
       </p>
-      <p className="muted">This app was generated with AI. Developer support may not be available.</p>
+      <p className="muted">{t('This app was generated with AI. Developer support may not be available.')}</p>
     </>
   );
 }
@@ -281,7 +305,7 @@ function Card({ title, icon, wide, children }: { title: string; icon: string; wi
             <path d={icon} />
           </svg>
         </span>
-        {title}
+        {t(title)}
       </h2>
       {children}
     </div>
@@ -298,7 +322,7 @@ export function Settings({ state, run }: { state: AppState; run: Run }) {
   const set = <K extends keyof S>(k: K, v: S[K]) => setDraft((d) => ({ ...d, [k]: v }));
 
   const save = async () => {
-    const r = await run(() => window.meshdrop.setSettings(patch), 'Settings saved');
+    const r = await run(() => window.meshdrop.setSettings(patch), t('Settings saved'));
     if (r) setDraft(r);
   };
 
@@ -307,37 +331,38 @@ export function Settings({ state, run }: { state: AppState; run: Run }) {
       .filter(([k]) => keys.includes(k) && !(android && DESKTOP_ONLY.includes(k)))
       .map(([k, label]) => (
         <label key={k} className="toggle">
-          <input type="checkbox" checked={draft[k] as boolean} disabled={k === 'allBluetooth' && !draft.bluetooth} onChange={(e) => set(k, e.target.checked as never)} /> {label}
+          <input type="checkbox" checked={draft[k] as boolean} disabled={k === 'allBluetooth' && !draft.bluetooth} onChange={(e) => set(k, e.target.checked as never)} /> {t(label)}
         </label>
       ));
 
   return (
     <section className="settings">
       <div className="set-grid">
-      <Card title="This device" icon={I.device}>
+      <Card title={mark('This device')} icon={I.device}>
         <label className="field">
-          <span>Device name</span>
-          <input aria-label="Device name" value={draft.alias} maxLength={64} onChange={(e) => set('alias', e.target.value)} />
+          <span>{t('Device name')}</span>
+          <input aria-label={t('Device name')} value={draft.alias} maxLength={64} onChange={(e) => set('alias', e.target.value)} />
         </label>
         <label className="field">
-          <span>Port</span>
-          <input aria-label="Port" type="number" min={0} max={65535} value={draft.port} onChange={(e) => set('port', Number(e.target.value))} />
+          <span>{t('Port')}</span>
+          <input aria-label={t('Port')} type="number" min={0} max={65535} value={draft.port} onChange={(e) => set('port', Number(e.target.value))} />
         </label>
       </Card>
-      <Card title="Appearance" icon={I.paint}>
+      <Card title={mark('Appearance')} icon={I.paint}>
+        <Language />
         <Theme />
         <Colours />
       </Card>
-      <Card title="Receiving" icon={I.inbox}>
+      <Card title={mark('Receiving')} icon={I.inbox}>
         {android ? (
           <p className="field">
-            <span>Received files are saved in</span> <code>Download/MeshDrop</code>
+            <span>{t('Received files are saved in')}</span> <code>Download/MeshDrop</code>
           </p>
         ) : (
           <label className="field">
-            <span>Save received files in</span>
+            <span>{t('Save received files in')}</span>
             <span className="row">
-              <input aria-label="Inbox folder" className="grow" value={draft.inbox} onChange={(e) => set('inbox', e.target.value)} />
+              <input aria-label={t('Inbox folder')} className="grow" value={draft.inbox} onChange={(e) => set('inbox', e.target.value)} />
               <button
                 onClick={() =>
                   void run(async () => {
@@ -346,18 +371,18 @@ export function Settings({ state, run }: { state: AppState; run: Run }) {
                   })
                 }
               >
-                Choose…
+                {t('Choose…')}
               </button>
             </span>
           </label>
         )}
         {!android && (
           <label className="row">
-            Delete received files after{' '}
-            <select aria-label="Clean-up" value={draft.cleanupDays} onChange={(e) => set('cleanupDays', Number(e.target.value))}>
+            {t('Delete received files after')}{' '}
+            <select aria-label={t('Clean-up')} value={draft.cleanupDays} onChange={(e) => set('cleanupDays', Number(e.target.value))}>
               {[...new Set([0, 7, 30, 90, 365, draft.cleanupDays])].sort((a, b) => a - b).map((d) => (
                 <option key={d} value={d}>
-                  {d === 0 ? 'never' : `${d} days`}
+                  {d === 0 ? t('never') : t('{n} days', { n: d })}
                 </option>
               ))}
             </select>
@@ -365,35 +390,35 @@ export function Settings({ state, run }: { state: AppState; run: Run }) {
         )}
         {toggles(['sortInbox', 'sendReceipts', 'printFromDevices'])}
       </Card>
-      <Card title="Network and sharing" icon={I.wifi}>
+      <Card title={mark('Network and sharing')} icon={I.wifi}>
         {toggles(['discovery'])}
         <label className="field">
-          <span>A guest link works for</span>
-          <select aria-label="Guest link length" value={draft.guestMinutes} onChange={(e) => set('guestMinutes', Number(e.target.value))}>
+          <span>{t('A guest link works for')}</span>
+          <select aria-label={t('Guest link length')} value={draft.guestMinutes} onChange={(e) => set('guestMinutes', Number(e.target.value))}>
             {[...new Set([15, 30, 60, 120, 240, 480, 1440, draft.guestMinutes])].sort((a, b) => a - b).map((m) => (
               <option key={m} value={m}>
-                {m < 60 ? `${m} minutes` : m === 60 ? '1 hour' : `${m / 60} hours`}
+                {m < 60 ? t('{n} minutes', { n: m }) : m === 60 ? t('1 hour') : t('{n} hours', { n: m / 60 })}
               </option>
             ))}
           </select>
         </label>
       </Card>
-      <Card title="Clipboard and notifications" icon={I.bell}>
+      <Card title={mark('Clipboard and notifications')} icon={I.bell}>
         {toggles(['clipboardReceive', 'clipboardSync', 'notifications'])}
       </Card>
       {!android && (
-        <Card title="Start-up" icon={I.power}>
+        <Card title={mark('Start-up')} icon={I.power}>
           {toggles(['autostart', 'startHidden', 'closeToTray'])}
         </Card>
       )}
-      <Card title="No Wi-Fi" icon={I.bt} wide>
+      <Card title={mark('No Wi-Fi')} icon={I.bt} wide>
         {toggles(['bluetooth', 'allBluetooth', 'tetherNoData'], NO_WIFI)}
         <label className="row">
-          Sound over Bluetooth{' '}
-          <select aria-label="Sound over Bluetooth" value={draft.btSoundKbps} onChange={(e) => set('btSoundKbps', Number(e.target.value))}>
+          {t('Sound over Bluetooth')}{' '}
+          <select aria-label={t('Sound over Bluetooth')} value={draft.btSoundKbps} onChange={(e) => set('btSoundKbps', Number(e.target.value))}>
             {[8, 12, 16, 24, 32].map((k) => (
               <option key={k} value={k}>
-                {k === 8 ? '8 kbit/s (fewest breaks)' : k === 32 ? '32 kbit/s (best sound)' : `${k} kbit/s`}
+                {k === 8 ? t('8 kbit/s (fewest breaks)') : k === 32 ? t('32 kbit/s (best sound)') : t('{n} kbit/s', { n: k })}
               </option>
             ))}
           </select>
@@ -403,12 +428,12 @@ export function Settings({ state, run }: { state: AppState; run: Run }) {
       </Card>
       </div>
       <div className={`save-bar${dirty ? ' dirty' : ''}`}>
-        <span className="muted">{dirty ? 'You have unsaved changes' : 'All changes saved'}</span>
+        <span className="muted">{dirty ? t('You have unsaved changes') : t('All changes saved')}</span>
         <button disabled={!dirty} onClick={() => setDraft(state.settings)}>
-          Undo changes
+          {t('Undo changes')}
         </button>
         <button className="primary" disabled={!dirty} onClick={() => void save()}>
-          Save
+          {t('Save')}
         </button>
       </div>
 
@@ -423,16 +448,16 @@ export function Settings({ state, run }: { state: AppState; run: Run }) {
         </div>
       ) : (
         <>
-          <Card title="Keyboard shortcut" icon={I.keys}>
-            <p className="muted">{WINDOWS ? 'A shortcut that opens a small window to send what is on your clipboard (while MeshDrop runs, also in the tray).' : 'Adds a GNOME shortcut that opens a small window to send what is on your clipboard.'}</p>
+          <Card title={mark('Keyboard shortcut')} icon={I.keys}>
+            <p className="muted">{WINDOWS ? t('A shortcut that opens a small window to send what is on your clipboard (while MeshDrop runs, also in the tray).') : t('Adds a GNOME shortcut that opens a small window to send what is on your clipboard.')}</p>
             <div className="row">
-              <input aria-label="Shortcut" value={binding} onChange={(e) => setBinding(e.target.value)} />
-              <button onClick={() => setConfirm(true)}>Set up keyboard shortcut</button>
+              <input aria-label={t('Shortcut')} value={binding} onChange={(e) => setBinding(e.target.value)} />
+              <button onClick={() => setConfirm(true)}>{t('Set up keyboard shortcut')}</button>
             </div>
           </Card>
-          <Card title="Advanced" icon={I.gear}>
+          <Card title={mark('Advanced')} icon={I.gear}>
             <div className="row">
-              <button onClick={() => void run(() => window.meshdrop.openConfigFolder())}>Open config folder</button>
+              <button onClick={() => void run(() => window.meshdrop.openConfigFolder())}>{t('Open config folder')}</button>
             </div>
           </Card>
         </>
@@ -446,20 +471,20 @@ export function Settings({ state, run }: { state: AppState; run: Run }) {
       {confirm && (
         <div className="modal-backdrop">
           <div role="dialog" aria-modal="true" aria-labelledby="sc-title" className="modal">
-            <h2 id="sc-title">Add this shortcut?</h2>
+            <h2 id="sc-title">{t('Add this shortcut?')}</h2>
             <p>
-              {WINDOWS ? 'MeshDrop will open “Send clipboard” when you press ' : 'GNOME will run “MeshDrop: send clipboard” when you press '}<code>{binding}</code>.{WINDOWS ? ' It replaces the one set before.' : ' Your other custom shortcuts stay as they are.'}
+              {WINDOWS ? t('MeshDrop will open “Send clipboard” when you press ') : t('GNOME will run “MeshDrop: send clipboard” when you press ')}<code>{binding}</code>.{WINDOWS ? t(' It replaces the one set before.') : t(' Your other custom shortcuts stay as they are.')}
             </p>
             <div className="row">
-              <button onClick={() => setConfirm(false)}>Cancel</button>
+              <button onClick={() => setConfirm(false)}>{t('Cancel')}</button>
               <button
                 className="primary"
                 onClick={() => {
                   setConfirm(false);
-                  void run(() => window.meshdrop.registerClipboardShortcut(binding), 'Shortcut added');
+                  void run(() => window.meshdrop.registerClipboardShortcut(binding), t('Shortcut added'));
                 }}
               >
-                Add shortcut
+                {t('Add shortcut')}
               </button>
             </div>
           </div>

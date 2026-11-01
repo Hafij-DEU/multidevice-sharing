@@ -541,6 +541,8 @@ export interface DesktopApi {
   exportRecovery(path: string, passphrase: string): Promise<void>;
   importRecovery(path: string, passphrase: string): Promise<void>;
   setSettings(patch: Partial<Settings>): Promise<Settings>;
+  /** Hands the interface language's table (English → translation) to the native side: tray, notifications. */
+  setLang(table: Record<string, string>): Promise<void>;
   guestStart(): Promise<{ url: string; qrSvg: string; expiresAt: number }>;
   guestEnd(): Promise<void>;
   guestShare(paths: string[]): Promise<void>;

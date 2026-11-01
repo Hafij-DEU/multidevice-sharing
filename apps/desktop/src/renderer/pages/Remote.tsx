@@ -3,6 +3,7 @@ import type { AppState, DeviceView, RemoteEvent } from '../../shared/api.ts';
 import type { Run } from '../App.tsx';
 import { Peer } from '../components/Peer.tsx';
 import { fmtBytes } from '../format.ts';
+import { mark, t } from '../i18n.ts';
 
 const SPEED = 1.6;
 const SPEED_KEY = 'md.pointerSpeed';
@@ -12,10 +13,10 @@ const TAP_MS = 220;
 const TAP_SLOP = 8;
 
 const ERRORS: Record<string, string> = {
-  'remote-off': 'That PC does not allow this device yet: on the PC, open More → Remote and tick this device under "Devices that may control this PC".',
-  'input-unavailable': 'The PC cannot take input right now.',
-  unsupported: 'That PC cannot do this yet: sound, camera and microphone need MeshDrop on Linux for now.',
-  'not-playing': 'The PC hears no Bluetooth audio from this phone now.',
+  'remote-off': mark('That PC does not allow this device yet: on the PC, open More → Remote and tick this device under "Devices that may control this PC".'),
+  'input-unavailable': mark('The PC cannot take input right now.'),
+  unsupported: mark('That PC cannot do this yet: sound, camera and microphone need MeshDrop on Linux for now.'),
+  'not-playing': mark('The PC hears no Bluetooth audio from this phone now.'),
 };
 
 /** What an app message answered, as an error to show (undefined: it worked). */
@@ -24,7 +25,7 @@ function problem(r: { status: number; body: unknown } | undefined): string | und
   if (r.status === 200) return undefined;
   const b = (r.body ?? {}) as { error?: string; reason?: string };
   if (b.reason) return b.reason;
-  return (b.error && ERRORS[b.error]) || `The device said no (${b.error ?? r.status}).`;
+  return (b.error && ERRORS[b.error] && t(ERRORS[b.error]!)) || t('The device said no ({code}).', { code: b.error ?? r.status });
 }
 
 /**
@@ -107,8 +108,8 @@ function Touchpad({ send, speed }: { send: (e: RemoteEvent) => void; speed: numb
     if (Date.now() - s.t < TAP_MS && s.moved < TAP_SLOP) send({ t: 'click', b: s.max >= 2 ? 'right' : 'left' });
   };
   return (
-    <div className="touchpad" aria-label="Touchpad" onPointerDown={down} onPointerMove={move} onPointerUp={up} onPointerCancel={up}>
-      <span className="muted">Move with one finger · tap to click · two fingers to scroll, tap for right click</span>
+    <div className="touchpad" aria-label={t('Touchpad')} onPointerDown={down} onPointerMove={move} onPointerUp={up} onPointerCancel={up}>
+      <span className="muted">{t('Move with one finger · tap to click · two fingers to scroll, tap for right click')}</span>
     </div>
   );
 }
@@ -117,12 +118,12 @@ function Touchpad({ send, speed }: { send: (e: RemoteEvent) => void; speed: numb
 function Keyboard({ send }: { send: (e: RemoteEvent) => void }) {
   const [v, setV] = useState('');
   const key = (k: string, mods?: string[]) => send(mods ? { t: 'key', k, mods } : { t: 'key', k });
-  const KEYS: [string, string, string[]?][] = [['Esc', 'Escape'], ['Tab', 'Tab'], ['⌫', 'BackSpace'], ['↵', 'Return'], ['←', 'Left'], ['↑', 'Up'], ['↓', 'Down'], ['→', 'Right'], ['Super', 'Super'], ['Copy', 'c', ['Control']], ['Paste', 'v', ['Control']]];
+  const KEYS: [string, string, string[]?][] = [[mark('Esc'), 'Escape'], [mark('Tab'), 'Tab'], ['⌫', 'BackSpace'], ['↵', 'Return'], ['←', 'Left'], ['↑', 'Up'], ['↓', 'Down'], ['→', 'Right'], [mark('Super'), 'Super'], [mark('Copy'), 'c', ['Control']], [mark('Paste'), 'v', ['Control']]];
   return (
     <div>
       <input
-        aria-label="Type on the device"
-        placeholder="Type here: it appears on the device"
+        aria-label={t('Type on the device')}
+        placeholder={t('Type here: it appears on the device')}
         value={v}
         autoCapitalize="off"
         autoCorrect="off"
@@ -140,8 +141,8 @@ function Keyboard({ send }: { send: (e: RemoteEvent) => void }) {
       />
       <div className="row wrap">
         {KEYS.map(([label, k, mods]) => (
-          <button key={label} onClick={() => key(k, mods)}>
-            {label}
+          <button key={k + label} onClick={() => key(k, mods)}>
+            {t(label)}
           </button>
         ))}
       </div>
@@ -150,11 +151,11 @@ function Keyboard({ send }: { send: (e: RemoteEvent) => void }) {
 }
 
 function Media({ send }: { send: (e: RemoteEvent) => void }) {
-  const B: [string, string][] = [['⏮', 'AudioPrev'], ['⏯', 'AudioPlay'], ['⏭', 'AudioNext'], ['🔉', 'AudioLowerVolume'], ['🔇', 'AudioMute'], ['🔊', 'AudioRaiseVolume']];
+  const B: [string, string, string][] = [['⏮', 'AudioPrev', mark('Prev')], ['⏯', 'AudioPlay', mark('Play')], ['⏭', 'AudioNext', mark('Next')], ['🔉', 'AudioLowerVolume', mark('Volume down')], ['🔇', 'AudioMute', mark('Mute')], ['🔊', 'AudioRaiseVolume', mark('Volume up')]];
   return (
     <div className="row wrap media-keys">
-      {B.map(([l, k]) => (
-        <button key={k} aria-label={k.replace('Audio', '')} onClick={() => send({ t: 'key', k })}>
+      {B.map(([l, k, name]) => (
+        <button key={k} aria-label={t(name)} onClick={() => send({ t: 'key', k })}>
           {l}
         </button>
       ))}
@@ -173,19 +174,19 @@ function Presenter({ send }: { send: (e: RemoteEvent) => void }) {
     <div>
       <div className="row presenter">
         <button className="big" onClick={() => send({ t: 'key', k: 'Left' })}>
-          ‹ Previous
+          {t('‹ Previous')}
         </button>
         <button className="big primary" onClick={() => send({ t: 'key', k: 'Right' })}>
-          Next ›
+          {t('Next ›')}
         </button>
       </div>
       <div className="row">
-        <button onClick={() => send({ t: 'key', k: 'F5' })}>Start show</button>
-        <button onClick={() => send({ t: 'key', k: 'Escape' })}>End show</button>
+        <button onClick={() => send({ t: 'key', k: 'F5' })}>{t('Start show')}</button>
+        <button onClick={() => send({ t: 'key', k: 'Escape' })}>{t('End show')}</button>
       </div>
       <div
         className="laserpad"
-        aria-label="Laser pointer"
+        aria-label={t('Laser pointer')}
         onPointerDown={(e) => {
           e.currentTarget.setPointerCapture(e.pointerId);
           setHeld(true);
@@ -197,7 +198,7 @@ function Presenter({ send }: { send: (e: RemoteEvent) => void }) {
           at(e, false);
         }}
       >
-        <span className="muted">Hold here: a red dot follows your finger on the PC screen</span>
+        <span className="muted">{t('Hold here: a red dot follows your finger on the PC screen')}</span>
       </div>
     </div>
   );
@@ -211,24 +212,24 @@ function PcActions({ target, run }: { target: string; run: Run }) {
     run(async () => {
       const err = problem(await window.meshdrop.appSend(target, { kind: 'action', a, ...(app ? { app } : {}) }));
       if (err) throw new Error(err);
-    }, 'Done');
-  const LABEL: Record<string, string> = { lock: 'Lock', sleep: 'Sleep', shutdown: 'Shut down', restart: 'Restart' };
+    }, t('Done'));
+  const LABEL: Record<string, string> = { lock: mark('Lock'), sleep: mark('Sleep'), shutdown: mark('Shut down'), restart: mark('Restart') };
   return (
     <div>
       <div className="row wrap">
         {Object.entries(LABEL).map(([a, l]) => (
           <button key={a} onClick={() => (a === 'shutdown' || a === 'restart' ? setConfirm(a) : void act(a))}>
-            {l}
+            {t(l)}
           </button>
         ))}
       </div>
       {confirm && (
         <div className="row">
-          <span>{LABEL[confirm]} the PC now?</span>
+          <span>{t('{action} the PC now?', { action: t(LABEL[confirm]!) })}</span>
           <button className="danger" onClick={() => (setConfirm(null), void act(confirm))}>
-            {LABEL[confirm]}
+            {t(LABEL[confirm]!)}
           </button>
-          <button onClick={() => setConfirm(null)}>Cancel</button>
+          <button onClick={() => setConfirm(null)}>{t('Cancel')}</button>
         </div>
       )}
       {apps === null ? (
@@ -242,11 +243,11 @@ function PcActions({ target, run }: { target: string; run: Run }) {
             })
           }
         >
-          Open an app…
+          {t('Open an app…')}
         </button>
       ) : (
         <div>
-          <input aria-label="Find an app" placeholder="Find an app" value={q} onChange={(e) => setQ(e.target.value)} />
+          <input aria-label={t('Find an app')} placeholder={t('Find an app')} value={q} onChange={(e) => setQ(e.target.value)} />
           <ul className="list apps">
             {apps
               .filter((a) => a.name.toLowerCase().includes(q.toLowerCase()))
@@ -273,16 +274,23 @@ function SoundTo({ state, run, to, label }: { state: AppState; run: Run; to: str
   return (
     <button
       aria-pressed={on}
-      onClick={() => void run(() => (on ? window.meshdrop.streamStop(out?.id ?? 'sound') : window.meshdrop.streamStart!(to, 'sound')), on ? 'Sound stopped' : 'Sound playing there')}
+      onClick={() => void run(() => (on ? window.meshdrop.streamStop(out?.id ?? 'sound') : window.meshdrop.streamStart!(to, 'sound')), on ? t('Sound stopped') : t('Sound playing there'))}
     >
-      {on ? 'Stop sound there' : label}
+      {on ? t('Stop sound there') : label}
     </button>
   );
 }
 
-const CAMERA_NEEDS_WIFI = 'Camera needs Wi-Fi or a hotspot - this device is connected over Bluetooth.';
+const CAMERA_NEEDS_WIFI = mark('Camera needs Wi-Fi or a hotspot - this device is connected over Bluetooth.');
 
 const PANELS = ['Touchpad', 'Keyboard', 'Media', 'Presenter', 'PC'] as const;
+const PANEL_NAME: Record<(typeof PANELS)[number], string> = {
+  Touchpad: mark('Touchpad'),
+  Keyboard: mark('Keyboard'),
+  Media: mark('Media'),
+  Presenter: mark('Presenter'),
+  PC: mark('PC'),
+};
 
 /** Control another device (a PC) from this one: touchpad, keyboard, media keys, slides, PC actions. */
 function Control({ state, run, targets }: { state: AppState; run: Run; targets: DeviceView[] }) {
@@ -307,31 +315,31 @@ function Control({ state, run, targets }: { state: AppState; run: Run; targets: 
     void run(() => Promise.reject(new Error(e)));
   });
   useEffect(() => {
-    if (!target || !targets.some((t) => t.deviceId === target)) {
+    if (!target || !targets.some((d) => d.deviceId === target)) {
       const next = pick();
       if (next !== target) setTarget(next);
     }
   });
-  if (targets.length === 0) return <p className="muted">No paired PC yet.</p>;
+  if (targets.length === 0) return <p className="muted">{t('No paired PC yet.')}</p>;
   const away = targets.find((d) => d.deviceId === target)?.reach === 'offline';
   return (
     <div className="remote">
       <div className="row">
-        <select aria-label="Device to control" value={target ?? ''} onChange={(e) => setTarget(e.target.value)}>
+        <select aria-label={t('Device to control')} value={target ?? ''} onChange={(e) => setTarget(e.target.value)}>
           {targets.map((d) => (
             <option key={d.deviceId} value={d.deviceId}>
               {d.alias}
-              {d.reach === 'offline' ? ' (away)' : ''}
+              {d.reach === 'offline' ? t(' (away)') : ''}
             </option>
           ))}
         </select>
-        {target && state.platform !== 'android' && <SoundTo state={state} run={run} to={target} label="Play this PC's sound there" />}
+        {target && state.platform !== 'android' && <SoundTo state={state} run={run} to={target} label={t("Play this PC's sound there")} />}
       </div>
-      {away && <p className="muted">This PC is away right now: clicks and keys reach it again once it is back.</p>}
+      {away && <p className="muted">{t('This PC is away right now: clicks and keys reach it again once it is back.')}</p>}
       <div className="segmented" role="tablist">
         {PANELS.map((p) => (
           <button key={p} role="tab" aria-selected={panel === p} className={panel === p ? 'active' : ''} onClick={() => setPanel(p)}>
-            {p}
+            {t(PANEL_NAME[p])}
           </button>
         ))}
       </div>
@@ -339,13 +347,13 @@ function Control({ state, run, targets }: { state: AppState; run: Run; targets: 
         <>
           <Touchpad send={send} speed={speed} />
           <label className="row">
-            Pointer speed
-            <input type="range" aria-label="Pointer speed" min={0.5} max={5} step={0.1} value={speed} onChange={(e) => changeSpeed(Number(e.target.value))} />
+            {t('Pointer speed')}
+            <input type="range" aria-label={t('Pointer speed')} min={0.5} max={5} step={0.1} value={speed} onChange={(e) => changeSpeed(Number(e.target.value))} />
             <span className="muted">{speed.toFixed(1)}×</span>
           </label>
           <div className="row">
-            <button onClick={() => send({ t: 'click', b: 'left' })}>Left click</button>
-            <button onClick={() => send({ t: 'click', b: 'right' })}>Right click</button>
+            <button onClick={() => send({ t: 'click', b: 'left' })}>{t('Left click')}</button>
+            <button onClick={() => send({ t: 'click', b: 'right' })}>{t('Right click')}</button>
           </div>
         </>
       )}
@@ -353,7 +361,7 @@ function Control({ state, run, targets }: { state: AppState; run: Run; targets: 
       {target && panel === 'Media' && <Media send={send} />}
       {target && panel === 'Presenter' && <Presenter send={send} />}
       {target && panel === 'PC' && <PcActions key={target} target={target} run={run} />}
-      {state.platform !== 'android' && <p className="muted">Tip: the phone app has the same page, made for fingers.</p>}
+      {state.platform !== 'android' && <p className="muted">{t('Tip: the phone app has the same page, made for fingers.')}</p>}
     </div>
   );
 }
@@ -363,7 +371,7 @@ function Status({ s }: { s: NonNullable<AppState['deviceStatus']>[string] | unde
   return (
     <span className="muted">
       {s.battery && ` · 🔋 ${s.battery.level}%${s.battery.charging ? ' ⚡' : ''}`}
-      {s.storage && ` · ${fmtBytes(s.storage.free)} free`}
+      {s.storage && t(' · {size} free', { size: fmtBytes(s.storage.free) })}
       {s.signal && ` · 📶 ${s.signal.level}/4${s.signal.type ? ` ${s.signal.type}` : ''}`}
     </span>
   );
@@ -381,33 +389,32 @@ export function Remote({ state, run }: { state: AppState; run: Run }) {
     <section>
       {state.ringing && (
         <div className="banner warn row space" role="alert">
-          <span>Ringing: another device is looking for this one.</span>
+          <span>{t('Ringing: another device is looking for this one.')}</span>
           <button className="primary" onClick={() => void run(() => window.meshdrop.ringStop())}>
-            Stop
+            {t('Stop')}
           </button>
         </div>
       )}
 
       {!android && (state.streams ?? []).length > 0 && (
         <>
-          <h2>Live now</h2>
+          <h2>{t('Live now')}</h2>
           {state.btScanning && (
             <div className="banner warn" role="alert">
-              This PC is searching for Bluetooth devices, so sound over Bluetooth breaks up. Close the Bluetooth settings window
-              on this PC (the search stops with it).
+              {t('This PC is searching for Bluetooth devices, so sound over Bluetooth breaks up. Close the Bluetooth settings window on this PC (the search stops with it).')}
             </div>
           )}
           <ul className="list">
             {(state.streams ?? []).map((st) => (
               <li key={st.id} className="row space">
                 <span>
-                  {st.kind === 'audio' || st.kind === 'sound-out' ? "This PC's sound plays on " : st.kind === 'sound' || st.kind === 'bt-audio' ? 'Playing the sound of ' : st.kind === 'camera' ? 'Camera of ' : 'Microphone of '}
-                  <Peer text={st.alias ?? 'a device'} />
-                  {st.kind === 'bt-audio' && <span className="muted"> · Bluetooth audio, like earbuds</span>}
-                  {st.kind === 'camera' && <span className="muted"> · pick "{st.alias} camera (MeshDrop)" in your video app</span>}
-                  {st.kind === 'mic' && <span className="muted"> · pick "{st.alias} microphone (MeshDrop)" as input</span>}
+                  {st.kind === 'audio' || st.kind === 'sound-out' ? t("This PC's sound plays on ") : st.kind === 'sound' || st.kind === 'bt-audio' ? t('Playing the sound of ') : st.kind === 'camera' ? t('Camera of ') : t('Microphone of ')}
+                  <Peer text={st.alias ?? t('a device')} />
+                  {st.kind === 'bt-audio' && <span className="muted"> {t('· Bluetooth audio, like earbuds')}</span>}
+                  {st.kind === 'camera' && <span className="muted"> {t('· pick "{name} camera (MeshDrop)" in your video app', { name: st.alias ?? '' })}</span>}
+                  {st.kind === 'mic' && <span className="muted"> {t('· pick "{name} microphone (MeshDrop)" as input', { name: st.alias ?? '' })}</span>}
                 </span>
-                <button onClick={() => void run(() => window.meshdrop.streamStop(st.id))}>Stop</button>
+                <button onClick={() => void run(() => window.meshdrop.streamStop(st.id))}>{t('Stop')}</button>
               </li>
             ))}
           </ul>
@@ -416,10 +423,10 @@ export function Remote({ state, run }: { state: AppState; run: Run }) {
 
       {android && <QuickMedia state={state} run={run} pcs={trusted.filter((d) => d.deviceType !== 'mobile')} />}
 
-      <h2>Control a device</h2>
+      <h2>{t('Control a device')}</h2>
       <Control state={state} run={run} targets={trusted.filter((d) => d.deviceType !== 'mobile')} />
 
-      <h2>Find my device</h2>
+      <h2>{t('Find my device')}</h2>
       <ul className="list">
         {trusted.map((d) => (
           <li key={d.deviceId} className="row space">
@@ -431,11 +438,11 @@ export function Remote({ state, run }: { state: AppState; run: Run }) {
               <button disabled={d.reach === 'offline'} onClick={() => void run(async () => {
                 const err = problem(await window.meshdrop.appSend(d.deviceId, { kind: 'ring' }));
                 if (err) throw new Error(err);
-              }, `Ringing ${d.alias}`)}>
-                Ring
+              }, t('Ringing {name}', { name: d.alias }))}>
+                {t('Ring')}
               </button>
               <button disabled={d.reach === 'offline'} onClick={() => void run(() => window.meshdrop.appSend(d.deviceId, { kind: 'ring', on: false }))}>
-                Stop
+                {t('Stop')}
               </button>
             </span>
           </li>
@@ -445,9 +452,9 @@ export function Remote({ state, run }: { state: AppState; run: Run }) {
       {!android && (state.phoneNotes ?? []).length > 0 && (
         <>
           <div className="row space">
-            <h2>Phone notifications</h2>
+            <h2>{t('Phone notifications')}</h2>
             <button className="link" onClick={() => void run(() => window.meshdrop.noteDismiss())}>
-              Clear all
+              {t('Clear all')}
             </button>
           </div>
           <ul className="list notes">
@@ -455,11 +462,11 @@ export function Remote({ state, run }: { state: AppState; run: Run }) {
               <li key={`${n.from}:${n.key}`}>
                 <div className="row space">
                   <span>
-                    <strong>{n.title}</strong> <span className="muted">· {n.app} · {n.fromAlias ?? 'phone'}</span>
+                    <strong>{n.title}</strong> <span className="muted">· {n.app} · {n.fromAlias ?? t('phone')}</span>
                   </span>
                   <span className="row">
-                    {n.replyable && <button onClick={() => setReplying({ from: n.from, key: n.key, text: '' })}>Reply</button>}
-                    <button className="link" aria-label="Dismiss" onClick={() => void run(() => window.meshdrop.noteDismiss(n.key))}>
+                    {n.replyable && <button onClick={() => setReplying({ from: n.from, key: n.key, text: '' })}>{t('Reply')}</button>}
+                    <button className="link" aria-label={t('Dismiss')} onClick={() => void run(() => window.meshdrop.noteDismiss(n.key))}>
                       ×
                     </button>
                   </span>
@@ -467,19 +474,19 @@ export function Remote({ state, run }: { state: AppState; run: Run }) {
                 <div>{n.text}</div>
                 {replying?.key === n.key && replying.from === n.from && (
                   <div className="row">
-                    <input aria-label="Reply" className="grow" autoFocus value={replying.text} onChange={(e) => setReplying({ ...replying, text: e.target.value })} />
+                    <input aria-label={t('Reply')} className="grow" autoFocus value={replying.text} onChange={(e) => setReplying({ ...replying, text: e.target.value })} />
                     <button
                       className="primary"
                       disabled={replying.text.trim() === ''}
                       onClick={() =>
                         void run(async () => {
                           const err = problem(await window.meshdrop.appSend(n.from, { kind: 'reply', key: n.key, text: replying.text }));
-                          if (err) throw new Error(err === 'The device said no (gone).' ? 'That notification is gone on the phone.' : err);
+                          if (err) throw new Error(err === t('The device said no ({code}).', { code: 'gone' }) ? t('That notification is gone on the phone.') : err);
                           setReplying(null);
-                        }, 'Sent')
+                        }, t('Sent'))
                       }
                     >
-                      Send
+                      {t('Send')}
                     </button>
                   </div>
                 )}
@@ -491,8 +498,8 @@ export function Remote({ state, run }: { state: AppState; run: Run }) {
 
       {!android && (
         <>
-          <h2>Devices that may control this PC</h2>
-          <p className="muted">They can move the pointer, type, press media keys, lock, sleep or shut down this PC, and open apps.{WINDOWS ? ' Windows does not ask first; windows of apps run as administrator ignore it.' : ' The first time, GNOME asks you to allow remote interaction.'}</p>
+          <h2>{t('Devices that may control this PC')}</h2>
+          <p className="muted">{t('They can move the pointer, type, press media keys, lock, sleep or shut down this PC, and open apps.')}{WINDOWS ? t(' Windows does not ask first; windows of apps run as administrator ignore it.') : t(' The first time, GNOME asks you to allow remote interaction.')}</p>
           {state.inputError && <p className="error-text">{state.inputError}</p>}
           <ul className="list">
             {trusted.map((d) => (
@@ -504,10 +511,10 @@ export function Remote({ state, run }: { state: AppState; run: Run }) {
             ))}
           </ul>
           <label className="toggle">
-            <input type="checkbox" checked={s.phoneNotifications} onChange={(e) => void run(() => window.meshdrop.setSettings({ phoneNotifications: e.target.checked }))} /> Show notifications from my phones
+            <input type="checkbox" checked={s.phoneNotifications} onChange={(e) => void run(() => window.meshdrop.setSettings({ phoneNotifications: e.target.checked }))} /> {t('Show notifications from my phones')}
           </label>
           <label className="toggle">
-            <input type="checkbox" checked={s.openLinks} onChange={(e) => void run(() => window.meshdrop.setSettings({ openLinks: e.target.checked }))} /> Open links my devices send with "Open on device"
+            <input type="checkbox" checked={s.openLinks} onChange={(e) => void run(() => window.meshdrop.setSettings({ openLinks: e.target.checked }))} /> {t('Open links my devices send with "Open on device"')}
           </label>
         </>
       )}
@@ -530,7 +537,7 @@ function MediaTile({ icon, title, hint, on, disabled, why, onClick }: { icon: ke
         <path d={MEDIA_ICON[icon]} />
       </svg>
       <span className="media-tile-title">{title}</span>
-      <span className="media-tile-hint">{on ? 'On · tap to stop' : hint}</span>
+      <span className="media-tile-hint">{on ? t('On · tap to stop') : hint}</span>
     </button>
   );
 }
@@ -543,8 +550,8 @@ function QuickMedia({ state, run, pcs }: { state: AppState; run: Run; pcs: Devic
   const near = pcs.filter((d) => d.reach === 'lan' || d.reach === 'bt');
   return (
     <div className="quick-media">
-      <h2>Sound, camera and microphone</h2>
-      {near.length === 0 && <p className="muted">No PC nearby. Join the same Wi-Fi, a hotspot or a Bluetooth link to use the phone's camera, microphone or sound.</p>}
+      <h2>{t('Sound, camera and microphone')}</h2>
+      {near.length === 0 && <p className="muted">{t("No PC nearby. Join the same Wi-Fi, a hotspot or a Bluetooth link to use the phone's camera, microphone or sound.")}</p>}
       {near.map((d) => {
         const c = state.casting ?? {};
         // M14: Bluetooth carries sound (Opus) but not video
@@ -556,37 +563,37 @@ function QuickMedia({ state, run, pcs }: { state: AppState; run: Run; pcs: Devic
         return (
           <div key={d.deviceId} className="quick-pc">
             <div className="quick-pc-name">
-              <Peer text={bt ? `${d.alias} (Bluetooth)` : d.alias} />
+              <Peer text={bt ? t('{name} (Bluetooth)', { name: d.alias }) : d.alias} />
             </div>
             <div className="media-tiles">
-              <MediaTile icon="audio" title="PC sound" hint="Play it here" on={on('audio')} onClick={() => toggle('audio')} />
-              <MediaTile icon="camera" title="Webcam" hint="Phone camera on the PC" on={on('camera')} disabled={bt && !on('camera')} why={bt ? CAMERA_NEEDS_WIFI : undefined} onClick={() => toggle('camera')} />
-              <MediaTile icon="mic" title="Microphone" hint="Phone mic on the PC" on={on('mic')} onClick={() => toggle('mic')} />
+              <MediaTile icon="audio" title={t('PC sound')} hint={t('Play it here')} on={on('audio')} onClick={() => toggle('audio')} />
+              <MediaTile icon="camera" title={t('Webcam')} hint={t('Phone camera on the PC')} on={on('camera')} disabled={bt && !on('camera')} why={bt ? t(CAMERA_NEEDS_WIFI) : undefined} onClick={() => toggle('camera')} />
+              <MediaTile icon="mic" title={t('Microphone')} hint={t('Phone mic on the PC')} on={on('mic')} onClick={() => toggle('mic')} />
               {(!a2dp || soundOn) && (
                 <MediaTile
                   icon="sound"
-                  title="Phone sound"
-                  hint="Play it on the PC"
+                  title={t('Phone sound')}
+                  hint={t('Play it on the PC')}
                   on={soundOn}
-                  onClick={() => void run(() => (soundOn ? window.meshdrop.streamStop('sound') : window.meshdrop.streamStart!(d.deviceId, 'sound')), soundOn ? 'Sound stopped' : 'Sound playing there')}
+                  onClick={() => void run(() => (soundOn ? window.meshdrop.streamStop('sound') : window.meshdrop.streamStart!(d.deviceId, 'sound')), soundOn ? t('Sound stopped') : t('Sound playing there'))}
                 />
               )}
             </div>
             <div className="row wrap quick-more">
               {on('camera') ? (
                 <button onClick={() => void run(() => window.meshdrop.streamStart!(d.deviceId, 'camera', c.cameraBack ? 'front' : 'back'))}>
-                  Switch to {c.cameraBack ? 'front' : 'back'} camera
+                  {c.cameraBack ? t('Switch to front camera') : t('Switch to back camera')}
                 </button>
               ) : (
-                !bt && <button onClick={() => void run(() => window.meshdrop.streamStart!(d.deviceId, 'camera', 'back'))}>Webcam with the back camera</button>
+                !bt && <button onClick={() => void run(() => window.meshdrop.streamStart!(d.deviceId, 'camera', 'back'))}>{t('Webcam with the back camera')}</button>
               )}
               {a2dp ? (
                 <>
                   <button className="primary" onClick={() => void run(async () => {
                     const err = problem(await window.meshdrop.appSend(d.deviceId, { kind: 'bt-audio-stop' }));
                     if (err) throw new Error(err);
-                  }, 'Bluetooth audio stopped')}>Stop Bluetooth audio</button>
-                  <button onClick={() => void run(() => window.meshdrop.keepAliveAction!('audio-output'))}>Change audio output</button>
+                  }, t('Bluetooth audio stopped'))}>{t('Stop Bluetooth audio')}</button>
+                  <button onClick={() => void run(() => window.meshdrop.keepAliveAction!('audio-output'))}>{t('Change audio output')}</button>
                 </>
               ) : (
                 bt && (
@@ -595,18 +602,18 @@ function QuickMedia({ state, run, pcs }: { state: AppState; run: Run; pcs: Devic
                       // the PC connects the audio link (a phone app cannot); the phone then plays on it by itself
                       const r = await window.meshdrop.appSend(d.deviceId, { kind: 'bt-audio-start' }).catch(() => undefined);
                       if (!r || problem(r)) await window.meshdrop.keepAliveAction!('audio-output');
-                    })}>Phone sound as Bluetooth audio</button>
-                    <button onClick={() => void run(() => window.meshdrop.keepAliveAction!('bluetooth-settings'))}>Bluetooth settings</button>
+                    })}>{t('Phone sound as Bluetooth audio')}</button>
+                    <button onClick={() => void run(() => window.meshdrop.keepAliveAction!('bluetooth-settings'))}>{t('Bluetooth settings')}</button>
                   </>
                 )
               )}
             </div>
-            {a2dp && <p className="muted">This phone's sound plays on the PC as Bluetooth audio, like earbuds.</p>}
-            {bt && !a2dp && <p className="muted">Bluetooth: sound works, the camera needs Wi-Fi or a hotspot. Still on the phone speaker? Pick {d.alias} as the audio output.</p>}
+            {a2dp && <p className="muted">{t("This phone's sound plays on the PC as Bluetooth audio, like earbuds.")}</p>}
+            {bt && !a2dp && <p className="muted">{t('Bluetooth: sound works, the camera needs Wi-Fi or a hotspot. Still on the phone speaker? Pick {name} as the audio output.', { name: d.alias })}</p>}
           </div>
         );
       })}
-      <p className="muted hint">Sound goes either way only with devices ticked on that PC ("Devices that may control this PC"). The camera and microphone show up on the PC as a webcam and a microphone for video calls.</p>
+      <p className="muted hint">{t('Sound goes either way only with devices ticked on that PC ("Devices that may control this PC"). The camera and microphone show up on the PC as a webcam and a microphone for video calls.')}</p>
     </div>
   );
 }
@@ -617,8 +624,8 @@ function AndroidExtras({ state, run, trusted }: { state: AppState; run: Run; tru
   const pcs = trusted.filter((d) => d.deviceType !== 'mobile');
   return (
     <>
-      <h2>Show this phone's notifications on</h2>
-      <p className="muted">Your PCs show them and can reply to messages (SMS, chats). Android asks once for notification access.</p>
+      <h2>{t("Show this phone's notifications on")}</h2>
+      <p className="muted">{t('Your PCs show them and can reply to messages (SMS, chats). Android asks once for notification access.')}</p>
       <ul className="list">
         {pcs.map((d) => (
           <li key={d.deviceId}>
@@ -635,12 +642,12 @@ function AndroidExtras({ state, run, trusted }: { state: AppState; run: Run; tru
       </ul>
       {state.notifyAccess === false && to.length > 0 && (
         <button className="primary" onClick={() => void run(() => window.meshdrop.keepAliveAction!('notification-access'))}>
-          Allow notification access
+          {t('Allow notification access')}
         </button>
       )}
-      <h2>Second screen</h2>
-      <p className="muted">Use this phone or tablet as a second monitor for the PC with Extendo.</p>
-      <button onClick={() => void run(() => window.meshdrop.keepAliveAction!('extendo'))}>Open Extendo</button>
+      <h2>{t('Second screen')}</h2>
+      <p className="muted">{t('Use this phone or tablet as a second monitor for the PC with Extendo.')}</p>
+      <button onClick={() => void run(() => window.meshdrop.keepAliveAction!('extendo'))}>{t('Open Extendo')}</button>
     </>
   );
 }

@@ -24,6 +24,7 @@ import type { HistoryStore } from './history.ts';
 import { SettingsError, type SettingsStore } from './settings.ts';
 import { liveAudio, liveRtp } from './liveaudio.ts';
 import { opusChannels, opusDecoder, opusEncoder, opusLiveBytes, opusType } from './opus.ts';
+import { t } from './i18n.ts';
 import { HOTSPOT_HOST_IP, validHotspot, wifiQr, type NetMan } from './netman.ts';
 import { SYNC_TIMEOUT_MS as WIFI_SYNC_TIMEOUT_MS, WifiControl, type WifiSeal } from './wifi.ts';
 
@@ -327,7 +328,7 @@ export class AppController extends EventEmitter {
     this.#bt?.onScanning?.((on) => {
       this.#btScanning = on;
       if (on && this.#settings.get().notifications && [...this.#streams.values()].some((s) => s.bt)) {
-        this.#platform.notify('Bluetooth sound may break up', 'This PC is searching for Bluetooth devices. Close the Bluetooth settings window to stop it.');
+        this.#platform.notify(t('Bluetooth sound may break up'), t('This PC is searching for Bluetooth devices. Close the Bluetooth settings window to stop it.'));
       }
       this.#changed();
     });
@@ -669,7 +670,7 @@ export class AppController extends EventEmitter {
     if (ev.source === 'mesh') this.#onMesh(ev);
     if (ev.source === 'guest') this.#onGuest(ev);
     if (ev.source === 'sync' && ev.type === 'round' && ev.conflicts > 0 && this.#settings.get().notifications) {
-      this.#platform.notify('Sync conflict', `A file in "${ev.folder}" changed on both ${this.#aliasOf(ev.partner)} and here. Both versions are kept: look for "(conflict from …)".`);
+      this.#platform.notify(t('Sync conflict'), t('A file in "{folder}" changed on both {name} and here. Both versions are kept: look for "(conflict from …)".', { folder: ev.folder, name: this.#aliasOf(ev.partner) }));
     }
     this.#changed();
   }
@@ -683,14 +684,14 @@ export class AppController extends EventEmitter {
       const title = ev.via === 'localsend' ? 'A LocalSend device wants to send' : ev.via === 'addon' ? `A ${ev.transport ?? 'nearby'} device wants to send` : 'A guest wants to send';
       this.#platform.notify(title, `${what}: open MeshDrop to accept or decline.`);
     }
-    if (ev.type === 'failed' && s.notifications) this.#platform.notify('A guest send could not be saved', `The files were uploaded but could not be saved (${ev.error}).`);
+    if (ev.type === 'failed' && s.notifications) this.#platform.notify(t('A guest send could not be saved'), t('The files were uploaded but could not be saved ({error}).', { error: ev.error }));
     if (ev.type === 'received') {
       const ls = ev.via === 'localsend';
       const addon = ev.via === 'addon';
       const alias = ls ? `${ev.alias ?? 'LocalSend'} (LocalSend)` : addon ? `${ev.alias ?? 'Nearby device'} (${ev.transport ?? 'add-on'})` : 'Guest';
       this.#history.addReceived({ at: Date.now(), from: ls ? 'localsend' : addon ? 'addon' : 'guest', alias, files: [...ev.files], ...(ev.text !== undefined ? { text: ev.text } : {}) });
       const first = ev.files[0];
-      if (s.notifications) this.#platform.notify('From a guest', `${ev.files.length} file${ev.files.length === 1 ? '' : 's'} received`, first !== undefined ? () => this.#platform.revealPath(first) : undefined);
+      if (s.notifications) this.#platform.notify(t('From a guest'), ev.files.length === 1 ? t('1 file received') : t('{n} files received', { n: ev.files.length }), first !== undefined ? () => this.#platform.revealPath(first) : undefined);
     }
   }
 
@@ -698,9 +699,9 @@ export class AppController extends EventEmitter {
     if (ev.type === 'held-delivered' || ev.type === 'held-failed') void this.#refreshOutbox();
     if (!this.#settings.get().notifications) return;
     const to = ev.to !== undefined ? this.#aliasOf(ev.to) : 'a device';
-    if (ev.type === 'held-delivered') this.#platform.notify('Delivered', `The hub delivered your files to ${to}.`);
-    else if (ev.type === 'held-failed') this.#platform.notify('Delivery failed', `The hub could not deliver your files to ${to}${ev.error ? ` (${ev.error})` : ''}.`);
-    else if (ev.type === 'revoked') this.#platform.notify('Removed from the mesh', 'The hub removed this device from the mesh.');
+    if (ev.type === 'held-delivered') this.#platform.notify(t('Delivered'), t('The hub delivered your files to {name}.', { name: to }));
+    else if (ev.type === 'held-failed') this.#platform.notify(t('Delivery failed'), ev.error ? t('The hub could not deliver your files to {name} ({error}).', { name: to, error: ev.error }) : t('The hub could not deliver your files to {name}.', { name: to }));
+    else if (ev.type === 'revoked') this.#platform.notify(t('Removed from the mesh'), t('The hub removed this device from the mesh.'));
   }
 
   /**
@@ -838,8 +839,8 @@ export class AppController extends EventEmitter {
     if (ev.print && ev.files.length > 0) {
       if (s.printFromDevices && this.#platform.print) {
         for (const f of ev.files) if (!runnable(f)) await this.#platform.print(f).catch(() => {});
-        if (s.notifications) this.#platform.notify('Printing', `${ev.files.length} file${ev.files.length === 1 ? '' : 's'} from ${alias}`);
-      } else if (s.notifications) this.#platform.notify('Not printed', `${alias} asked to print; printing from devices is off in Settings.`);
+        if (s.notifications) this.#platform.notify(t('Printing'), ev.files.length === 1 ? t('1 file from {name}', { name: alias }) : t('{n} files from {name}', { n: ev.files.length, name: alias }));
+      } else if (s.notifications) this.#platform.notify(t('Not printed'), t('{name} asked to print; printing from devices is off in Settings.', { name: alias }));
     }
     // Clipboard text is only ever placed on the clipboard: never opened, run or interpreted.
     if (ev.clipboard && ev.text !== undefined && s.clipboardReceive) {
@@ -857,21 +858,25 @@ export class AppController extends EventEmitter {
     if (!s.notifications) return;
     const n = ev.files.length;
     if (ev.clipboard) {
-      this.#platform.notify('Clipboard', s.clipboardReceive ? `Copied text from ${alias}` : `Text from ${alias} (see Inbox)`);
+      this.#platform.notify(t('Clipboard'), s.clipboardReceive ? t('Copied text from {name}', { name: alias }) : t('Text from {name} (see Inbox)', { name: alias }));
       return;
     }
     if (ev.clipboardFiles) {
-      const what = n === 1 ? (/\.(png|jpe?g|webp|gif|bmp)$/i.test(ev.files[0]!) ? 'an image' : 'a file') : `${n} files`;
-      this.#platform.notify('Clipboard', s.clipboardReceive ? `Copied ${what} from ${alias}: paste it anywhere` : `${what} from ${alias} (see Received)`);
+      const what = n === 1 ? (/\.(png|jpe?g|webp|gif|bmp)$/i.test(ev.files[0]!) ? t('an image') : t('a file')) : t('{n} files', { n });
+      this.#platform.notify(t('Clipboard'), s.clipboardReceive ? t('Copied {what} from {name}: paste it anywhere', { what, name: alias }) : t('{what} from {name} (see Received)', { what, name: alias }));
       return;
     }
-    const body = n > 0 ? `${n} file${n === 1 ? '' : 's'} received${ev.text !== undefined ? ' with a message' : ''}` : `Text: ${(ev.text ?? "").slice(0, 120)}`;
+    const msg = ev.text !== undefined;
+    const body =
+      n === 0 ? t('Text: {text}', { text: (ev.text ?? '').slice(0, 120) })
+      : n === 1 ? (msg ? t('1 file received with a message') : t('1 file received'))
+      : msg ? t('{n} files received with a message', { n }) : t('{n} files received', { n });
     const first = ev.files[0];
     if (ev.backup) {
-      this.#platform.notify(`Photo backup from ${alias}`, `${n} photo${n === 1 ? '' : 's'} or video${n === 1 ? '' : 's'} saved`, first !== undefined ? () => this.#platform.revealPath(first) : undefined);
+      this.#platform.notify(t('Photo backup from {name}', { name: alias }), n === 1 ? t('1 photo or video saved') : t('{n} photos or videos saved', { n }), first !== undefined ? () => this.#platform.revealPath(first) : undefined);
       return;
     }
-    this.#platform.notify(`From ${alias}`, body, first !== undefined ? () => this.#platform.revealPath(first) : undefined);
+    this.#platform.notify(t('From {name}', { name: alias }), body, first !== undefined ? () => this.#platform.revealPath(first) : undefined);
   }
 
   // ---- actions ----------------------------------------------------------------------------------
@@ -1227,7 +1232,7 @@ export class AppController extends EventEmitter {
         };
         if (!note.key) return { status: 400, body: { error: 'bad-note' } };
         this.#phoneNotes = [note, ...this.#phoneNotes.filter((n) => !(n.from === peer && n.key === note.key))].slice(0, MAX_PHONE_NOTES);
-        if (s.notifications) p.notify(`${note.fromAlias ?? 'Phone'} · ${note.app || note.title}`, note.app ? `${note.title}: ${note.text}` : note.text);
+        if (s.notifications) p.notify(`${note.fromAlias ?? t('Phone')} · ${note.app || note.title}`, note.app ? `${note.title}: ${note.text}` : note.text);
         this.#changed();
         return { status: 200, body: { ok: true } };
       }
@@ -1241,7 +1246,7 @@ export class AppController extends EventEmitter {
           }
         }
         if (any) {
-          if (s.notifications) p.notify('Opened', `${alias() ?? 'The device'} opened what you sent.`);
+          if (s.notifications) p.notify(t('Opened'), t('{name} opened what you sent.', { name: alias() ?? t('The device') }));
           this.#changed();
         }
         return { status: 200, body: { ok: true } };
@@ -1302,7 +1307,7 @@ export class AppController extends EventEmitter {
         void (async () => {
           const w = await this.#net!.wifi().catch(() => null);
           if (w && w.network === '' && !this.#hotspot) await this.hotspotJoin(ssid, psk as string, hosts).catch(() => undefined);
-          else if (s.notifications) this.#platform.notify(`${who ?? 'A device'} shares a hotspot`, `Settings → No Wi-Fi: join ${ssid}.`);
+          else if (s.notifications) this.#platform.notify(t('{name} shares a hotspot', { name: who ?? t('A device') }), t('Settings → No Wi-Fi: join {network}.', { network: ssid }));
         })();
         return { status: 200, body: { ok: true } };
       }
@@ -1499,8 +1504,12 @@ export class AppController extends EventEmitter {
         s.res.end('{"ok":true}');
       });
       if (this.#settings.get().notifications) {
-        if (kind === 'sound') p.notify('Playing sound from another device', `${alias ?? 'A device'} plays its sound on this PC. Stop it on the Remote page.`);
-        else p.notify(kind === 'camera' ? 'Phone camera connected' : 'Phone microphone connected', `${alias ?? 'Your phone'}: pick "${kind === 'camera' ? 'Phone camera' : 'Phone microphone'} (MeshDrop)" in your video or call app.`);
+        if (kind === 'sound') p.notify(t('Playing sound from another device'), t('{name} plays its sound on this PC. Stop it on the Remote page.', { name: alias ?? t('A device') }));
+        else
+          p.notify(
+            kind === 'camera' ? t('Phone camera connected') : t('Phone microphone connected'),
+            t('{name}: pick "{device} (MeshDrop)" in your video or call app.', { name: alias ?? t('Your phone'), device: kind === 'camera' ? 'Phone camera' : 'Phone microphone' }),
+          );
       }
     }
     this.#changed();
@@ -1560,7 +1569,7 @@ export class AppController extends EventEmitter {
   #ring(from?: string): void {
     if (this.#ringing) clearTimeout(this.#ringing);
     this.#platform.ring?.(true);
-    this.#platform.notify('Find my device', `${from ?? 'Your device'} is looking for this ${'PC'}.`);
+    this.#platform.notify(t('Find my device'), t('{name} is looking for this PC.', { name: from ?? t('Your device') }));
     this.#ringing = setTimeout(() => void this.ringStop(), RING_MAX_MS);
     this.#changed();
   }
@@ -1869,7 +1878,7 @@ export class AppController extends EventEmitter {
       try {
         await this.send(job.targets, job.items, { ...(job.burn ? { burn: true } : {}), ...(job.print ? { print: true } : {}) });
       } catch (e) {
-        if (this.#settings.get().notifications) this.#platform.notify('Scheduled send failed', e instanceof Error ? e.message : String(e));
+        if (this.#settings.get().notifications) this.#platform.notify(t('Scheduled send failed'), e instanceof Error ? e.message : String(e));
       }
       this.#changed();
     }
@@ -2065,7 +2074,7 @@ export class AppController extends EventEmitter {
 
   async roomSave(id: string): Promise<string> {
     const p = await this.#e.roomSave(id);
-    if (this.#settings.get().notifications) this.#platform.notify('Saved from the room', basename(p), () => this.#platform.revealPath(p));
+    if (this.#settings.get().notifications) this.#platform.notify(t('Saved from the room'), basename(p), () => this.#platform.revealPath(p));
     return p;
   }
 

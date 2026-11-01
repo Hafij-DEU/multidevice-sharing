@@ -1,6 +1,7 @@
 import type { AppState } from '../../shared/api.ts';
 import type { Run } from '../App.tsx';
 import { Peer } from '../components/Peer.tsx';
+import { t } from '../i18n.ts';
 
 /** M13: carry on with a page on another device, at the same spot (scroll, video time). */
 export function Handoff({ state, run }: { state: AppState; run: Run }) {
@@ -8,22 +9,22 @@ export function Handoff({ state, run }: { state: AppState; run: Run }) {
   if (android) {
     return (
       <section>
-        <p className="lead">Pick up where you were</p>
+        <p className="lead">{t('Pick up where you were')}</p>
         <button
           className="primary big"
           onClick={() =>
             void run(async () => {
               const title = await window.meshdrop.handoffPull!();
-              return title ? `Opening ${title}` : 'Nothing open in the PC browser right now.';
+              return title ? t('Opening {title}', { title }) : t('Nothing open in the PC browser right now.');
             })
           }
         >
-          Continue from PC
+          {t('Continue from PC')}
         </button>
-        <p className="muted">Opens the page your PC browser shows, at the same spot: the same scroll position, and the same second of a video.</p>
-        <h2>From this phone to the PC</h2>
+        <p className="muted">{t('Opens the page your PC browser shows, at the same spot: the same scroll position, and the same second of a video.')}</p>
+        <h2>{t('From this phone to the PC')}</h2>
         <p className="muted">
-          In Chrome, YouTube or any app: Share → <b>Continue on PC</b>. The page opens on your PC; a YouTube video continues at the second you were at.
+          {t('In Chrome, YouTube or any app: Share →')} <b>{t('Continue on PC')}</b>. {t('The page opens on your PC; a YouTube video continues at the second you were at.')}
         </p>
       </section>
     );
@@ -32,41 +33,40 @@ export function Handoff({ state, run }: { state: AppState; run: Run }) {
   const phones = state.devices.filter((d) => d.trusted && d.reach !== 'offline' && d.deviceType === 'mobile');
   return (
     <section>
-      <p className="lead">Carry on with a page on another device</p>
+      <p className="lead">{t('Carry on with a page on another device')}</p>
       {h?.extension ? (
-        <p className="ok-text">Browser extension connected{h.page ? `: ${h.page.title}` : ''}</p>
+        <p className="ok-text">{h.page ? t('Browser extension connected: {title}', { title: h.page.title }) : t('Browser extension connected')}</p>
       ) : (
         <>
           <p className="muted">
-            Add the MeshDrop extension to your browser once, so MeshDrop knows which page you are on (and how far you scrolled, and where a video is). It talks only
-            to MeshDrop on this PC.
+            {t('Add the MeshDrop extension to your browser once, so MeshDrop knows which page you are on (and how far you scrolled, and where a video is). It talks only to MeshDrop on this PC.')}
           </p>
           <ol className="steps">
             <li>
-              <button onClick={() => void run(async () => `The extension is in ${await window.meshdrop.handoffExtension!()}`)}>Get the extension folder</button>
+              <button onClick={() => void run(async () => t('The extension is in {path}', { path: await window.meshdrop.handoffExtension!() }))}>{t('Get the extension folder')}</button>
             </li>
             <li>
-              Open <code>brave://extensions</code> (Chrome: <code>chrome://extensions</code>, Opera: <code>opera://extensions</code>) and turn on <b>Developer mode</b>.
+              {t('Open')} <code>brave://extensions</code> ({t('Chrome:')} <code>chrome://extensions</code>, {t('Opera:')} <code>opera://extensions</code>) {t('and turn on')} <b>{t('Developer mode')}</b>.
             </li>
             <li>
-              Press <b>Load unpacked</b> and pick the <b>MeshDrop Browser Extension</b> folder in Documents.
+              {t('Press')} <b>{t('Load unpacked')}</b> {t('and pick the')} <b>MeshDrop Browser Extension</b> {t('folder in Documents.')}
             </li>
           </ol>
         </>
       )}
-      <h2>Continue on a phone</h2>
+      <h2>{t('Continue on a phone')}</h2>
       {phones.length === 0 ? (
-        <p className="muted">No phone is reachable right now.</p>
+        <p className="muted">{t('No phone is reachable right now.')}</p>
       ) : (
         <div className="row wrap">
           {phones.map((d) => (
-            <button key={d.deviceId} className="primary" disabled={!h?.page} onClick={() => void run(() => window.meshdrop.handoffSend!(d.deviceId), `Opening on ${d.alias}`)}>
-              Send this page to <Peer text={d.alias} />
+            <button key={d.deviceId} className="primary" disabled={!h?.page} onClick={() => void run(() => window.meshdrop.handoffSend!(d.deviceId), t('Opening on {name}', { name: d.alias }))}>
+              {t('Send this page to')} <Peer text={d.alias} />
             </button>
           ))}
         </div>
       )}
-      <p className="muted">The phone can also take it by itself (Home → Continue from PC), and the extension button in the browser does the same. From a phone to this PC: Share → Continue on PC.</p>
+      <p className="muted">{t('The phone can also take it by itself (Home → Continue from PC), and the extension button in the browser does the same. From a phone to this PC: Share → Continue on PC.')}</p>
     </section>
   );
 }

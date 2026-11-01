@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import type { Run } from '../App.tsx';
+import { t } from '../i18n.ts';
 
 export interface Invite {
   uri: string;
@@ -16,8 +17,8 @@ const fmtLeft = (ms: number) => {
 export function QrInvite({ invite, onRenew, run, group }: { invite: Invite; onRenew: () => void; run: Run; group?: boolean }) {
   const [now, setNow] = useState(Date.now());
   useEffect(() => {
-    const t = setInterval(() => setNow(Date.now()), 1000); // the countdown shows whole seconds
-    return () => clearInterval(t);
+    const timer = setInterval(() => setNow(Date.now()), 1000); // the countdown shows whole seconds
+    return () => clearInterval(timer);
   }, []);
   const left = Math.max(0, invite.expiresAt - now);
   const expired = left === 0;
@@ -25,24 +26,24 @@ export function QrInvite({ invite, onRenew, run, group }: { invite: Invite; onRe
   const src = useMemo(() => `data:image/svg+xml;base64,${btoa(invite.qrSvg)}`, [invite.qrSvg]);
   return (
     <div className="invite">
-      <img className={`qr${expired ? ' expired' : ''}`} src={src} alt="Invite QR code" width={220} height={220} />
+      <img className={`qr${expired ? ' expired' : ''}`} src={src} alt={t('Invite QR code')} width={220} height={220} />
       <div className="invite-side">
         <p>
           {group
-            ? 'Scan it with the MeshDrop app on each of your devices (Send → Add a device → Scan QR). They all join, and every device then sees every other one.'
-            : 'Scan with the MeshDrop app on the other device, or paste the link there. It works once.'}
+            ? t('Scan it with the MeshDrop app on each of your devices (Send → Add a device → Scan QR). They all join, and every device then sees every other one.')
+            : t('Scan with the MeshDrop app on the other device, or paste the link there. It works once.')}
         </p>
         <div className="row">
-          <input aria-label="Invite link" readOnly value={invite.uri} className="grow" onFocus={(e) => e.target.select()} />
-          <button onClick={() => void run(() => navigator.clipboard.writeText(invite.uri), 'Copied')} disabled={expired}>
-            Copy
+          <input aria-label={t('Invite link')} readOnly value={invite.uri} className="grow" onFocus={(e) => e.target.select()} />
+          <button onClick={() => void run(() => navigator.clipboard.writeText(invite.uri), t('Copied'))} disabled={expired}>
+            {t('Copy')}
           </button>
         </div>
         <p className={expired ? 'error-text' : 'muted'}>
-          {expired ? 'Expired ' : 'Expires in '}
+          {expired ? t('Expired') : t('Expires in')}{' '}
           <span className="countdown">{fmtLeft(left)}</span>
         </p>
-        {expired && <button onClick={onRenew}>New invite</button>}
+        {expired && <button onClick={onRenew}>{t('New invite')}</button>}
       </div>
     </div>
   );
