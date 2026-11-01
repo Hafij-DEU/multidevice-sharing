@@ -24,6 +24,7 @@ import { SettingsStore, defaultSettings } from './settings.ts';
 import { bluezPlatform } from './bluetooth.ts';
 import { CLIP_HELPER_ENV, ClipReader, runClipHelper } from './cliphelper.ts';
 import { NetMan, run as nmRun } from './netman.ts';
+import { loadAddons } from './addons.ts';
 
 const execFileP = promisify(execFile);
 const TEST = process.env.MESHDROP_TEST === '1';
@@ -561,6 +562,12 @@ async function startController(): Promise<void> {
   // MESHDROP_INGRESS_PORT moves the hub's tunnel ingress off 53319 (e2e: 0, next to a real hub).
   const ingress = process.env.MESHDROP_INGRESS_PORT !== undefined ? Number(process.env.MESHDROP_INGRESS_PORT) : undefined;
   if (ingress !== undefined && Number.isInteger(ingress) && ingress >= 0 && ingress <= 65535) engineOptions.hub = { ingressPort: ingress };
+  // Add-ons (separate packages: other apps' share protocols). Tests load only the folder they name.
+  const addonDir = process.env.MESHDROP_ADDON_DIR;
+  if (process.platform === 'linux' && (addonDir || !TEST)) {
+    const { transports } = loadAddons({ ...(addonDir ? { dir: addonDir } : {}), log: (m) => console.log(`[meshdrop] ${m}`) });
+    if (transports.length > 0) engineOptions.addons = transports;
+  }
   // M14: Bluetooth links through BlueZ (Linux; e2e tests run without a radio)
   const bt = WIN || TEST ? undefined : bluezPlatform({ script: app.isPackaged ? join(process.resourcesPath, 'meshdrop-bt.py') : join(__dirname, '../../build/meshdrop-bt.py') });
   // M14: hotspots and the tether guard through NetworkManager (Linux desktops)

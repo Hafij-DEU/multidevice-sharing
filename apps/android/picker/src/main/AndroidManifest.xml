@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <!-- The Recent, Videos, Photos and Audio tabs -->
+    <uses-permission android:name="android.permission.READ_MEDIA_VIDEO" />
+    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
+    <uses-permission android:name="android.permission.READ_MEDIA_AUDIO" />
+    <!-- Android 14's "Allow limited access" to only some photos and videos -->
+    <uses-permission android:name="android.permission.READ_MEDIA_VISUAL_USER_SELECTED" />
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />
+    <!-- The APK files and Files tabs list other apps' documents, which only All files access shows;
+         asked for only when one of those tabs is opened -->
+    <uses-permission
+        android:name="android.permission.MANAGE_EXTERNAL_STORAGE"
+        tools:ignore="ScopedStorage" />
+    <!-- The Apps tab, and telling whether an APK file is already installed (the apps are sideloaded, not on Play) -->
+    <uses-permission
+        android:name="android.permission.QUERY_ALL_PACKAGES"
+        tools:ignore="QueryAllPackagesPermission" />
+    <!-- MIUI and HyperOS also ask the user before an app may read the installed-app list -->
+    <uses-permission android:name="com.android.permission.GET_INSTALLED_APPS" />
+
+    <application>
+        <activity
+            android:name=".PickerActivity"
+            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|uiMode"
+            android:exported="false"
+            android:label="Choose what to send"
+            android:theme="@style/Theme.MeshDropPicker" />
+    </application>
+</manifest>

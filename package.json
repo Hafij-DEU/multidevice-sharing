@@ -10,7 +10,7 @@
   },
   "scripts": {
     "test": "vitest run",
-    "typecheck": "tsc -p packages/core --noEmit && tsc -p apps/desktop --noEmit",
+    "typecheck": "tsc -p packages/core --noEmit && tsc -p apps/desktop --noEmit && tsc -p addons/share --noEmit",
     "desktop:build": "pnpm --filter @meshdrop/desktop build",
     "desktop:e2e": "pnpm --filter @meshdrop/desktop build && pnpm --filter @meshdrop/desktop e2e",
     "desktop:dev": "pnpm --filter @meshdrop/desktop build && pnpm --filter @meshdrop/desktop exec electron ."

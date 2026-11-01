@@ -3,6 +3,7 @@ package io.github.hafijbge.meshdrop;
 import android.app.Activity;
 import android.content.Intent;
 import android.net.Uri;
+import io.github.hafijbge.meshdrop.picker.PickerActivity;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
@@ -14,6 +15,7 @@ final class Pickers {
     static final int PICK_TREE = 42;
     static final int SCAN_QR = 43;
     static final int SCAN_DOC = 44;
+    static final int CHOOSE = 45;
     private volatile CompletableFuture<Boolean> photo;
     private final Activity activity;
     private final AndroidPlatform platform;
@@ -109,8 +111,75 @@ final class Pickers {
         return f.get(30, TimeUnit.MINUTES);
     }
 
+    /**
+     * The categorised "Choose what to send" screen (Recent, Videos, Photos, Audio, Apps, APK files,
+     * Files); returns the ticked items as {kind:'file', path, name}, or none when cancelled.
+     */
+    List<Object> choose() throws Exception {
+        CompletableFuture<List<Object>> f = new CompletableFuture<>();
+        CompletableFuture<List<Object>> prev = waiting;
+        if (prev != null) prev.complete(new ArrayList<>());
+        waiting = f;
+        activity.runOnUiThread(() -> activity.startActivityForResult(new Intent(activity, PickerActivity.class), CHOOSE));
+        return f.get(30, TimeUnit.MINUTES);
+    }
+
+    /**
+     * A chosen file's path for the send list. The engine names a file by its path, so a file sent
+     * under another name (an installed app's base.apk as "<Label>.apk") goes through a symlink with
+     * that name in the cache folder.
+     */
+    private String chosenPath(Uri uri, String name) throws java.io.IOException {
+        String path = uri.getPath();
+        if (path == null || new java.io.File(path).getName().equals(name)) return path;
+        java.io.File root = new java.io.File(activity.getCacheDir(), "picked");
+        java.io.File dir = new java.io.File(root, Long.toString(System.nanoTime()));
+        if (!dir.mkdirs()) throw new java.io.IOException("Cannot prepare " + name);
+        java.nio.file.Path link = new java.io.File(dir, name).toPath();
+        java.nio.file.Files.createSymbolicLink(link, java.nio.file.Paths.get(path));
+        return link.toString();
+    }
+
+    /** Clears the links of earlier choices once they are a day old (a send can resume a while later). */
+    private void prunePicked() {
+        java.io.File[] old = new java.io.File(activity.getCacheDir(), "picked").listFiles();
+        if (old == null) return;
+        long cutoff = System.currentTimeMillis() - TimeUnit.DAYS.toMillis(1);
+        for (java.io.File d : old) {
+            if (d.lastModified() >= cutoff) continue;
+            java.io.File[] links = d.listFiles();
+            if (links != null) for (java.io.File l : links) l.delete(); // deletes the link, not its target
+            d.delete();
+        }
+    }
+
     /** From MainActivity.onActivityResult. */
     boolean onResult(int requestCode, int resultCode, Intent data) {
+        if (requestCode == CHOOSE) {
+            CompletableFuture<List<Object>> f = waiting;
+            waiting = null;
+            List<Object> out = new ArrayList<>();
+            if (resultCode == Activity.RESULT_OK && data != null) {
+                prunePicked();
+                @SuppressWarnings("deprecation") // the typed overload needs API 33
+                ArrayList<Uri> uris = data.getParcelableArrayListExtra(PickerActivity.EXTRA_URIS);
+                ArrayList<String> names = data.getStringArrayListExtra(PickerActivity.EXTRA_NAMES);
+                for (int k = 0; uris != null && names != null && k < uris.size() && k < names.size(); k++) {
+                    Uri u = uris.get(k);
+                    java.util.Map<String, Object> m = new java.util.LinkedHashMap<>();
+                    m.put("kind", "file");
+                    try {
+                        m.put("path", "file".equals(u.getScheme()) ? chosenPath(u, names.get(k)) : u.toString());
+                    } catch (java.io.IOException | RuntimeException e) {
+                        continue; // that one file cannot be offered; the rest still can
+                    }
+                    m.put("name", names.get(k));
+                    out.add(m);
+                }
+            }
+            if (f != null) f.complete(out);
+            return true;
+        }
         if (requestCode == SCAN_DOC) {
             CompletableFuture<Boolean> f = photo;
             photo = null;

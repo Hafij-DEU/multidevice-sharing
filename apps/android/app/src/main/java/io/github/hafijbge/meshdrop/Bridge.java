@@ -92,6 +92,8 @@ public final class Bridge {
     private Object dispatch(String method, List<Object> args) throws Exception {
         AndroidPlatform p = core.platform;
         switch (method) {
+            case "chooseItems":
+                return pickers.choose();
             case "pickItems":
                 return pickers.pick("dir".equals(args.isEmpty() ? null : args.get(0)));
             case "pickFiles": {

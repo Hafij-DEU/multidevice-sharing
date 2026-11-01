@@ -45,6 +45,7 @@
         android:fullBackupContent="false"
         android:icon="@mipmap/ic_launcher"
         android:label="MeshDrop"
+        android:requestLegacyExternalStorage="true"
         android:supportsRtl="true"
         android:theme="@style/Theme.MeshDrop"
         android:usesCleartextTraffic="false">

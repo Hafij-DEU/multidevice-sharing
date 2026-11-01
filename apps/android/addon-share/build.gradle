@@ -1,0 +1,55 @@
+plugins {
+    id 'com.android.application'
+}
+
+// The "Share with other apps" add-on: a separate APK next to MeshDrop, signed with the same key
+// (scripts/release.sh's environment), so MeshDrop can trust it later through a signature permission.
+def releaseStore = System.getenv('MESHDROP_KS')
+
+android {
+    namespace 'io.github.hafijbge.meshdrop.addon.share'
+    compileSdk 35
+    buildToolsVersion '35.0.0'
+
+    defaultConfig {
+        applicationId 'io.github.hafijbge.meshdrop.addon.share'
+        minSdk 29
+        targetSdk 35
+        versionCode 3
+        versionName '0.1.2'
+    }
+
+    signingConfigs {
+        release {
+            if (releaseStore) {
+                storeFile file(releaseStore)
+                storePassword System.getenv('MESHDROP_KS_PASS')
+                keyAlias System.getenv('MESHDROP_KEY_ALIAS')
+                keyPassword System.getenv('MESHDROP_KEY_PASS')
+            }
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            if (releaseStore) {
+                signingConfig signingConfigs.release
+            }
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    packaging {
+        resources.excludes += ['META-INF/*']
+    }
+}
+
+dependencies {
+    implementation project(':picker') // the "Choose what to send" screen
+    implementation 'com.google.zxing:core:3.5.3' // QR decoding (pure Java)
+}

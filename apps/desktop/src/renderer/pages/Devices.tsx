@@ -132,11 +132,11 @@ export function Devices({ state, run }: { state: AppState; run: Run }) {
   const [showOpts, setShowOpts] = useState(false);
   const [pairing, setPairing] = useState<{ host: string; port: number; name: string; deviceId: string; alias: string; code: string } | null>(null);
   const [busy, setBusy] = useState(false);
-  const [adding, setAdding] = useState(state.devices.every((d) => !d.trusted && d.role !== 'localsend'));
+  const [adding, setAdding] = useState(state.devices.every((d) => !d.trusted && d.role !== 'localsend' && d.role !== 'addon'));
 
-  // LocalSend apps can be sent to (they ask their user), so they sit with the trusted devices.
-  const trusted = state.devices.filter((d) => d.trusted || d.role === 'localsend');
-  const nearby = state.devices.filter((d) => !d.trusted && d.role !== 'localsend');
+  // LocalSend apps and add-on peers (Quick Share, ...) can be sent to (they ask their user), so they sit with the trusted devices.
+  const trusted = state.devices.filter((d) => d.trusted || d.role === 'localsend' || d.role === 'addon');
+  const nearby = state.devices.filter((d) => !d.trusted && d.role !== 'localsend' && d.role !== 'addon');
   const targets = all ? trusted.filter((d) => d.reach !== 'offline').map((d) => d.deviceId) : [...selected].filter((id) => trusted.some((d) => d.deviceId === id));
   const payload: SendItemInput[] = [...items, ...(text !== null && text !== '' ? [{ kind: 'text' as const, text }] : [])];
   const canSend = targets.length > 0 && payload.length > 0 && !busy;
@@ -238,6 +238,7 @@ export function Devices({ state, run }: { state: AppState; run: Run }) {
       {!android && <DropZone onItems={add} />}
       <div className="row">
         <button onClick={() => pick('file')}>Add files</button>
+        {window.meshdrop.chooseItems && <button onClick={() => void run(async () => add(await window.meshdrop.chooseItems!()))}>Choose by type</button>}
         <button onClick={() => pick('dir')}>Add folder</button>
         <button onClick={() => setText(text === null ? '' : null)} aria-pressed={text !== null}>
           Text

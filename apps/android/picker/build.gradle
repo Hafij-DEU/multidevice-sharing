@@ -1,0 +1,19 @@
+plugins {
+    id 'com.android.library'
+}
+
+// "Choose what to send": the categorised file chooser shared by MeshDrop and the Share add-on.
+android {
+    namespace 'io.github.hafijbge.meshdrop.picker'
+    compileSdk 35
+    buildToolsVersion '35.0.0'
+
+    defaultConfig {
+        minSdk 29
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+}

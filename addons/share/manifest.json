@@ -1,0 +1,7 @@
+{
+  "id": "share",
+  "name": "Share with other apps",
+  "version": "0.1.0",
+  "main": "index.cjs",
+  "apiVersion": 1
+}

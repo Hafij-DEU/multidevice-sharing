@@ -6,3 +6,4 @@ apps/desktop/test-results/
 apps/desktop/playwright-report/
 apps/desktop/dist-deb/
 apps/desktop/dist-win/
+addons/share/dist-deb/

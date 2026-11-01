@@ -3,7 +3,7 @@ import type { DeviceStatus, DeviceView } from '../../shared/api.ts';
 import { Peer } from './Peer.tsx';
 
 const REACH: Record<DeviceView['reach'], string> = { lan: 'On this network', bt: 'Over Bluetooth', hub: 'Via hub', offline: 'Offline' };
-const ROLE: Record<DeviceView['role'], string> = { hub: 'Hub', member: 'Mesh member', paired: 'Paired', nearby: 'Nearby', localsend: 'LocalSend' };
+const ROLE: Record<DeviceView['role'], string> = { hub: 'Hub', member: 'Mesh member', paired: 'Paired', nearby: 'Nearby', localsend: 'LocalSend', addon: 'Add-on' };
 
 /** A stable hue per device, so each one keeps its color everywhere. */
 function hueOf(id: string): number {
@@ -24,9 +24,9 @@ export function DeviceCard({ d, checked, disabled, onToggle, onPair, status }: {
       </span>
       <span className="device-main">
         <Peer text={d.alias} className="device-alias" />
-        <span className="device-sub" title={`${ROLE[d.role]} · ${d.deviceId.slice(0, 8)}`}>
+        <span className="device-sub" title={`${d.transport ?? ROLE[d.role]} · ${d.deviceId.slice(0, 8)}`}>
           <span className={`dot reach-${d.reach}`} aria-hidden="true" />
-          {REACH[d.reach]} · {ROLE[d.role]}
+          {REACH[d.reach]} · {d.transport ?? ROLE[d.role]}
           {status?.battery && d.reach !== 'offline' && ` · 🔋 ${status.battery.level}%${status.battery.charging ? '⚡' : ''}`}
         </span>
       </span>

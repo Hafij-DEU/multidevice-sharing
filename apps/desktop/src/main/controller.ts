@@ -676,12 +676,15 @@ export class AppController extends EventEmitter {
     if (ev.type === 'offer' && s.notifications) {
       const n = ev.files.length;
       const what = n > 0 ? `${n} file${n === 1 ? '' : 's'}${ev.text !== undefined ? ' and a message' : ''}` : 'a message';
-      this.#platform.notify(ev.via === 'localsend' ? 'A LocalSend device wants to send' : 'A guest wants to send', `${what}: open MeshDrop to accept or decline.`);
+      const title = ev.via === 'localsend' ? 'A LocalSend device wants to send' : ev.via === 'addon' ? `A ${ev.transport ?? 'nearby'} device wants to send` : 'A guest wants to send';
+      this.#platform.notify(title, `${what}: open MeshDrop to accept or decline.`);
     }
     if (ev.type === 'failed' && s.notifications) this.#platform.notify('A guest send could not be saved', `The files were uploaded but could not be saved (${ev.error}).`);
     if (ev.type === 'received') {
       const ls = ev.via === 'localsend';
-      this.#history.addReceived({ at: Date.now(), from: ls ? 'localsend' : 'guest', alias: ls ? `${ev.alias ?? 'LocalSend'} (LocalSend)` : 'Guest', files: [...ev.files], ...(ev.text !== undefined ? { text: ev.text } : {}) });
+      const addon = ev.via === 'addon';
+      const alias = ls ? `${ev.alias ?? 'LocalSend'} (LocalSend)` : addon ? `${ev.alias ?? 'Nearby device'} (${ev.transport ?? 'add-on'})` : 'Guest';
+      this.#history.addReceived({ at: Date.now(), from: ls ? 'localsend' : addon ? 'addon' : 'guest', alias, files: [...ev.files], ...(ev.text !== undefined ? { text: ev.text } : {}) });
       const first = ev.files[0];
       if (s.notifications) this.#platform.notify('From a guest', `${ev.files.length} file${ev.files.length === 1 ? '' : 's'} received`, first !== undefined ? () => this.#platform.revealPath(first) : undefined);
     }
@@ -907,6 +910,17 @@ export class AppController extends EventEmitter {
         const text = items.filter((it) => it.kind === 'text').map((it) => it.text!).join('\n\n');
         await Promise.all(lsTargets.map((fp) => this.#e.localsendSend(fp, { paths, ...(text ? { text } : {}) })));
         targets = targets.filter((t) => !ls.has(t));
+        if (targets.length === 0) return;
+      }
+      // Add-on transports (Quick Share, ...) the same way.
+      const ad = new Map(this.#e.devices().filter((d) => d.role === 'addon').map((d) => [d.deviceId, d.transport ?? 'That device']));
+      const adTargets = targets.filter((t) => ad.has(t));
+      if (adTargets.length > 0) {
+        if (items.some((it) => it.kind === 'dir')) throw new Error(`${ad.get(adTargets[0]!)} takes files and text, not folders.`);
+        const paths = items.filter((it) => it.kind !== 'text').map((it) => it.path!);
+        const text = items.filter((it) => it.kind === 'text').map((it) => it.text!).join('\n\n');
+        await Promise.all(adTargets.map((id) => this.#e.addonSend(id, { paths, ...(text ? { text } : {}) })));
+        targets = targets.filter((t) => !ad.has(t));
         if (targets.length === 0) return;
       }
     }

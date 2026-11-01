@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- The chooser draws its own light colours, so it stays light when the app around it is dark. -->
+    <style name="Theme.MeshDropPicker" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">@color/meshdrop_picker_bg</item>
+        <item name="android:statusBarColor">@color/meshdrop_picker_bg</item>
+        <item name="android:navigationBarColor">@color/meshdrop_picker_bg</item>
+        <item name="android:windowLightStatusBar">true</item>
+        <item name="android:windowLightNavigationBar">true</item>
+    </style>
+
+    <color name="meshdrop_picker_bg">#fafafa</color>
+</resources>

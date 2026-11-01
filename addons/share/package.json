@@ -1,0 +1,17 @@
+{
+  "name": "@meshdrop/addon-share",
+  "version": "0.1.0",
+  "private": true,
+  "license": "GPL-3.0-only",
+  "type": "module",
+  "scripts": {
+    "build": "vite build",
+    "deb": "bash scripts/build-deb.sh",
+    "test": "vitest run",
+    "typecheck": "tsc -p . --noEmit"
+  },
+  "devDependencies": {
+    "@meshdrop/core": "workspace:*",
+    "vite": "8.3.4"
+  }
+}

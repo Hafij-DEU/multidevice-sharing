@@ -6,7 +6,9 @@ export type Reach = 'lan' | 'bt' | 'hub' | 'offline';
 export interface DeviceView {
   deviceId: string;
   alias: string;
-  role: 'hub' | 'member' | 'paired' | 'nearby' | 'localsend';
+  role: 'hub' | 'member' | 'paired' | 'nearby' | 'localsend' | 'addon';
+  /** addon: the add-on transport's name ("Quick Share"). */
+  transport?: string;
   trusted: boolean;
   reach: Reach;
   deviceType?: string;
@@ -144,7 +146,7 @@ export interface GuestView {
   claimed?: boolean;
   shared: { id: string; name: string; size: number }[];
   /** Sends waiting for the owner's answer (`via: 'link'`: from an internet link). */
-  offers: { id: string; files: GuestFileView[]; text?: string; via?: 'link' | 'localsend'; alias?: string }[];
+  offers: { id: string; files: GuestFileView[]; text?: string; via?: 'link' | 'localsend' | 'addon'; alias?: string; transport?: string; pin?: string }[];
 }
 
 /** Folder sync (LAN only): the folder, and the devices it is synced with. */
@@ -547,6 +549,8 @@ export interface DesktopApi {
   openConfigFolder(): Promise<void>;
   /** Android: the system picker, returning items with display names (content URIs are not readable paths). */
   pickItems?(kind: 'file' | 'dir'): Promise<SendItemInput[]>;
+  /** Android: the categorised "Choose what to send" screen (Recent, Videos, Photos, Audio, Apps, APK files, Files). */
+  chooseItems?(): Promise<SendItemInput[]>;
   /** Android: scans a QR code with the camera; its text, or null when cancelled. */
   scanQr?(): Promise<string | null>;
   /** Android: the items shared into MeshDrop (Share → MeshDrop), once. */

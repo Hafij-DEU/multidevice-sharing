@@ -39,6 +39,8 @@ import { createWatchHandler } from './watch/server.ts';
 import { WATCH_PAGE } from './watch/page.ts';
 import { ensureDir, GuestUploads, land, type GuestEvent, type GuestFile } from './guest/uploads.ts';
 import { LINK_PAGE } from './links/page.ts';
+import type { AddonEvent, AddonTransport } from './addons.ts';
+import { safeRelPath } from './sanitize.ts';
 import { lsRegister, lsSend } from './localsend/client.ts';
 import { LS_PORT, LocalSendDiscovery, type LsPeerInfo } from './localsend/discovery.ts';
 import { LocalSendReceiver, type LsEvent, type LsInfo } from './localsend/server.ts';
@@ -91,10 +93,12 @@ export type EngineEvent =
   | { source: 'bt'; type: 'up' | 'down'; deviceId: string }
   /** A LocalSend app showed up on the LAN. */
   | { source: 'localsend'; type: 'peer'; fingerprint: string; alias: string }
+  /** An add-on transport's peer list changed. */
+  | { source: 'addon'; type: 'peers'; transport: string }
   /** LAN guests: an offer waiting for the owner, a finished upload, one file of it, a rejected offer, the session ended. */
-  /** `via: 'link'`: the visitor came through an internet guest link (`link` is its id). */
-  | { source: 'guest'; type: 'offer'; id: string; files: GuestFile[]; text?: string; via?: 'link' | 'localsend'; link?: string; alias?: string }
-  | { source: 'guest'; type: 'received'; id: string; files: string[]; text?: string; via?: 'localsend'; alias?: string }
+  /** `via: 'link'`: the visitor came through an internet guest link (`link` is its id). `via: 'addon'`: an add-on transport (`transport` is its label). */
+  | { source: 'guest'; type: 'offer'; id: string; files: GuestFile[]; text?: string; via?: 'link' | 'localsend' | 'addon'; link?: string; alias?: string; transport?: string; pin?: string }
+  | { source: 'guest'; type: 'received'; id: string; files: string[]; text?: string; via?: 'localsend' | 'addon'; alias?: string; transport?: string }
   | { source: 'guest'; type: 'file'; id: string; path: string }
   | { source: 'guest'; type: 'rejected'; id: string }
   | { source: 'guest'; type: 'failed'; id: string; error: string }
@@ -132,7 +136,7 @@ export interface GuestState {
   claimed?: boolean;
   shared: { id: string; name: string; size: number }[];
   /** Offers waiting for the owner's answer. */
-  offers: { id: string; files: GuestFile[]; text?: string; via?: 'link' | 'localsend'; alias?: string }[];
+  offers: { id: string; files: GuestFile[]; text?: string; via?: 'link' | 'localsend' | 'addon'; alias?: string; transport?: string; pin?: string }[];
 }
 
 /** An internet guest link as the owner's app lists it. */
@@ -243,6 +247,8 @@ export interface EngineOptions {
   hubDrainMs?: number;
   /** LocalSend v2 interop (HTTPS port default 53317, multicast 224.0.0.167:53317); false: off. Only with serve. */
   localsend?: { port?: number; multicastPort?: number; iface?: string; answerTimeoutMs?: number } | false;
+  /** Add-on transports (other apps' share protocols) to start with serve. */
+  addons?: AddonTransport[];
   /** Internet reach (M5c) seams for tests: fake CLIs, CA, DuckDNS and router. */
   reach?: Omit<ReachEnv, 'home' | 'ingressPort' | 'attachPublic' | 'publish'>;
   /** Total bytes internet guest links may keep on the hub (default 10 GiB). */
@@ -274,8 +280,10 @@ export interface EngineOptions {
 export interface EngineDevice {
   deviceId: string;
   alias: string;
-  /** localsend: a LocalSend app on the LAN (untrusted; sends to it go through its own protocol). */
-  role: 'hub' | 'member' | 'paired' | 'nearby' | 'localsend';
+  /** localsend / addon: a LocalSend app or an add-on transport's peer on the LAN (untrusted; sends to it go through its own protocol). */
+  role: 'hub' | 'member' | 'paired' | 'nearby' | 'localsend' | 'addon';
+  /** addon: the transport's label ("Quick Share"). */
+  transport?: string;
   trusted: boolean;
   /** bt: over a Bluetooth link (M14). */
   reach: 'lan' | 'bt' | 'hub' | 'offline';
@@ -862,6 +870,8 @@ export class Engine extends EventEmitter {
       }
     }
 
+    if (server) await this.startAddons();
+
     this.running = { server, guest, guestPort, ls, discovery, abort: new AbortController(), port, hub, relayHub, ingressPort, client: null, timers: [] };
     if (server && this.opts.bt) await this.startBt(this.opts.bt);
     if (server) {
@@ -951,6 +961,7 @@ export class Engine extends EventEmitter {
       await closed;
       this.lsReceiver = null;
     }
+    await this.stopAddons();
     if (r.guest) {
       const closed = new Promise<void>((resolve) => r.guest!.close(() => resolve()));
       r.guest.closeAllConnections();
@@ -1401,6 +1412,12 @@ export class Engine extends EventEmitter {
     for (const p of this.localsendPeers()) {
       if (out.has(p.fingerprint) || p.fingerprint === this.identity.deviceId) continue;
       out.set(p.fingerprint, { deviceId: p.fingerprint, alias: p.alias, role: 'localsend', trusted: false, reach: 'lan', deviceType: p.deviceType ?? 'mobile', lastSeen: p.lastSeen });
+    }
+    for (const t of this.addonsLive) {
+      for (const p of t.peers()) {
+        const id = `${t.id}:${p.id}`;
+        if (!out.has(id)) out.set(id, { deviceId: id, alias: p.alias, role: 'addon', transport: t.label, trusted: false, reach: 'lan', deviceType: p.deviceType ?? 'mobile', lastSeen: p.lastSeen });
+      }
     }
     return [...out.values()];
   }
@@ -2385,7 +2402,57 @@ export class Engine extends EventEmitter {
     await lsSend(p, this.lsSelf(), items, onProgress ? { onProgress } : {});
   }
 
-  private uploadsOf(id: string): GuestUploads | LocalSendReceiver {
+  // ---- add-on transports ---------------------------------------------------------------------------
+
+  private addonsLive: AddonTransport[] = [];
+
+  /** Starts each add-on transport; one that fails to start is left out of this run. */
+  private async startAddons(): Promise<void> {
+    for (const t of this.opts.addons ?? []) {
+      if (!/^[a-z0-9-]{1,32}$/.test(t.id) || this.addonsLive.some((o) => o.id === t.id)) continue;
+      const partialDir = join(this.home, 'addon-partial', t.id);
+      try {
+        rmSync(partialDir, { recursive: true, force: true });
+        mkdirSync(partialDir, { recursive: true });
+        await t.start({
+          alias: this.alias, deviceType: this.deviceType, partialDir,
+          land: async (part, name) => land(part, await ensureDir(this.inboxDir, []), addonFileName(name)),
+          accepting: () => this.accepting,
+          emit: (e) => this.onAddon(t, e),
+          log: () => {},
+        });
+        this.addonsLive.push(t);
+      } catch {
+        /* this add-on is off for this run */
+      }
+    }
+  }
+
+  private async stopAddons(): Promise<void> {
+    const live = this.addonsLive;
+    this.addonsLive = [];
+    await Promise.all(live.map((t) => t.stop().catch(() => {})));
+  }
+
+  private onAddon(t: AddonTransport, e: AddonEvent): void {
+    if (e.type === 'peers') this.emitEvent({ source: 'addon', type: 'peers', transport: t.id });
+    else if (e.type === 'offer') {
+      this.emitEvent({ source: 'guest', type: 'offer', id: e.id, files: e.files, via: 'addon', transport: t.label, alias: e.alias, ...(e.text !== undefined ? { text: e.text } : {}), ...(e.pin ? { pin: e.pin } : {}) });
+    } else if (e.type === 'received') {
+      this.emitEvent({ source: 'guest', type: 'received', id: e.id, files: e.files, via: 'addon', transport: t.label, alias: e.alias, ...(e.text !== undefined ? { text: e.text } : {}) });
+    } else this.emitEvent({ source: 'guest', type: 'rejected', id: e.id });
+  }
+
+  /** Sends files and/or a message to an add-on transport's peer (`deviceId` = `${transport}:${peer}`). */
+  async addonSend(deviceId: string, items: { paths: string[]; text?: string }, onProgress?: (sent: number, total: number) => void): Promise<void> {
+    const i = deviceId.indexOf(':');
+    const t = this.addonsLive.find((o) => o.id === deviceId.slice(0, i));
+    if (!t || i < 0) throw new Error('that add-on is not running');
+    await t.send(deviceId.slice(i + 1), items, onProgress);
+  }
+
+  private uploadsOf(id: string): GuestUploads | LocalSendReceiver | AddonTransport {
+    for (const t of this.addonsLive) if (t.has(id)) return t;
     if (this.lsReceiver?.has(id)) return this.lsReceiver;
     if (this.guestUploads?.has(id)) return this.guestUploads;
     for (const u of this.linkUploadMap.values()) if (u.has(id)) return u;
@@ -2405,6 +2472,7 @@ export class Engine extends EventEmitter {
     const viaLinks = [
       ...[...this.linkUploadMap.values()].flatMap((u) => u.pending().map((o) => ({ ...o, via: 'link' as const }))),
       ...(this.lsReceiver?.pending() ?? []).map((o) => ({ ...o, via: 'localsend' as const })),
+      ...this.addonsLive.flatMap((t) => t.pending().map((o) => ({ ...o, via: 'addon' as const, transport: t.label }))),
     ];
     if (!cur || !this.guestUploads) return { active: false, available: !!this.running?.guest, shared: [], offers: viaLinks };
     return {
@@ -2762,5 +2830,14 @@ export class Engine extends EventEmitter {
     this.mesh = await MembershipStore.init(this.home, createPublicKey(rootKey), s);
     this.rootKey = rootKey;
     return s;
+  }
+}
+
+/** An add-on's file name, flattened to one safe segment: a remote device chose it. */
+function addonFileName(name: string): string {
+  try {
+    return safeRelPath(name.split(/[/\\]/).pop() ?? '') || 'file';
+  } catch {
+    return 'file';
   }
 }
