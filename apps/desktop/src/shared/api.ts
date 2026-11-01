@@ -560,8 +560,21 @@ export interface DesktopApi {
   wifiStatus?(): Promise<WifiStatusView>;
   /** Scans for access points (optionally one SSID) so the user can pick a BSSID to pin. */
   wifiScan?(ssid?: string): Promise<WifiScanAp[]>;
+  /**
+   * Sets or clears the band lock on one saved network, leaving its password, security and
+   * enterprise settings untouched. Pass a null bssid to unpin (go back to any access point).
+   */
+  wifiLock?(id: string, bssid: string | null, band: string | null, fallback: boolean): Promise<WifiProfileView>;
   /** M5: two-way sync of the saved networks across the user's own trusted devices. */
   wifiSyncNow?(): Promise<WifiSyncResult>;
+  /** Copies one saved network's own passphrase to the clipboard; the value never reaches the renderer. */
+  wifiCopy?(id: string): Promise<void>;
+  /** Returns a Wi-Fi QR (SVG string) for one saved network so another phone can scan it to join. */
+  wifiQr?(id: string): Promise<string>;
+  /** Opens Android's own "Save network" dialog for one saved network; on confirm it becomes a real system network (with Android's native Share/QR). */
+  wifiAddToSystem?(id: string): Promise<void>;
+  /** Opens Android's share sheet with one saved network's details (SSID, password, scannable payload) for any app. */
+  wifiShare?(id: string): Promise<void>;
 }
 
 /** Result of a "Sync to my devices" run: how many trusted devices, reached, pushed to, and merged in. */

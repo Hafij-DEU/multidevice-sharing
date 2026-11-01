@@ -147,8 +147,25 @@ public final class Bridge {
                 return wifiControl.status();
             case "wifiScan":
                 return wifiControl.scan(args.isEmpty() || args.get(0) == null ? null : args.get(0).toString());
+            case "wifiLock": // band lock set/cleared on one saved network, leaving its password untouched
+                return wifiControl.lock(
+                        (String) args.get(0),
+                        args.get(1) == null ? null : args.get(1).toString(),
+                        args.get(2) == null ? null : args.get(2).toString(),
+                        Boolean.TRUE.equals(args.get(3)));
             case "wifiSyncNow": // M5: two-way sync of the user's networks across their own trusted devices
                 return wifiControl.syncNow();
+            case "wifiCopy": // copies one saved network's own passphrase to the clipboard (never to the UI)
+                wifiControl.copyPassword((String) args.get(0));
+                return null;
+            case "wifiQr": // returns a Wi-Fi QR (SVG) for one saved network so another phone can scan to join
+                return wifiControl.qr((String) args.get(0));
+            case "wifiAddToSystem": // opens Android's own Save-network dialog so the network becomes a real system one
+                wifiControl.addToSystem((String) args.get(0));
+                return null;
+            case "wifiShare": // opens Android's share sheet with the network's details for any app
+                wifiControl.share((String) args.get(0));
+                return null;
             case "takeSharedItems":
                 return new ArrayList<Object>(p.takeShared());
             case "keepAliveAction":

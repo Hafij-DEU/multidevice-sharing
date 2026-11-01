@@ -19,12 +19,13 @@ import { a2dpStreams, holdA2dp, type BluezPlatform, type BtAudioSource } from '.
 import { BUTTONS, KEYSYMS, charKeysym } from './keys.ts';
 import { ensureDir, land } from '@meshdrop/core/src/guest/uploads.ts';
 import { cleanHandoff, handoffUrl, type HandoffState } from '@meshdrop/core/src/handoff.ts';
-import type { AppState, NoWifiView, StreamKind, DeviceStatus, ReceivedRecord, DeviceView, PhoneNote, RemoteEvent, ScheduledView, SendOptions, GuestView, LinkCreateInput, LinkView, ReachInput, ReachView, SendItemInput, Settings, SyncView, TransferView } from '../shared/api.ts';
+import type { AppState, NoWifiView, StreamKind, DeviceStatus, ReceivedRecord, DeviceView, PhoneNote, RemoteEvent, ScheduledView, SendOptions, GuestView, LinkCreateInput, LinkView, ReachInput, ReachView, SendItemInput, Settings, SyncView, TransferView, WifiProfileView, WifiSyncResult } from '../shared/api.ts';
 import type { HistoryStore } from './history.ts';
 import { SettingsError, type SettingsStore } from './settings.ts';
 import { liveAudio, liveRtp } from './liveaudio.ts';
 import { opusChannels, opusDecoder, opusEncoder, opusLiveBytes, opusType } from './opus.ts';
 import { HOTSPOT_HOST_IP, validHotspot, wifiQr, type NetMan } from './netman.ts';
+import { SYNC_TIMEOUT_MS as WIFI_SYNC_TIMEOUT_MS, WifiControl, type WifiSeal } from './wifi.ts';
 
 export type ClipImage = { key: string; png: () => Buffer | Promise<Buffer> };
 
@@ -164,6 +165,8 @@ export interface ControllerOptions {
   net?: (onChange: () => void) => NetMan;
   /** Tests: shorter M11 timings (burn after reading, the sweep, the time-capsule threshold). */
   timing?: { burnAfterOpenMs?: number; tickMs?: number; scheduleMinMs?: number };
+  /** M1–M5 Wi-Fi: seals the saved-networks store at rest (OS keyring); without it the store is plaintext at mode 0600. */
+  wifiSeal?: WifiSeal;
 }
 
 /** M14: the engine's link policy from the No Wi-Fi settings. */
@@ -326,10 +329,19 @@ export class AppController extends EventEmitter {
     });
     this.#net = opts.net?.(() => this.#changed());
     this.#timing = opts.timing ?? {};
+    this.#wifi = new WifiControl({
+      home: this.#home,
+      clip: (text) => this.#platform.writeClipboard(text),
+      // The user's own trusted, online devices — never a LocalSend peer (not one of ours, no shared store).
+      peers: () => this.#e.devices().filter((d) => d.trusted && d.reach !== 'offline' && d.role !== 'localsend').map((d) => d.deviceId),
+      send: (deviceId, msg) => this.#e.appSend(deviceId, msg, WIFI_SYNC_TIMEOUT_MS),
+      ...(opts.wifiSeal ? { seal: opts.wifiSeal } : {}),
+    });
   }
 
   readonly #timing: NonNullable<ControllerOptions['timing']>;
   readonly #net: NetMan | undefined;
+  readonly #wifi: WifiControl;
   #hotspot: NoWifiView['hotspot'];
   #offer: NoWifiView['offer'];
 
@@ -1276,9 +1288,41 @@ export class AppController extends EventEmitter {
         })();
         return { status: 200, body: { ok: true } };
       }
+      case 'wifi-sync':
+        // M5: a trusted device of the user's syncs their saved Wi-Fi networks. Reached only from trusted
+        // peers (the engine delivers app messages from trusted peers alone), so the passphrases this carries
+        // never leave the user's own mesh.
+        return { status: 200, body: this.#wifi.onWifiSync(peer, msg) };
       default:
         return { status: 404, body: { error: 'unknown-kind' } };
     }
+  }
+
+  // ---- M1–M5: Wi-Fi (desktop is view + copy / QR / share; it never connects or changes OS settings) ----
+
+  /** The user's saved Wi-Fi networks, synced from their phone. Never includes a passphrase. */
+  wifiList(): WifiProfileView[] {
+    return this.#wifi.list();
+  }
+
+  /** Copies one saved network's passphrase to the clipboard; the value never reaches the renderer. */
+  wifiCopy(id: string): void {
+    this.#wifi.copyPassword(id);
+  }
+
+  /** A Wi-Fi QR (SVG string) for one saved network so another device can scan it to join. */
+  wifiQr(id: string): Promise<string> {
+    return this.#wifi.qr(id);
+  }
+
+  /** Copies one saved network's sharable details (name + password + scannable payload) to the clipboard. */
+  wifiShare(id: string): void {
+    this.#wifi.share(id);
+  }
+
+  /** M5: two-way sync of the saved networks across the user's own trusted devices. */
+  wifiSyncNow(): Promise<WifiSyncResult> {
+    return this.#wifi.syncNow();
   }
 
   // ---- M14: hotspots ------------------------------------------------------------------------------
