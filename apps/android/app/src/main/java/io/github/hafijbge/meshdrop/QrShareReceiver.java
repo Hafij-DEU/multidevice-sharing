@@ -10,13 +10,11 @@ import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
-import java.net.HttpURLConnection;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.net.SocketTimeoutException;
-import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.security.SecureRandom;
 import java.util.ArrayList;
@@ -173,7 +171,7 @@ final class QrShareReceiver implements AutoCloseable {
         volatile long lastWrite = System.currentTimeMillis();
         volatile boolean over;
         volatile boolean cancelled;
-        volatile HttpURLConnection http;
+        volatile Socket http;
         volatile Thread downloader;
         int pings;
         String from = "Xiaomi phone";
@@ -222,8 +220,7 @@ final class QrShareReceiver implements AutoCloseable {
             Thread d = downloader;
             if (d != null && d.isAlive()) {
                 cancelled = true;
-                HttpURLConnection h = http;
-                if (h != null) h.disconnect();
+                closeQuietly(http);
             }
             close();
         }
@@ -266,8 +263,7 @@ final class QrShareReceiver implements AutoCloseable {
                     break;
                 case "cancel_sending":
                     cancelled = true;
-                    HttpURLConnection h = http;
-                    if (h != null) h.disconnect();
+                    closeQuietly(http);
                     break;
                 case "send_apk_list":
                 case "downloaded_per_file":
@@ -322,7 +318,7 @@ final class QrShareReceiver implements AutoCloseable {
                     String[] f = files.get(i);
                     File tmp = new File(tmpDir, "part-" + id + "-" + i);
                     long size = sizes.get(i);
-                    pull(url(f[1]), tmp, size, doneBefore[0], total);
+                    pull(target(f[1]), tmp, size, doneBefore[0], total);
                     if (cancelled) throw new IOException("cancelled");
                     String located = store.save(f[0], tmp, QrShareItem.mimeOf(f[0]));
                     doneBefore[0] += size;
@@ -354,39 +350,102 @@ final class QrShareReceiver implements AutoCloseable {
             }
         }
 
-        /** The file's URL on the sender: its uri is ":port/id" (or a full path or URL). */
-        URL url(String uri) throws IOException {
-            String host = addr.getHostAddress();
-            if (uri.startsWith("http://") || uri.startsWith("https://")) return new URL(uri);
-            if (uri.startsWith(":")) return new URL("http://" + host + uri);
-            if (uri.startsWith("/")) return new URL("http://" + host + uri);
-            throw new IOException("unknown file address " + clip(uri));
+        /**
+         * The file's port and path on the sender: its uri is ":port/id" (or a path or full URL). Only the
+         * sender's own address is fetched, whatever host a URL names.
+         */
+        Object[] target(String uri) throws IOException {
+            String rest;
+            if (uri.startsWith("http://")) {
+                int slash = uri.indexOf('/', 7);
+                String hostPort = slash < 0 ? uri.substring(7) : uri.substring(7, slash);
+                int colon = hostPort.lastIndexOf(':');
+                rest = (colon < 0 ? ":80" : hostPort.substring(colon)) + (slash < 0 ? "/" : uri.substring(slash));
+            } else if (uri.startsWith(":")) {
+                rest = uri;
+            } else if (uri.startsWith("/")) {
+                rest = ":80" + uri;
+            } else {
+                throw new IOException("unknown file address " + clip(uri));
+            }
+            int slash = rest.indexOf('/');
+            String path = slash < 0 ? "/" : rest.substring(slash);
+            int port;
+            try {
+                port = Integer.parseInt(slash < 0 ? rest.substring(1) : rest.substring(1, slash));
+            } catch (NumberFormatException e) {
+                throw new IOException("unknown file address " + clip(uri));
+            }
+            if (port <= 0 || port > 65535 || path.contains("\r") || path.contains("\n") || path.contains(" ")) {
+                throw new IOException("unknown file address " + clip(uri));
+            }
+            return new Object[] {port, path};
         }
 
-        /** Downloads into tmp, resuming with a Range request after a dropped connection. */
-        void pull(URL url, File tmp, long size, long before, long total) throws IOException {
+        /**
+         * Downloads into tmp, resuming with a Range request after a dropped connection. Plain HTTP/1.1 over
+         * a socket: the app keeps cleartext HTTP off for everything else, and this only reaches the phone
+         * that is sending on the local hotspot.
+         */
+        void pull(Object[] target, File tmp, long size, long before, long total) throws IOException {
+            int port = (Integer) target[0];
+            String path = (String) target[1];
             IOException last = null;
             for (int attempt = 1; attempt <= TRIES && !cancelled; attempt++) {
                 long have = tmp.length();
                 if (size > 0 && have >= size) return;
-                HttpURLConnection h = (HttpURLConnection) url.openConnection();
+                Socket h = new Socket();
                 http = h;
                 try {
-                    h.setConnectTimeout(HTTP_MS);
-                    h.setReadTimeout(HTTP_MS);
-                    h.setRequestProperty("Range", "bytes=" + have + "-");
-                    h.setRequestProperty("Accept-Encoding", "identity");
-                    int code = h.getResponseCode();
+                    h.connect(new InetSocketAddress(addr, port), HTTP_MS);
+                    h.setSoTimeout(HTTP_MS);
+                    String req = "GET " + path + " HTTP/1.1\r\nHost: " + addr.getHostAddress() + ":" + port
+                            + "\r\nRange: bytes=" + have + "-\r\nAccept-Encoding: identity\r\nConnection: close\r\n\r\n";
+                    h.getOutputStream().write(req.getBytes(StandardCharsets.US_ASCII));
+                    h.getOutputStream().flush();
+                    InputStream raw = new BufferedInputStream(h.getInputStream(), 256 * 1024);
+                    String status = headerLine(raw);
+                    String[] parts = status.split(" ");
+                    int code;
+                    try {
+                        code = parts.length > 1 ? Integer.parseInt(parts[1]) : -1;
+                    } catch (NumberFormatException e) {
+                        code = -1;
+                    }
+                    long length = -1;
+                    boolean chunked = false;
+                    int headers = 0;
+                    for (String l; !(l = headerLine(raw)).isEmpty(); ) {
+                        if (++headers > 100) throw new IOException("the sender sent too many headers");
+                        int c = l.indexOf(':');
+                        if (c < 0) continue;
+                        String k = l.substring(0, c).trim().toLowerCase(Locale.ROOT);
+                        String v = l.substring(c + 1).trim();
+                        if (k.equals("content-length")) {
+                            try {
+                                length = Long.parseLong(v);
+                            } catch (NumberFormatException ignored) {
+                                length = -1;
+                            }
+                        } else if (k.equals("transfer-encoding") && v.toLowerCase(Locale.ROOT).contains("chunked")) {
+                            chunked = true;
+                        }
+                    }
                     boolean append = code == 206;
                     if (code != 200 && code != 206) throw new IOException("the sender answered HTTP " + code);
                     if (!append) have = 0;
-                    try (InputStream in = h.getInputStream(); OutputStream o = new FileOutputStream(tmp, append)) {
+                    InputStream in = chunked ? new Chunked(raw) : raw;
+                    long left = chunked ? -1 : length;
+                    try (OutputStream o = new FileOutputStream(tmp, append)) {
                         byte[] buf = new byte[256 * 1024];
                         long lastTick = 0;
-                        for (int n; (n = in.read(buf)) > 0; ) {
+                        while (left != 0) {
+                            int n = in.read(buf, 0, left < 0 ? buf.length : (int) Math.min(buf.length, left));
+                            if (n < 0) break;
                             if (cancelled) throw new IOException("cancelled");
                             o.write(buf, 0, n);
                             have += n;
+                            if (left > 0) left -= n;
                             long now = System.currentTimeMillis();
                             if (now - lastTick >= 300) {
                                 lastTick = now;
@@ -400,7 +459,7 @@ final class QrShareReceiver implements AutoCloseable {
                     last = e;
                     listener.log("http try " + attempt + ": " + e.getMessage());
                 } finally {
-                    h.disconnect();
+                    closeQuietly(h);
                     http = null;
                 }
             }
@@ -483,5 +542,68 @@ final class QrShareReceiver implements AutoCloseable {
     @Override
     public String toString() {
         return String.format(Locale.ROOT, "Share-to-Xiaomi receiver %s on %s:%d", name, ip, server.getLocalPort());
+    }
+
+    /** One CRLF-ended HTTP header line, at most 8 KiB. */
+    static String headerLine(InputStream in) throws IOException {
+        ByteArrayOutputStream b = new ByteArrayOutputStream();
+        for (int c; (c = in.read()) != '\n'; ) {
+            if (c < 0) throw new IOException("the sender closed the connection");
+            if (b.size() >= 8192) throw new IOException("a header line longer than 8 KiB");
+            if (c != '\r') b.write(c);
+        }
+        return b.toString(StandardCharsets.ISO_8859_1.name());
+    }
+
+    static void closeQuietly(Socket s) {
+        if (s == null) return;
+        try {
+            s.close();
+        } catch (IOException ignored) {
+            // already closed
+        }
+    }
+
+    /** Reads an HTTP/1.1 chunked body. */
+    static final class Chunked extends InputStream {
+        private final InputStream in;
+        private long left;
+        private boolean done;
+
+        Chunked(InputStream in) {
+            this.in = in;
+        }
+
+        @Override
+        public int read() throws IOException {
+            byte[] one = new byte[1];
+            return read(one, 0, 1) < 0 ? -1 : one[0] & 0xff;
+        }
+
+        @Override
+        public int read(byte[] b, int off, int len) throws IOException {
+            if (done) return -1;
+            if (left == 0) {
+                String size = headerLine(in);
+                int semi = size.indexOf(';');
+                try {
+                    left = Long.parseLong((semi < 0 ? size : size.substring(0, semi)).trim(), 16);
+                } catch (NumberFormatException e) {
+                    throw new IOException("a bad chunk size");
+                }
+                if (left == 0) {
+                    while (!headerLine(in).isEmpty()) {
+                        // trailers
+                    }
+                    done = true;
+                    return -1;
+                }
+            }
+            int n = in.read(b, off, (int) Math.min(len, left));
+            if (n < 0) throw new IOException("the sender closed the connection");
+            left -= n;
+            if (left == 0) headerLine(in);
+            return n;
+        }
     }
 }
