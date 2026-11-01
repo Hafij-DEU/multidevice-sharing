@@ -1,4 +1,4 @@
-package io.github.hafijbge.meshdrop.addon.share;
+package io.github.hafijbge.meshdrop;
 
 import android.content.ContentResolver;
 import android.net.Uri;
@@ -19,12 +19,12 @@ import java.util.concurrent.Executors;
 import java.util.function.Consumer;
 
 /**
- * A tiny HTTP server the receiving phone pulls the shared files from (ShareMe's receiver downloads
+ * A tiny HTTP server the receiving phone pulls the shared files from (the Xiaomi receiver downloads
  * by GET instead of being pushed to). Serves only what was registered, answers Range requests so a
  * dropped download can resume, and logs every request line because the exact paths are still being
  * learned.
  */
-final class FileServer implements AutoCloseable {
+final class QrShareFiles implements AutoCloseable {
     /** One shared file. */
     static final class Item {
         final Uri uri;
@@ -52,12 +52,12 @@ final class FileServer implements AutoCloseable {
     private final ExecutorService pool = Executors.newFixedThreadPool(4);
     private final ServerSocket server;
 
-    FileServer(ContentResolver resolver, InetAddress bind, Consumer<String> log, Progress progress) throws IOException {
+    QrShareFiles(ContentResolver resolver, InetAddress bind, Consumer<String> log, Progress progress) throws IOException {
         this.resolver = resolver;
         this.log = log;
         this.progress = progress;
         server = new ServerSocket(0, 8, bind);
-        Thread t = new Thread(this::acceptLoop, "addon-share-http");
+        Thread t = new Thread(this::acceptLoop, "qrshare-http");
         t.setDaemon(true);
         t.start();
     }
@@ -106,7 +106,7 @@ final class FileServer implements AutoCloseable {
                     status(out, "404 Not Found");
                     continue;
                 }
-                // ShareMe always asks for "bytes=<have>-" and gets a 206, also from 0 (resume support)
+                // the Xiaomi app always asks for "bytes=<have>-" and gets a 206, also from 0 (resume support)
                 long from = 0;
                 boolean ranged = false;
                 String range = header(lines, "range");

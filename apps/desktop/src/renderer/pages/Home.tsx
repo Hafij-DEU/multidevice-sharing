@@ -1,4 +1,4 @@
-import type { CSSProperties } from 'react';
+import { useEffect, useState, type CSSProperties } from 'react';
 import type { AppState } from '../../shared/api.ts';
 import type { Run } from '../App.tsx';
 import { Peer } from '../components/Peer.tsx';
@@ -23,6 +23,11 @@ export function Home({ state, run, go }: { state: AppState; run: Run; go: Go }) 
   const waiting = state.outbox.length;
   const unseen = state.received.length;
   const hub = state.hub;
+  // The Share to Xiaomi add-on gets a tile only once it is switched on in Settings.
+  const [qrShare, setQrShare] = useState(false);
+  useEffect(() => {
+    void window.meshdrop.qrShareStatus?.().then((s) => setQrShare(s.enabled), () => undefined);
+  }, []);
   const hubLine =
     hub.role === 'none'
       ? 'No mesh: devices reach each other on this network'
@@ -67,6 +72,7 @@ export function Home({ state, run, go }: { state: AppState; run: Run; go: Go }) 
       ? [{ id: 'watch', title: 'Watch party', hint: (state.watch ?? []).length ? `${(state.watch ?? []).length} room open` : 'Watch together with a 6-character code', icon: 'M3 5h18v12H3zM8 21h8M10 9l5 3-5 3z', hue: 350, onOpen: () => go({ sub: 'Watch party' }) }]
       : []),
     ...(state.sync ? [{ id: 'sync', title: 'Sync & backup', hint: `${state.sync.folders.length} folder${state.sync.folders.length === 1 ? '' : 's'} synced`, icon: 'M4 12a8 8 0 0 1 14-5.3M20 4v4h-4M20 12a8 8 0 0 1-14 5.3M4 20v-4h4', hue: 190, onOpen: () => go({ sub: 'Sync' }) }] : []),
+    ...(qrShare ? [{ id: 'qrshare', title: 'Share to Xiaomi', hint: 'Swap files with Xiaomi phones (ShareMe)', icon: 'M4 8h14M14 4l4 4-4 4M20 16H6M10 12l-4 4 4 4', hue: 20, onOpen: () => go({ sub: 'Share to Xiaomi' }) }] : []),
     { id: 'devices', title: 'Devices', hint: android ? 'Paired devices' : 'Paired devices, set up a phone', icon: 'M4 5h10v14H4zM16 9h4v10h-4M8 16h2', hue: 240, onOpen: () => go({ sub: 'Devices' }) },
     { id: 'mesh', title: 'Mesh', hint: 'Reach your devices from anywhere', icon: 'M5 12a2 2 0 1 0 0 .01M19 5a2 2 0 1 0 0 .01M19 19a2 2 0 1 0 0 .01M7 11l10-5M7 13l10 5', hue: 300, onOpen: () => go({ sub: 'Mesh' }) },
     ...(android ? [{ id: 'extendo', title: 'Second screen', hint: 'Extendo', icon: 'M3 5h12v9H3zM17 8h4v11h-9v-3', hue: 100, onOpen: () => void run(() => window.meshdrop.keepAliveAction!('extendo')) }] : []),

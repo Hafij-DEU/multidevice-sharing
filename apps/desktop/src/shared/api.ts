@@ -27,6 +27,28 @@ export interface SendItemInput {
   text?: string;
 }
 
+export interface QrShareFileView {
+  name: string;
+  size: number;
+  done?: boolean;
+  /** Where a received file landed, for qrShareOpen. */
+  located?: string;
+}
+
+export interface QrShareStatus {
+  enabled: boolean;
+  mode: 'idle' | 'send' | 'receive';
+  phase: 'idle' | 'joining' | 'connecting' | 'waiting' | 'transferring' | 'ready' | 'done' | 'error';
+  text: string;
+  peer: string;
+  /** The receive code as an SVG picture (it holds the hotspot password, so never as text). */
+  qrSvg: string | null;
+  done: number;
+  total: number;
+  files: QrShareFileView[];
+  log: string[];
+}
+
 export interface TransferView {
   /** `${deviceId}:${sessionId || startedAt}` */
   key: string;
@@ -557,6 +579,17 @@ export interface DesktopApi {
   takeSharedItems?(): Promise<SendItemInput[]>;
   /** Android: runs one step of the keep-alive checklist (opens the right system screen). */
   keepAliveAction?(id: string): Promise<void>;
+  /** Share to Xiaomi add-on (Android): state of the running send or receive. Absent on desktop. */
+  qrShareStatus?(): Promise<QrShareStatus>;
+  /** Turns the Share to Xiaomi add-on on or off (off also stops what runs). */
+  qrShareSetEnabled?(on: boolean): Promise<QrShareStatus>;
+  /** Sends files to the phone whose Xiaomi receive code was scanned. */
+  qrShareSend?(code: string, items: SendItemInput[]): Promise<QrShareStatus>;
+  /** Hosts a hotspot and shows a code a Xiaomi phone scans to send here. */
+  qrShareReceive?(): Promise<QrShareStatus>;
+  qrShareStop?(): Promise<QrShareStatus>;
+  /** Opens a received file (its `located` path) in another app. */
+  qrShareOpen?(located: string): Promise<void>;
   /** M1/M2 Android: the user's saved Wi-Fi networks (band lock). Absent on desktop. */
   wifiList?(): Promise<WifiProfileView[]>;
   /** Adds a new network (no id) or edits one; returns the saved view (never the passphrase). */

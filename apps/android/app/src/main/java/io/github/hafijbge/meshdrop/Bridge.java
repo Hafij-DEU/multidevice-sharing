@@ -89,6 +89,20 @@ public final class Bridge {
         });
     }
 
+    /** Android needs these before it starts or joins a hotspot; asks for them and stops when missing. */
+    private void requireNearby() {
+        String[] perms = android.os.Build.VERSION.SDK_INT >= 33
+                ? new String[] {"android.permission.NEARBY_WIFI_DEVICES"}
+                : new String[] {android.Manifest.permission.ACCESS_FINE_LOCATION, android.Manifest.permission.ACCESS_COARSE_LOCATION};
+        if (activity.checkSelfPermission(perms[0]) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            activity.runOnUiThread(() -> activity.requestPermissions(perms, 13));
+            throw new IllegalStateException(android.os.Build.VERSION.SDK_INT >= 33
+                    ? "Allow MeshDrop to find nearby devices, then try again."
+                    : "Allow MeshDrop to use location (Android needs it for hotspots), then try again.");
+        }
+    }
+
+    @SuppressWarnings("unchecked")
     private Object dispatch(String method, List<Object> args) throws Exception {
         AndroidPlatform p = core.platform;
         switch (method) {
@@ -119,6 +133,32 @@ public final class Bridge {
                 activity.runOnUiThread(() -> activity.requestPermissions(perms, 9));
                 return null;
             }
+            case "qrShareStatus":
+                return QrShare.of(activity, p).status();
+            case "qrShareSetEnabled": {
+                QrShare sm = QrShare.of(activity, p);
+                sm.setEnabled(Boolean.TRUE.equals(args.isEmpty() ? null : args.get(0)));
+                return sm.status();
+            }
+            case "qrShareSend": {
+                // joining the sender's hotspot and hosting one both need these
+                requireNearby();
+                QrShare sm = QrShare.of(activity, p);
+                Object items = args.size() > 1 ? args.get(1) : null;
+                sm.send(args.isEmpty() ? "" : String.valueOf(args.get(0)), items instanceof List ? (List<Object>) items : new ArrayList<>());
+                return sm.status();
+            }
+            case "qrShareReceive":
+                requireNearby();
+                return QrShare.of(activity, p).receive();
+            case "qrShareStop": {
+                QrShare sm = QrShare.of(activity, p);
+                sm.stop();
+                return sm.status();
+            }
+            case "qrShareOpen":
+                QrShare.of(activity, p).open(String.valueOf(args.get(0)));
+                return null;
             case "hotspotStart":
             case "hotspotJoin": {
                 // M14: Android needs these before it starts or joins a hotspot

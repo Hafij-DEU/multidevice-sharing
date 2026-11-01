@@ -201,6 +201,7 @@ input:focus, textarea:focus, select:focus { outline: 2px solid color-mix(in srgb
 .icon-Continue { background: linear-gradient(135deg, #0ea5e9, #8b5cf6); }
 .icon-Watch-party { background: linear-gradient(135deg, #ef4444, #db2777); }
 .icon-Wi-Fi { background: linear-gradient(135deg, #14b8a6, #3b82f6); }
+.icon-Share-to-Xiaomi { background: linear-gradient(135deg, #f97316, #ec4899); }
 .add-device summary { color: var(--accent); list-style: none; display: inline-flex; align-items: center; gap: 6px; padding: 8px 14px; border-radius: 999px; background: color-mix(in srgb, var(--accent) 10%, var(--panel)); }
 .add-device summary::-webkit-details-marker { display: none; }
 .add-device summary::before { content: '+'; font-weight: 700; }
@@ -305,3 +306,32 @@ code { font-size: 12.5px; padding: 1px 6px; border-radius: 6px; background: colo
 .steps .step-body { margin-top: 4px; }
 .steps .step-body .row { margin: 2px 0; flex-wrap: nowrap; }
 .steps .step-body code { overflow-wrap: anywhere; }
+
+/* Share to Xiaomi add-on */
+.sm { display: grid; gap: 14px; }
+.sm-pick { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 14px; }
+.sm-big { --h: 210; display: grid; gap: 6px; justify-items: start; text-align: left; padding: 22px 20px; min-height: 170px; border: 0; border-radius: calc(var(--radius) + 6px); color: #fff; font: inherit; cursor: pointer; box-shadow: var(--shadow); background: linear-gradient(135deg, hsl(var(--h) 85% 55%), hsl(calc(var(--h) + 40) 80% 45%)); transition: transform 0.15s; }
+.sm-big:hover { transform: translateY(-2px); }
+.sm-big:active { transform: scale(0.98); }
+.sm-recv { --h: 150; }
+.sm-big svg { width: 42px; height: 42px; padding: 9px; border-radius: 14px; background: #ffffff33; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.sm-big-title { font-size: 22px; font-weight: 700; margin-top: 8px; }
+.sm-big-hint { font-size: 13px; opacity: 0.9; }
+.sm-card { background: var(--panel); border: 1px solid var(--border); border-radius: calc(var(--radius) + 4px); box-shadow: var(--shadow); padding: 18px; display: grid; gap: 12px; }
+.sm-off { justify-items: start; }
+.sm-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.sm-head p { margin: 0; }
+.sm-badge { font-size: 12px; font-weight: 650; padding: 3px 10px; border-radius: 999px; background: var(--accent); color: #fff; }
+.sm-badge.sm-done { background: var(--ok); }
+.sm-badge.sm-error { background: var(--bad); }
+.sm-qr { justify-self: center; width: min(300px, 80vw); }
+.sm-qr svg { display: block; width: 100%; height: auto; }
+.sm-progress { display: grid; gap: 6px; }
+.sm-bar { height: 10px; border-radius: 999px; background: var(--border); overflow: hidden; }
+.sm-bar > div { height: 100%; border-radius: inherit; background: linear-gradient(90deg, hsl(210 85% 55%), hsl(150 70% 45%)); transition: width 0.4s; }
+.sm-files { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; max-height: 320px; overflow: auto; }
+.sm-files li { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: 10px; background: color-mix(in srgb, var(--border) 35%, transparent); }
+.sm-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sm-dot { flex: none; width: 10px; height: 10px; border-radius: 50%; border: 2px solid var(--muted); }
+.sm-dot.on { background: var(--ok); border-color: var(--ok); }
+.sm-log pre { font-size: 11px; white-space: pre-wrap; max-height: 220px; overflow: auto; margin: 6px 0 0; }

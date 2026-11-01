@@ -1,4 +1,4 @@
-package io.github.hafijbge.meshdrop.addon.share;
+package io.github.hafijbge.meshdrop;
 
 import android.net.Uri;
 import android.os.Build;
@@ -25,14 +25,14 @@ import org.json.JSONException;
 import org.json.JSONObject;
 
 /**
- * Speaks ShareMe's transfer protocol as the sending side, in its plaintext mode: newline-separated
+ * Speaks the Xiaomi share app's transfer protocol as the sending side, in its plaintext mode: newline-separated
  * JSON over TCP to the receiver's port, one "send_files2" list of what to fetch, and then the
- * receiver pulls each file over HTTP from {@link FileServer} and reports back with status messages.
+ * receiver pulls each file over HTTP from {@link QrShareFiles} and reports back with status messages.
  * The optional key exchange (which would switch the lines to DES) is never started.
  */
-final class ShareMeSender {
+final class QrShareSender {
     private static final String NS = "http://www.xiaomi.com/midrop";
-    /** The ShareMe version the protocol was learned from; the receiver picks peer features by it. */
+    /** The Xiaomi app version the protocol was learned from; the receiver picks peer features by it. */
     private static final int VERSION_CODE = 34805;
     private static final int MAX_LINE = 5 * 1024 * 1024;
     /** Larger batches use a multi-part list that has not been worked out. */
@@ -56,10 +56,12 @@ final class ShareMeSender {
         }
     }
 
-    private final ReceiverInfo info;
+    private final QrShareCode info;
+    private final android.net.Network network;
     private final InetAddress self;
     private final Consumer<String> log;
     private final Consumer<String> status;
+    private final java.util.function.BiConsumer<Long, Long> progress;
     private final BlockingQueue<Event> events = new LinkedBlockingQueue<>();
     private final Map<String, Long> served = new ConcurrentHashMap<>();
     private final String deviceId = String.format(Locale.ROOT, "%08x", new SecureRandom().nextInt());
@@ -72,11 +74,14 @@ final class ShareMeSender {
     private Socket sock;
     private OutputStream out;
 
-    ShareMeSender(ReceiverInfo info, InetAddress self, Consumer<String> log, Consumer<String> status) {
+    QrShareSender(QrShareCode info, android.net.Network network, InetAddress self, Consumer<String> log, Consumer<String> status,
+            java.util.function.BiConsumer<Long, Long> progress) {
         this.info = info;
+        this.network = network;
         this.self = self;
         this.log = log;
         this.status = status;
+        this.progress = progress;
     }
 
     /** Called by the HTTP server while it streams: bytes is how far into the file at path it got. */
@@ -88,22 +93,22 @@ final class ShareMeSender {
         lastStatus = now;
         long sum = 0;
         for (long b : served.values()) sum += b;
-        status.accept("Sending… " + mb(sum) + " of " + mb(total));
+        progress.accept(sum, total);
     }
 
     /** Offers the batch to the receiver and returns once it reports every file downloaded. */
-    void send(FileServer files, List<Shared> batch) throws IOException {
+    void send(QrShareFiles files, List<QrShareItem> batch) throws IOException {
         if (batch.isEmpty()) throw new IOException("nothing to send");
-        if (batch.size() > MAX_FILES) throw new IOException("ShareMe takes at most " + MAX_FILES + " files at once");
+        if (batch.size() > MAX_FILES) throw new IOException("Xiaomi phones take at most " + MAX_FILES + " files at once");
         JSONArray list = new JSONArray();
         int tag = new SecureRandom().nextInt() & 0x7fffffff;
         long sum = 0;
         try {
             for (int i = 0; i < batch.size(); i++) {
-                Shared s = batch.get(i);
+                QrShareItem s = batch.get(i);
                 // the receiver splits the uri at its first slash, so the id must not contain one
                 String fileId = String.format(Locale.ROOT, "%x-%x-%x", i + 1, s.size, tag);
-                files.put("/" + fileId, new FileServer.Item(s.uri, s.size, "application/octet-stream"));
+                files.put("/" + fileId, new QrShareFiles.Item(s.uri, s.size, "application/octet-stream"));
                 sum += s.size;
                 list.put(new JSONObject()
                         .put("name", s.name)
@@ -118,7 +123,7 @@ final class ShareMeSender {
         }
         total = sum;
         connect();
-        Thread reader = new Thread(this::readLoop, "addon-share-shareme");
+        Thread reader = new Thread(this::readLoop, "qrshare-read");
         reader.setDaemon(true);
         reader.start();
         boolean accepted = false;
@@ -168,11 +173,11 @@ final class ShareMeSender {
                         throw new IOException(info.name + " does not have enough free space");
                     case "DownloadStatus/DownloadPerFileFinished":
                         done++;
-                        log.accept("ShareMe: " + done + " of " + batch.size() + " received");
+                        log.accept("Xiaomi phone: " + done + " of " + batch.size() + " received");
                         break;
                     case "DownloadStatus/DownloadFinished":
                         over = true;
-                        log.accept("ShareMe: all received");
+                        log.accept("Xiaomi phone: all received");
                         return;
                     case "DownloadStatus/DownloadFailed":
                         over = true;
@@ -203,6 +208,7 @@ final class ShareMeSender {
             try {
                 s.setTcpNoDelay(true);
                 s.setKeepAlive(true);
+                if (network != null) network.bindSocket(s);
                 // the receiver fetches the files from this connection's source address, which must be
                 // the address the HTTP server listens on
                 if (self != null) s.bind(new InetSocketAddress(self, 0));
@@ -328,13 +334,13 @@ final class ShareMeSender {
         }
     }
 
-    /** Android's JSON writer escapes every slash; ShareMe's own lines do not, so undo it. */
+    /** Android's JSON writer escapes every slash; the Xiaomi app's own lines do not, so undo it. */
     private static String plain(String json) {
         return json.replace("\\/", "/");
     }
 
-    /** ShareMe's file kinds; APKs go as plain files since its ApkFile kind expects app details. */
-    private static String typeOf(Shared s) {
+    /** The Xiaomi app's file kinds; APKs go as plain files since its ApkFile kind expects app details. */
+    private static String typeOf(QrShareItem s) {
         if (s.mime.startsWith("image/")) return "PhotoFile";
         if (s.mime.startsWith("audio/")) return "MusicFile";
         if (s.mime.startsWith("video/")) return "VideoFile";

@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import type { AppState, Settings as S } from '../../shared/api.ts';
 import type { Run } from '../App.tsx';
+import { QrShareSwitch } from './QrShare.tsx';
 import { setThemeChoice, themeChoice, type ThemeChoice } from '../theme.ts';
 
 const DEFAULT_BINDING = '<Primary><Alt>c';
@@ -317,6 +318,8 @@ export function Settings({ state, run }: { state: AppState; run: Run }) {
           Undo changes
         </button>
       </div>
+
+      <QrShareSwitch run={run} />
 
       {android ? (
         <KeepAlive state={state} run={run} />

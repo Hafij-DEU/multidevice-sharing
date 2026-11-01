@@ -1,4 +1,4 @@
-package io.github.hafijbge.meshdrop.addon.share;
+package io.github.hafijbge.meshdrop;
 
 import android.util.Base64;
 import java.nio.charset.StandardCharsets;
@@ -6,10 +6,10 @@ import org.json.JSONException;
 import org.json.JSONObject;
 
 /**
- * What a ShareMe receiver puts in its QR code: Base64 of a JSON object with its name and id, a
+ * What a receiving Xiaomi phone puts in its QR code: Base64 of a JSON object with its name and id, a
  * "secure" flag, and (again Base64 JSON) the hotspot to join with the address and port it listens on.
  */
-final class ReceiverInfo {
+final class QrShareCode {
     final String name;
     final String id;
     final String ssid;
@@ -21,7 +21,7 @@ final class ReceiverInfo {
     final int version;
     final boolean fiveGhz;
 
-    private ReceiverInfo(String name, String id, String ssid, String psk, String ip, int port, boolean secure, int version, boolean fiveGhz) {
+    private QrShareCode(String name, String id, String ssid, String psk, String ip, int port, boolean secure, int version, boolean fiveGhz) {
         this.name = name;
         this.id = id;
         this.ssid = ssid;
@@ -33,9 +33,9 @@ final class ReceiverInfo {
         this.fiveGhz = fiveGhz;
     }
 
-    static ReceiverInfo parse(String text) {
+    static QrShareCode parse(String text) {
         JSONObject o = json(text.trim());
-        if (o == null) throw new IllegalArgumentException("not a ShareMe code");
+        if (o == null) throw new IllegalArgumentException("not a Xiaomi share code");
         JSONObject ap = nested(o, "ap");
         if (ap == null) throw new IllegalArgumentException("it has no hotspot details");
         String ssid = ap.optString("ss", "");
@@ -43,7 +43,7 @@ final class ReceiverInfo {
         int port = ap.optInt("pt", 0);
         if (ssid.isEmpty() || ip.isEmpty() || port <= 0 || port > 65535) throw new IllegalArgumentException("the hotspot details are incomplete");
         JSONObject bt = nested(o, "bt");
-        return new ReceiverInfo(o.optString("nm", "ShareMe"), o.optString("id", ""), ssid, ap.optString("pd", ""), ip, port,
+        return new QrShareCode(o.optString("nm", "Xiaomi phone"), o.optString("id", ""), ssid, ap.optString("pd", ""), ip, port,
                 o.optInt("sa", 0) != 0, o.optInt("vs", 0), bt != null && bt.optBoolean("5g", false));
     }
 
@@ -73,11 +73,11 @@ final class ReceiverInfo {
 
     /**
      * The QR content for the log: decoded where possible, with the hotspot password masked. Text that
-     * is not ShareMe's format is only counted, since it could be any secret (a Wi-Fi QR, say).
+     * is not the Xiaomi share format is only counted, since it could be any secret (a Wi-Fi QR, say).
      */
     static String describe(String text) {
         JSONObject o = json(text.trim());
-        if (o == null) return "(" + text.length() + " characters, not ShareMe's format)";
+        if (o == null) return "(" + text.length() + " characters, not the Xiaomi share format)";
         try {
             JSONObject copy = new JSONObject(o.toString());
             copy.remove("pd");

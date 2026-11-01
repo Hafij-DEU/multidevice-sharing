@@ -1,4 +1,4 @@
-package io.github.hafijbge.meshdrop.addon.share;
+package io.github.hafijbge.meshdrop;
 
 import android.content.Context;
 import android.net.ConnectivityManager;
@@ -11,19 +11,19 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 
 /**
- * Joins the other phone's ShareMe hotspot (from its QR code) and sends this app's connections
- * through it. The hotspot has no internet, so nothing else of this app needs the network meanwhile.
+ * Joins the Xiaomi phone's share hotspot (from its QR code). Only these sockets are bound to
+ * it (through {@link Network#bindSocket}), so the rest of MeshDrop keeps its own network.
  */
-final class WifiJoin implements AutoCloseable {
+final class QrShareJoin implements AutoCloseable {
     private final ConnectivityManager cm;
     private ConnectivityManager.NetworkCallback joined;
     private Network network;
 
-    WifiJoin(Context ctx) {
+    QrShareJoin(Context ctx) {
         cm = ctx.getSystemService(ConnectivityManager.class);
     }
 
-    /** Tries WPA2 first (what ShareMe's hotspot usually is), then WPA3; an empty password is an open network. */
+    /** Tries WPA2 first (what the Xiaomi app's hotspot usually is), then WPA3; an empty password is an open network. */
     synchronized Network join(String ssid, String psk) throws IOException {
         close();
         if (psk == null || psk.isEmpty()) return request(new WifiNetworkSpecifier.Builder().setSsid(ssid).build(), ssid);
@@ -76,7 +76,6 @@ final class WifiJoin implements AutoCloseable {
         }
         joined = cb;
         network = got[0];
-        cm.bindProcessToNetwork(network);
         return network;
     }
 
@@ -87,7 +86,6 @@ final class WifiJoin implements AutoCloseable {
     @Override
     public synchronized void close() {
         if (joined == null) return;
-        cm.bindProcessToNetwork(null);
         unregister(joined);
         joined = null;
         network = null;
