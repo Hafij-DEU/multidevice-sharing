@@ -1,7 +1,7 @@
 {
   "name": "@meshdrop/desktop",
   "productName": "MeshDrop",
-  "version": "0.9.8",
+  "version": "0.9.9",
   "description": "MeshDrop desktop app: send files between your devices",
   "author": "Hafij-BGE <mdhafijur.rahman@ogr.deu.edu.tr>",
   "license": "GPL-3.0-only",
