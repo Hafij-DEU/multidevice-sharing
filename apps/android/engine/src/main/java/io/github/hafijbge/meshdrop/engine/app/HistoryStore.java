@@ -108,6 +108,46 @@ public final class HistoryStore {
         Atomic.write(file, Json.stringify(records).getBytes(StandardCharsets.UTF_8));
     }
 
+    private static boolean is(Map<String, Object> r, long at, String from) {
+        return r.get("at") instanceof Long && (Long) r.get("at") == at && from.equals(r.get("from"));
+    }
+
+    /** Pins (or unpins) a record: it stays on top and Clear history keeps it. */
+    public synchronized void pin(long at, String from, boolean pinned) throws IOException {
+        ensureLoaded();
+        boolean hit = false;
+        for (Map<String, Object> r : records) {
+            if (!is(r, at, from)) continue;
+            if (pinned) r.put("pinned", true);
+            else r.remove("pinned");
+            hit = true;
+        }
+        if (hit) Atomic.write(file, Json.stringify(records).getBytes(StandardCharsets.UTF_8));
+    }
+
+    /** Removes a record; returns the files it listed (the caller deletes them when asked). */
+    @SuppressWarnings("unchecked")
+    public synchronized List<String> remove(long at, String from) throws IOException {
+        ensureLoaded();
+        List<String> files = new ArrayList<>();
+        boolean hit = false;
+        for (java.util.Iterator<Map<String, Object>> it = records.iterator(); it.hasNext(); ) {
+            Map<String, Object> r = it.next();
+            if (!is(r, at, from)) continue;
+            if (r.get("files") instanceof List) for (Object f : (List<Object>) r.get("files")) files.add(String.valueOf(f));
+            it.remove();
+            hit = true;
+        }
+        if (hit) Atomic.write(file, Json.stringify(records).getBytes(StandardCharsets.UTF_8));
+        return files;
+    }
+
+    /** Clear history: drops every unpinned record (the files stay). */
+    public synchronized void clear() throws IOException {
+        ensureLoaded();
+        if (records.removeIf(r -> !Boolean.TRUE.equals(r.get("pinned")))) Atomic.write(file, Json.stringify(records).getBytes(StandardCharsets.UTF_8));
+    }
+
     public synchronized List<Map<String, Object>> received() {
         ensureLoaded();
         List<Map<String, Object>> out = new ArrayList<>();

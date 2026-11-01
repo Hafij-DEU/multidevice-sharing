@@ -1711,6 +1711,29 @@ export class AppController extends EventEmitter {
     await this.#platform.openPath(inbox);
   }
 
+  receivedPin(at: number, from: string, pinned: boolean): void {
+    this.#history.update((r) => r.at === at && r.from === from, () => ({ pinned: pinned || undefined }));
+    this.#changed();
+  }
+
+  receivedDelete(at: number, from: string, files: boolean): void {
+    const gone = this.#history.remove((r) => r.at === at && r.from === from);
+    // only files inside the inbox or the backup folder: a record never points elsewhere, but check anyway
+    if (files) for (const r of gone) for (const f of r.files) {
+      try {
+        rmSync(this.#inInbox(f), { recursive: true, force: true });
+      } catch {
+        /* outside the inbox, or already gone */
+      }
+    }
+    this.#changed();
+  }
+
+  receivedClear(): void {
+    this.#history.remove((r) => !r.pinned);
+    this.#changed();
+  }
+
   /** `path` if it is inside the inbox or the photo backup folder (only received files are shown, opened or previewed). */
   #inInbox(path: string): string {
     const p = resolve(path);

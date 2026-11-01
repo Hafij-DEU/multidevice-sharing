@@ -13,7 +13,9 @@ test('the app starts on Home; its tiles and tabs lead to every page', async () =
     for (const tile of ['send', 'received', 'remote', 'find', 'watch', 'devices', 'mesh', 'settings']) await expect(win.locator(`[data-tile="${tile}"]`)).toBeVisible();
     await win.locator('[data-tile="remote"]').click();
     await expect(win.getByRole('heading', { name: 'Remote' })).toBeVisible();
-    await win.getByRole('navigation', { name: 'Pages' }).getByRole('button', { name: 'Home', exact: true }).click();
+    // A page opened from Home goes back to Home, not to More.
+    expect(await win.evaluate(() => (window as unknown as { __mdBack: () => boolean }).__mdBack())).toBe(true);
+    await expect(win.locator('[data-tile="send"]')).toBeVisible();
     await win.locator('[data-tile="send"]').click();
     await expect(win.getByRole('heading', { name: 'Send to' })).toBeVisible();
     for (const tab of ['Home', 'Send', 'Received', 'More']) await expect(win.getByRole('navigation').getByRole('button', { name: tab, exact: true })).toBeVisible();

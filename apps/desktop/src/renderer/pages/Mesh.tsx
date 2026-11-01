@@ -185,6 +185,25 @@ export function Mesh({ state, run }: { state: AppState; run: Run }) {
         {isHub && hub.ingressPort > 0 && <> · tunnel ingress 127.0.0.1:{hub.ingressPort}</>}
       </p>
 
+      <div className="set-card add-device">
+        <h2>Add a device</h2>
+        {android ? (
+          <p className="muted">
+            New devices join with an invite from a PC in this mesh: on the PC open Mesh → Add a device, then scan the QR code with the new device. A phone or PC
+            on this Wi-Fi can also be paired straight away under Send.
+          </p>
+        ) : invite ? (
+          <QrInvite invite={invite} onRenew={() => void newInvite()} run={run} />
+        ) : (
+          <>
+            <p className="muted">Show a one-time QR code. Scan it with the new phone or paste it into MeshDrop on the other PC.</p>
+            <button className="primary" onClick={() => void newInvite()}>
+              Invite a device
+            </button>
+          </>
+        )}
+      </div>
+
       {!android && isHub && state.reach && (
         <>
           <h2>Internet access</h2>
@@ -195,9 +214,6 @@ export function Mesh({ state, run }: { state: AppState; run: Run }) {
         <>
           <h2>Hub address on the internet</h2>
           {isHub ? <HubUrls key={hub.urls.join('\n')} urls={hub.urls} run={run} /> : hub.urls.length === 0 ? <p className="muted">None (LAN only).</p> : <ul className="items">{hub.urls.map((u) => <li key={u}><code>{u}</code></li>)}</ul>}
-
-          <h2>Invite a device</h2>
-          {invite ? <QrInvite invite={invite} onRenew={() => void newInvite()} run={run} /> : <button onClick={() => void newInvite()}>Invite a device</button>}
         </>
       )}
 

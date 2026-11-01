@@ -43,6 +43,16 @@ export class HistoryStore {
     return hit;
   }
 
+  /** Drops the records `pick` matches (delete, clear history); returns them. */
+  remove(pick: (r: ReceivedRecord) => boolean): ReceivedRecord[] {
+    const gone = this.#records.filter(pick);
+    if (gone.length) {
+      this.#records = this.#records.filter((r) => !pick(r));
+      writeFileAtomic(this.#file, JSON.stringify(this.#records));
+    }
+    return gone;
+  }
+
   received(): ReceivedRecord[] {
     return this.#records.map((r) => ({ ...r, files: [...r.files] }));
   }

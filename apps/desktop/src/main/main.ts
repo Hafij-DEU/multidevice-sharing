@@ -512,6 +512,9 @@ function wireIpc(): void {
   handle('openInbox', (_e) => ctl().openInbox());
   handle('reveal', (_e, p) => ctl().reveal(str(p)));
   handle('unpair', (_e, id) => ctl().unpair(str(id, 64)));
+  handle('receivedPin', (_e, at, from, on) => ctl().receivedPin(Number(at), str(from, 128), on === true));
+  handle('receivedDelete', (_e, at, from, files) => ctl().receivedDelete(Number(at), str(from, 128), files === true));
+  handle('receivedClear', (_e) => ctl().receivedClear());
   handle('takeSharedItems', (_e) => ctl().takeSharedItems());
   handle('openFile', (_e, p) => ctl().openFile(str(p)));
   handle('thumb', (_e, p) => ctl().thumb(str(p)));

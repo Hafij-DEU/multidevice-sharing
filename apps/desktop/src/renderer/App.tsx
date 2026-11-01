@@ -83,6 +83,28 @@ function Icon({ d, className }: { d: string; className?: string }) {
   );
 }
 
+/** How often each page was opened on this device (Home's "Most used" row); kept in this device's storage only. */
+const USAGE_KEY = 'md.usage';
+function readUsage(): Record<string, number> {
+  try {
+    const j = JSON.parse(localStorage.getItem(USAGE_KEY) ?? '{}') as unknown;
+    return j && typeof j === 'object' ? (j as Record<string, number>) : {};
+  } catch {
+    return {};
+  }
+}
+function countUse(page: string): Record<string, number> {
+  const u = readUsage();
+  u[page] = (u[page] ?? 0) + 1;
+  try {
+    localStorage.setItem(USAGE_KEY, JSON.stringify(u));
+  } catch {
+    /* private mode: the row just stays empty */
+  }
+  return u;
+}
+const TAB_ICON = { Send: 'M4 12l16-8-6 16-2-7-8-1z', Received: 'M12 4v11M7 10l5 5 5-5M5 20h14' } as const;
+
 /** Runs an action; shows its error (or `ok`, or a string it returns) as a toast. Resolves undefined on error. */
 export type Run = <T>(fn: () => Promise<T>, ok?: string) => Promise<T | undefined>;
 
@@ -90,9 +112,15 @@ export function App() {
   const wide = useWide();
   const [tab, setTab] = useState<Tab>('Home');
   const [sub, setSub] = useState<Sub | null>(null);
-  const open = (t: Tab, s: Sub | null = null) => {
+  // Where a page's back step goes: Home when it was opened from Home, else the More list.
+  const [backTo, setBackTo] = useState<'Home' | 'More'>('More');
+  const [usage, setUsage] = useState(readUsage);
+  const open = (t: Tab, s: Sub | null = null, from: 'Home' | 'More' = 'More') => {
     setTab(t);
     setSub(s);
+    setBackTo(from);
+    if (s) setUsage(countUse(s));
+    else if (t === 'Send' || t === 'Received') setUsage(countUse(t));
   };
   const [state, setState] = useState<AppState | null>(null);
   const [toasts, setToasts] = useState<ToastItem[]>([]);
@@ -131,22 +159,23 @@ export function App() {
     open('More', 'Settings');
   }, [state?.platform, state?.keepAlive]);
 
-  // Android back button: the page steps back first (a More page → More, another tab → Home); only
+  // Android back button: the page steps back first (a page opened from Home → Home, a More page →
+  // More, another tab → Home); only
   // on Home itself does the app go to the background (MainActivity asks window.__mdBack).
-  const nav = useRef({ tab, sub });
-  nav.current = { tab, sub };
+  const nav = useRef({ tab, sub, backTo });
+  nav.current = { tab, sub, backTo };
   useEffect(() => {
     const w = window as unknown as { __mdBack?: () => boolean };
     w.__mdBack = () => {
-      const { tab: t, sub: s } = nav.current;
+      const { tab: t, sub: s, backTo: b } = nav.current;
       // nav.current moves at once too: a second back before the next render must see this step.
-      if (s !== null) {
-        nav.current = { tab: t, sub: null };
+      if (s !== null && b === 'More') {
+        nav.current = { tab: t, sub: null, backTo: b };
         setSub(null);
         return true;
       }
-      if (t !== 'Home') {
-        nav.current = { tab: 'Home', sub: null };
+      if (t !== 'Home' || s !== null) {
+        nav.current = { tab: 'Home', sub: null, backTo: 'More' };
         open('Home');
         return true;
       }
@@ -234,6 +263,17 @@ export function App() {
     { label: 'More', icon: 'M5 12h.01M12 12h.01M19 12h.01', active: tab === 'More' && (sub === null || !wide || !IN_SIDEBAR.includes(sub)), core: true, onOpen: () => open('More') },
   ];
   const navEnd: NavItem[] = [page('Settings'), page('About')];
+  // Home's "Most used": the four pages opened most here (at least 3 times), only those this device shows.
+  const shown = new Set<string>(['Send', 'Received', ...subs, ...(wide ? IN_SIDEBAR : [])]);
+  const frequent = Object.entries(usage)
+    .filter(([p, n]) => n >= 3 && shown.has(p))
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 4)
+    .map(([p]) => ({
+      label: p,
+      icon: p === 'Send' || p === 'Received' ? TAB_ICON[p] : ICON[p as Sub],
+      onOpen: () => (p === 'Send' || p === 'Received' ? open(p) : open('More', p as Sub, 'Home')),
+    }));
   const navButton = (n: NavItem) => (
     <button key={n.label} className={`nav-item${n.active ? ' active' : ''}${n.core ? '' : ' side-only'}`} onClick={n.onOpen} aria-current={n.active ? 'page' : undefined}>
       <Icon d={n.icon} className={n.label === 'More' ? 'nav-icon dots' : 'nav-icon'} />
@@ -289,7 +329,7 @@ export function App() {
         {!state ? (
           <p className="muted">Starting…</p>
         ) : tab === 'Home' ? (
-          <Home state={state} run={run} wide={wide} go={(to) => ('tab' in to ? open(to.tab) : open('More', to.sub as Sub))} />
+          <Home state={state} run={run} wide={wide} frequent={frequent} go={(to) => ('tab' in to ? open(to.tab) : open('More', to.sub as Sub, 'Home'))} />
         ) : tab === 'Send' ? (
           <Devices state={state} run={run} />
         ) : tab === 'Received' ? (
@@ -300,7 +340,7 @@ export function App() {
             <ul className="menu">
               {subs.map((p) => (
                 <li key={p}>
-                  <button className="menu-item" onClick={() => setSub(p)}>
+                  <button className="menu-item" onClick={() => open('More', p)}>
                     <span className={`menu-icon icon-${p.replace(/ /g, '-')}`} aria-hidden="true">
                       <Icon d={ICON[p]} />
                     </span>
@@ -317,8 +357,8 @@ export function App() {
           <>
             <div className="subhead">
               {!(wide && IN_SIDEBAR.includes(sub)) && (
-                <button className="link" onClick={() => setSub(null)}>
-                  ‹ More
+                <button className="link" onClick={() => (backTo === 'Home' ? open('Home') : setSub(null))}>
+                  ‹ {backTo}
                 </button>
               )}
               <h1>{sub}</h1>

@@ -24,16 +24,18 @@ export function PairedDevices({ state, run }: { state: AppState; run: Run }) {
       ) : (
         <ul className="list paired">
           {trusted.map((d) => (
-            <li key={d.deviceId} className="row space" data-paired={d.deviceId}>
+            <li key={d.deviceId} data-paired={d.deviceId}>
               <DeviceCard d={d} checked={false} />
-              {state.settings.bluetooth && <Connection id={d.deviceId} alias={d.alias} state={state} run={run} />}
-              {d.role === 'paired' ? (
-                <button className={confirming === d.deviceId ? 'danger' : ''} onClick={() => unpair(d.deviceId, d.alias)}>
-                  {confirming === d.deviceId ? 'Tap again to unpair' : 'Unpair'}
-                </button>
-              ) : (
-                <span className="muted">In your mesh{state.hub.role === 'hub' ? ': remove it under Mesh' : ': removed on the hub PC'}</span>
-              )}
+              <div className="paired-actions">
+                {state.settings.bluetooth && <Connection id={d.deviceId} alias={d.alias} state={state} run={run} />}
+                {d.role === 'paired' ? (
+                  <button className={confirming === d.deviceId ? 'danger' : ''} onClick={() => unpair(d.deviceId, d.alias)}>
+                    {confirming === d.deviceId ? 'Tap again to unpair' : 'Unpair'}
+                  </button>
+                ) : (
+                  <span className="muted">In your mesh{state.hub.role === 'hub' ? ': remove it under Mesh' : ': removed on the hub PC'}</span>
+                )}
+              </div>
             </li>
           ))}
         </ul>
@@ -60,7 +62,7 @@ function Connection({ id, alias, state, run }: { id: string; alias: string; stat
     void run(() => window.meshdrop.setSettings({ deviceLinks: next }));
   };
   return (
-    <label className="row" title={s.allBluetooth ? 'Everything goes over Bluetooth (Settings → No Wi-Fi)' : undefined}>
+    <label className="paired-link" title={s.allBluetooth ? 'Everything goes over Bluetooth (Settings → No Wi-Fi)' : undefined}>
       <span className="muted">Connection</span>
       <select aria-label={`Connection for ${alias}`} value={mode} disabled={s.allBluetooth} onChange={(e) => choose(e.target.value as LinkMode)}>
         {MODES.map(([m, label]) => (

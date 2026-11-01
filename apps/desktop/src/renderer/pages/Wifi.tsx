@@ -446,13 +446,16 @@ function BandLockSection({ profiles, run, onChanged }: { profiles: WifiProfileVi
   if (!api.wifiLock) return null;
   return (
     <section className="wifi-band-lock">
-      <h2>Band lock</h2>
+      <div className="banner" role="note">
+        For a band lock to take effect, open Android&apos;s own Wi-Fi settings and forget that network there first. A network saved in the system beats
+        MeshDrop&apos;s pin, so the system one would win otherwise.
+      </div>
       <p className="muted hint">
         Pin a saved network to one access point so your device cannot drop to a slower band. Scan, then pick the 5 GHz (or 6 GHz) access point you want. Pinning
         needs Android 11 or newer.
       </p>
       {profiles.length === 0 ? (
-        <p className="muted">Save a network first, then pin it here.</p>
+        <p className="muted">No saved network matches.</p>
       ) : (
         profiles.map((p) => <BandLockRow key={p.id} p={p} run={run} onChanged={onChanged} />)
       )}
@@ -471,6 +474,10 @@ export function Wifi({ state: _state, run }: { state: AppState; run: Run }) {
   const [simple, setSimple] = useState<SimpleDraft | null>(null);
   const [enterprise, setEnterprise] = useState<EntDraft | null>(null);
   const [status, setStatus] = useState<WifiStatusView | null>(null);
+  // Two views on Android (saved networks, band lock); each opens on the network we are connected to.
+  const [view, setView] = useState<'saved' | 'lock'>('saved');
+  const [showAll, setShowAll] = useState(false);
+  const [filter, setFilter] = useState('');
 
   const reload = useCallback(() => void run(() => api.wifiList!()).then((r) => r && setProfiles(r)), [run]);
   useEffect(reload, [reload]);
@@ -516,6 +523,11 @@ export function Wifi({ state: _state, run }: { state: AppState; run: Run }) {
   // password, show a join QR or copy the sharable details, but never saves, edits or connects (no api.wifiSave).
   const canEdit = !!api.wifiSave;
   const connectedSsid = status?.connected ? status.ssid : undefined;
+  // The connected network first; with one connected, only it shows until "Show all" (a long list is hard to scan on a phone).
+  const current = connectedSsid ? profiles?.find((p) => p.ssid === connectedSsid) : undefined;
+  const q = filter.trim().toLowerCase();
+  const ordered = profiles ? [...(current ? [current] : []), ...profiles.filter((p) => p !== current)] : [];
+  const shown = q ? ordered.filter((p) => p.ssid.toLowerCase().includes(q)) : current && !showAll ? [current] : ordered;
 
   const syncNow = () =>
     void run(() => api.wifiSyncNow!(), undefined).then((r) => {
@@ -555,13 +567,34 @@ export function Wifi({ state: _state, run }: { state: AppState; run: Run }) {
     <section className="wifi">
       {api.wifiStatus && <StatusCard s={status} onRefresh={refreshStatus} />}
 
-      {canEdit && (
-        <div className="banner" role="note">
-          For a band lock to take effect, open Android&apos;s own Wi-Fi settings and forget that network there first. A network saved in the system beats
-          MeshDrop&apos;s pin, so the system one would win otherwise.
+      {api.wifiLock && (
+        <div className="wifi-tabs" role="tablist" aria-label="Wi-Fi">
+          <button role="tab" aria-selected={view === 'saved'} className={view === 'saved' ? 'active' : ''} onClick={() => setView('saved')}>
+            Saved networks
+          </button>
+          <button role="tab" aria-selected={view === 'lock'} className={view === 'lock' ? 'active' : ''} onClick={() => setView('lock')}>
+            Band lock
+          </button>
         </div>
       )}
 
+      {profiles && profiles.length > 1 && (
+        <div className="wifi-more">
+          {(showAll || !current) && profiles.length > 4 && (
+            <input type="search" aria-label="Find a network" placeholder={`Find among ${profiles.length} networks`} value={filter} onChange={(e) => setFilter(e.target.value)} />
+          )}
+          {current && (
+            <button className="link" onClick={() => { setShowAll(!showAll); setFilter(''); }}>
+              {showAll ? 'Only the connected network' : `Show all ${profiles.length} networks`}
+            </button>
+          )}
+        </div>
+      )}
+
+      {view === 'lock' && api.wifiLock ? (
+        profiles === null ? <p className="muted">Loading…</p> : profiles.length === 0 ? <p className="muted">Save a network first, then pin it here.</p> : <BandLockSection profiles={shown} run={run} onChanged={reload} />
+      ) : (
+      <>
       <div className="row space">
         <h2>Saved networks</h2>
         <span className="row">
@@ -583,7 +616,7 @@ export function Wifi({ state: _state, run }: { state: AppState; run: Run }) {
             : 'No networks yet. Add them on your phone, then use Sync now — they appear here, passwords included.'}
         </p>
       ) : (
-        profiles.map((p) => (
+        shown.map((p) => (
           <ProfileCard key={p.id} p={p} run={run} connected={!!connectedSsid && p.ssid === connectedSsid} onEdit={() => (p.enterprise ? setEnterprise(entFromProfile(p)) : setSimple(simpleFromProfile(p)))} onChanged={reload} />
         ))
       )}
@@ -600,8 +633,8 @@ export function Wifi({ state: _state, run }: { state: AppState; run: Run }) {
           ? 'Saved networks are stored and synced to your own trusted devices, passwords included, over the encrypted link. To join one, use Copy password or Show QR and connect from Android; only a band-locked network is connected by MeshDrop itself. Sync now pulls in networks you added on another device; Remove suggestions clears the band-lock connections MeshDrop registered (your saved networks stay).'
           : 'These networks sync from your phone over the encrypted link, passwords included. To join one here, use Copy password or Show QR and connect from your system Wi-Fi settings — MeshDrop does not connect for you. Sync now pulls in the latest from your other devices.'}
       </p>
-
-      {api.wifiLock && profiles && profiles.length > 0 && <BandLockSection profiles={profiles} run={run} onChanged={reload} />}
+      </>
+      )}
     </section>
   );
 }

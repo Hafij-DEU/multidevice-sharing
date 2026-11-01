@@ -36,10 +36,13 @@ function Thumb({ path, onOpen }: { path: string; onOpen: () => void }) {
 
 function Record({ r, run, android }: { r: ReceivedRecord; run: Run; android: boolean }) {
   const more = r.files.length - SHOWN;
+  const [deleting, setDeleting] = useState(false);
+  const del = (files: boolean) => void run(() => window.meshdrop.receivedDelete(r.at, r.from, files), files ? 'Deleted' : 'Removed from the list');
   return (
-    <li className="record">
+    <li className={`record${r.pinned ? ' pinned' : ''}`}>
       <div className="row space">
         <span>
+          {r.pinned && <span className="badge pin-badge">Pinned</span>}
           From <Peer text={r.alias} /> <span className="muted">· {fmtTime(r.at)}</span>
           {r.clipboard && <span className="badge">Clipboard</span>}
           {r.burn && !r.burned && (
@@ -49,8 +52,33 @@ function Record({ r, run, android }: { r: ReceivedRecord; run: Run; android: boo
           )}
           {r.burned && <span className="badge">Deleted after reading</span>}
         </span>
-        {r.files.length > 0 && <span className="muted">{r.files.length} file{r.files.length === 1 ? '' : 's'}</span>}
+        <span className="record-actions">
+          {r.files.length > 0 && <span className="muted">{r.files.length} file{r.files.length === 1 ? '' : 's'}</span>}
+          <button className="icon-btn small" aria-pressed={!!r.pinned} aria-label={r.pinned ? 'Unpin' : 'Pin'} title={r.pinned ? 'Unpin' : 'Pin to the top'} onClick={() => void run(() => window.meshdrop.receivedPin(r.at, r.from, !r.pinned))}>
+            <svg aria-hidden="true" viewBox="0 0 24 24" fill={r.pinned ? 'currentColor' : 'none'} stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M12 17v5M9 3h6l-1 7 4 3v2H6v-2l4-3z" />
+            </svg>
+          </button>
+          <button className="icon-btn small" aria-label="Delete" title="Delete" onClick={() => setDeleting(!deleting)}>
+            <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6M10 11v6M14 11v6" />
+            </svg>
+          </button>
+        </span>
       </div>
+      {deleting && (
+        <div className="row delete-ask" role="group" aria-label="Delete">
+          {r.files.length > 0 && (
+            <button className="danger" onClick={() => del(true)}>
+              Delete the file{r.files.length === 1 ? '' : 's'}
+            </button>
+          )}
+          <button onClick={() => del(false)}>{r.files.length > 0 ? 'Only remove from the list' : 'Remove from the list'}</button>
+          <button className="link" onClick={() => setDeleting(false)}>
+            Cancel
+          </button>
+        </div>
+      )}
       {r.files.length > 0 && (
         <ul className="files">
           {r.files.slice(0, SHOWN).map((f) => (
@@ -82,20 +110,39 @@ function Record({ r, run, android }: { r: ReceivedRecord; run: Run; android: boo
 }
 
 export function Inbox({ state, run }: { state: AppState; run: Run }) {
+  const [clearing, setClearing] = useState(false);
+  // pinned records first, each group newest first (the store keeps newest first)
+  const list = [...state.received.filter((r) => r.pinned), ...state.received.filter((r) => !r.pinned)];
+  const unpinned = state.received.length - state.received.filter((r) => r.pinned).length;
   return (
     <section>
       <div className="row space">
         <p className="muted">
           Saved in <code>{state.settings.inbox}</code>
         </p>
-        <button onClick={() => void run(() => window.meshdrop.openInbox())}>Open folder</button>
+        <span className="row">
+          <button onClick={() => void run(() => window.meshdrop.openInbox())}>Open folder</button>
+          {unpinned > 0 && (
+            <button
+              className={clearing ? 'danger' : ''}
+              onBlur={() => setClearing(false)}
+              onClick={() => {
+                if (!clearing) return setClearing(true);
+                setClearing(false);
+                void run(() => window.meshdrop.receivedClear(), 'History cleared (pinned items and the files stay)');
+              }}
+            >
+              {clearing ? 'Tap again to clear' : 'Clear history'}
+            </button>
+          )}
+        </span>
       </div>
       {state.received.length === 0 ? (
         <p className="muted">Nothing received yet.</p>
       ) : (
         <ul className="list">
-          {state.received.map((r, i) => (
-            <Record key={`${r.at}:${i}`} r={r} run={run} android={state.platform === 'android'} />
+          {list.map((r) => (
+            <Record key={`${r.at}:${r.from}`} r={r} run={run} android={state.platform === 'android'} />
           ))}
         </ul>
       )}

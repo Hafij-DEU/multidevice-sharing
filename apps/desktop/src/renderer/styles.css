@@ -184,8 +184,14 @@ input:focus, textarea:focus, select:focus { outline: 2px solid color-mix(in srgb
 .menu-icon svg { width: 22px; height: 22px; }
 .icon-Sync { background: linear-gradient(135deg, #22c55e, #84cc16); }
 .icon-Devices { background: linear-gradient(135deg, #3b82f6, #06b6d4); }
-.paired > li { padding: 0; border: 0; background: none; box-shadow: none; gap: 10px; flex-wrap: nowrap; }
-.paired .device-card { flex: 1; min-width: 0; }
+.paired > li { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; padding: 4px 12px 4px 4px; }
+/* the card fills the row on a phone and the controls wrap under it; side by side when there is room */
+.paired .device-card { flex: 1 1 300px; min-width: 0; border: 0; box-shadow: none; background: none; }
+.paired .device-card:hover { transform: none; }
+.paired-actions { flex: 1 1 240px; display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 8px 12px; padding: 0 0 8px 12px; }
+.paired-actions > .muted { flex: 1 1 100%; text-align: right; }
+.paired-link { display: flex; align-items: center; gap: 8px; margin: 0; }
+.paired-link select { width: auto; min-width: 9em; }
 .icon-Guests { background: linear-gradient(135deg, #f97316, #ec4899); }
 .icon-Mesh { background: linear-gradient(135deg, #06b6d4, #6366f1); }
 .icon-Transfers { background: linear-gradient(135deg, #10b981, #06b6d4); }
@@ -546,3 +552,48 @@ body { background: var(--bg); }
   .save-bar > span { font-size: 13px; }
 }
 .card-head h2 .wide-only { margin-left: -4px; }
+
+/* ---- Mesh: "Add a device" up top ---- */
+.add-device { margin: 12px 0 18px; }
+.add-device > p { margin: 0 0 10px; }
+
+/* ---- Remote (phone): quick sound / camera / mic tiles ---- */
+.quick-media { margin-bottom: 8px; }
+.quick-pc { background: var(--glass); border: 1px solid var(--border); border-radius: 18px; box-shadow: var(--shadow); padding: 12px; margin: 8px 0 12px; }
+.quick-pc-name { font-weight: 650; margin: 0 2px 10px; }
+.media-tiles { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+.media-tile { display: grid; justify-items: center; align-content: start; gap: 4px; padding: 12px 6px; min-height: 96px; border-radius: 16px; text-align: center; white-space: normal; }
+.media-tile svg { width: 26px; height: 26px; color: var(--accent); }
+.media-tile-title { font-weight: 650; font-size: 13px; }
+.media-tile-hint { font-size: 11px; color: var(--muted); line-height: 1.25; }
+.media-tile.on { background: var(--grad); color: #fff; border-color: transparent; box-shadow: 0 4px 14px var(--glow); }
+.media-tile.on svg, .media-tile.on .media-tile-hint { color: #fff; }
+.quick-more { margin: 8px 0 0; }
+.quick-more:empty { display: none; }
+@media (max-width: 420px) {
+  .media-tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+/* ---- Wi-Fi: Saved / Band lock switch ---- */
+.wifi-tabs { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; padding: 4px; border-radius: 999px; background: var(--glass); border: 1px solid var(--border); margin: 4px 0 14px; }
+.wifi-tabs button { border-radius: 999px; border: 0; background: none; box-shadow: none; font-weight: 600; }
+.wifi-tabs button.active { background: var(--grad); color: #fff; box-shadow: 0 3px 10px var(--glow); }
+.wifi-more { display: flex; gap: 8px; align-items: center; margin: 4px 0 10px; }
+.wifi-more input { flex: 1; min-width: 0; }
+
+/* ---- Received: pin, delete, clear ---- */
+.record-actions { display: flex; align-items: center; gap: 6px; }
+.icon-btn.small { width: 32px; height: 32px; border-radius: 10px; }
+.icon-btn.small svg { width: 16px; height: 16px; }
+.icon-btn[aria-pressed='true'] { color: var(--accent); border-color: var(--accent); }
+.record.pinned { border-color: color-mix(in srgb, var(--accent) 45%, var(--border)); }
+.pin-badge { margin-right: 6px; }
+.delete-ask { margin: 8px 0 4px; }
+
+/* ---- Home: most used pages ---- */
+.frequent { margin: 0 0 14px; }
+.frequent-head { display: block; font-size: 12px; font-weight: 650; letter-spacing: 0.04em; text-transform: uppercase; color: var(--muted); margin: 0 2px 6px; }
+.frequent-row { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+.frequent-chip { display: grid; justify-items: center; gap: 4px; padding: 10px 4px; border-radius: 16px; background: var(--glass); border: 1px solid var(--border); font-size: 12px; font-weight: 600; white-space: nowrap; overflow: hidden; }
+.frequent-chip span { max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
+.frequent-chip svg { width: 22px; height: 22px; color: var(--accent); }

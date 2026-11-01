@@ -7,7 +7,8 @@ import android.content.Intent;
 import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager;
-import android.content.res.TypedArray;
+import android.content.res.ColorStateList;
+import android.content.res.Configuration;
 import android.database.Cursor;
 import android.graphics.Bitmap;
 import android.graphics.Canvas;
@@ -19,6 +20,7 @@ import android.graphics.Typeface;
 import android.graphics.drawable.BitmapDrawable;
 import android.graphics.drawable.Drawable;
 import android.graphics.drawable.GradientDrawable;
+import android.graphics.drawable.RippleDrawable;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
@@ -82,7 +84,9 @@ public final class PickerActivity extends Activity {
     private static final String APK_MIME = "application/vnd.android.package-archive";
     /** MIUI and HyperOS hide the app list behind this runtime permission (only where it exists). */
     private static final String MIUI_APP_LIST = "com.android.permission.GET_INSTALLED_APPS";
-    private static final int ACCENT = 0xff2563eb;
+    private static final int ACCENT = 0xff7c3aed;
+    /** The app's gradient (indigo, violet, pink), as on its Send button. */
+    private static final int[] GRAD = {0xff6366f1, 0xffa855f7, 0xffec4899};
     private static final String[] SORTS = {"Newest first", "Oldest first", "Name A–Z", "Name Z–A", "Largest first", "Smallest first"};
 
     private enum Kind {
@@ -180,6 +184,9 @@ public final class PickerActivity extends Activity {
     private TextView count;
     private Button done;
 
+    // The app's colours for the light or dark system theme (see palette()).
+    private int bg, panel, text, muted, border, accent, soft, warn;
+
     @Override
     protected void onCreate(Bundle saved) {
         super.onCreate(saved);
@@ -187,27 +194,36 @@ public final class PickerActivity extends Activity {
         dates = DateFormat.getMediumDateFormat(this);
         maxFiles = getIntent().getIntExtra(EXTRA_MAX, 0);
         hadAllFiles = allFiles();
+        palette();
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
+        root.setBackgroundColor(bg);
 
         TextView title = new TextView(this);
         title.setText("Choose what to send");
-        title.setTextSize(20);
-        title.setTypeface(Typeface.DEFAULT_BOLD);
-        title.setPadding(dp(16), dp(16), dp(16), dp(8));
+        title.setTextSize(22);
+        title.setTextColor(text);
+        title.setTypeface(Typeface.create("sans-serif-medium", Typeface.BOLD));
+        title.setPadding(dp(20), dp(18), dp(20), 0);
         root.addView(title);
+        TextView hint = new TextView(this);
+        hint.setText("Tick items in any tab; the ticks are kept when you switch.");
+        hint.setTextSize(13);
+        hint.setTextColor(muted);
+        hint.setPadding(dp(20), dp(2), dp(20), dp(10));
+        root.addView(hint);
 
         HorizontalScrollView tabScroll = new HorizontalScrollView(this);
         tabScroll.setHorizontalScrollBarEnabled(false);
         LinearLayout tabBar = new LinearLayout(this);
-        tabBar.setPadding(dp(8), 0, dp(8), 0);
+        tabBar.setPadding(dp(14), dp(2), dp(14), dp(6));
         for (Kind k : Kind.values()) {
             TextView t = new TextView(this);
-            t.setPadding(dp(14), dp(8), dp(14), dp(8));
-            t.setTextSize(15);
+            t.setPadding(dp(16), dp(8), dp(16), dp(8));
+            t.setTextSize(14);
             t.setOnClickListener(v -> show(k));
             LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-            lp.setMargins(dp(2), 0, dp(2), 0);
+            lp.setMargins(dp(3), 0, dp(3), 0);
             tabBar.addView(t, lp);
             tabs.put(k, t);
             sortOf.put(k, k == Kind.APPS ? 2 : 0);
@@ -217,8 +233,11 @@ public final class PickerActivity extends Activity {
 
         LinearLayout tools = new LinearLayout(this);
         tools.setGravity(Gravity.CENTER_VERTICAL);
-        tools.setPadding(dp(8), dp(4), dp(8), dp(4));
+        tools.setPadding(dp(16), dp(4), dp(12), dp(6));
         sort = new Spinner(this);
+        sort.setBackground(rounded(panel, border, 12));
+        sort.setPopupBackgroundDrawable(rounded(panel, border, 14));
+        sort.setPadding(dp(6), 0, dp(6), 0);
         ArrayAdapter<String> sorts = new ArrayAdapter<>(this, android.R.layout.simple_spinner_item, SORTS);
         sorts.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
         sort.setAdapter(sorts);
@@ -233,18 +252,21 @@ public final class PickerActivity extends Activity {
             @Override
             public void onNothingSelected(AdapterView<?> parent) {}
         });
-        tools.addView(sort, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        LinearLayout.LayoutParams slp = new LinearLayout.LayoutParams(0, dp(40), 1f);
+        slp.setMarginEnd(dp(8));
+        tools.addView(sort, slp);
         notInstalledOnly = new CheckBox(this);
+        tint(notInstalledOnly);
         notInstalledOnly.setText("Not installed only");
         notInstalledOnly.setOnCheckedChangeListener((b, on) -> refreshList());
         tools.addView(notInstalledOnly);
-        browse = new Button(this);
-        browse.setText("Browse…");
+        browse = pill("Browse…", false);
         browse.setOnClickListener(v -> startActivityForResult(
                 new Intent(Intent.ACTION_OPEN_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType("*/*").putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true),
                 REQ_BROWSE));
         tools.addView(browse);
         selectAll = new CheckBox(this);
+        tint(selectAll);
         selectAll.setText("All");
         selectAll.setOnCheckedChangeListener((b, on) -> {
             if (quiet) return;
@@ -260,43 +282,62 @@ public final class PickerActivity extends Activity {
 
         notice = new LinearLayout(this);
         notice.setOrientation(LinearLayout.VERTICAL);
-        notice.setPadding(dp(16), dp(8), dp(16), dp(8));
+        notice.setPadding(dp(14), dp(12), dp(14), dp(12));
+        notice.setBackground(rounded(soft, 0, 16));
         noticeText = new TextView(this);
+        noticeText.setTextColor(text);
+        noticeText.setTextSize(13.5f);
         notice.addView(noticeText);
-        Button allow = new Button(this);
-        allow.setText("Allow");
+        Button allow = pill("Allow", true);
         allow.setOnClickListener(v -> askAccess());
-        notice.addView(allow, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
-        root.addView(notice);
+        LinearLayout.LayoutParams alp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(40));
+        alp.topMargin = dp(10);
+        notice.addView(allow, alp);
+        LinearLayout.LayoutParams nlp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        nlp.setMargins(dp(14), dp(4), dp(14), dp(6));
+        root.addView(notice, nlp);
 
         FrameLayout listBox = new FrameLayout(this);
         ListView list = new ListView(this);
+        list.setDivider(null);
+        list.setDividerHeight(0);
+        list.setSelector(new android.graphics.drawable.ColorDrawable(0));
+        list.setPadding(dp(10), dp(2), dp(10), dp(8));
+        list.setClipToPadding(false);
         list.setAdapter(rows);
         listBox.addView(list);
         empty = new TextView(this);
         empty.setGravity(Gravity.CENTER);
         empty.setPadding(dp(24), dp(24), dp(24), dp(24));
+        empty.setTextColor(muted);
         listBox.addView(empty, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
         list.setEmptyView(empty);
         root.addView(listBox, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
 
         LinearLayout bar = new LinearLayout(this);
         bar.setGravity(Gravity.CENTER_VERTICAL);
-        bar.setPadding(dp(16), dp(8), dp(8), dp(8));
-        bar.setBackgroundColor(0xffeef2f7);
+        bar.setPadding(dp(20), dp(10), dp(14), dp(10));
+        GradientDrawable barBg = rounded(panel, border, 0);
+        barBg.setCornerRadii(new float[] {dp(22), dp(22), dp(22), dp(22), 0, 0, 0, 0});
+        bar.setBackground(barBg);
+        bar.setElevation(dp(10));
         count = new TextView(this);
+        count.setTextColor(text);
+        count.setTextSize(14);
+        count.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
         bar.addView(count, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
-        Button clear = new Button(this);
-        clear.setText("Clear");
+        Button clear = pill("Clear", false);
+        clear.setBackground(null);
         clear.setOnClickListener(v -> {
             selected.clear();
             changed();
         });
-        bar.addView(clear);
-        done = new Button(this);
-        done.setText("Done");
+        bar.addView(clear, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(44)));
+        done = pill("Done", true);
         done.setOnClickListener(v -> finishWithSelection());
-        bar.addView(done);
+        LinearLayout.LayoutParams dlp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(44));
+        dlp.setMarginStart(dp(6));
+        bar.addView(done, dlp);
         root.addView(bar);
 
         // the system-bar insets replace a view's own padding, so they go on a wrapper
@@ -346,12 +387,10 @@ public final class PickerActivity extends Activity {
 
     private void styleTab(Kind k, TextView t) {
         boolean on = k == current;
-        t.setTypeface(on ? Typeface.DEFAULT_BOLD : Typeface.DEFAULT);
-        t.setTextColor(on ? ACCENT : 0xff475569);
-        GradientDrawable pill = t.getBackground() instanceof GradientDrawable ? (GradientDrawable) t.getBackground() : new GradientDrawable();
-        pill.setCornerRadius(dp(18));
-        pill.setColor(on ? 0xffdbeafe : 0x00000000);
-        t.setBackground(pill);
+        t.setTypeface(on ? Typeface.DEFAULT_BOLD : Typeface.create("sans-serif-medium", Typeface.NORMAL));
+        t.setTextColor(on ? 0xffffffff : muted);
+        t.setBackground(on ? gradient(20) : rounded(panel, border, 20));
+        t.setElevation(on ? dp(3) : 0);
     }
 
     /** The tab's name with how many of its items are ticked. */
@@ -776,6 +815,7 @@ public final class PickerActivity extends Activity {
         if (on) selected.put(e.key, e);
         // only this row's tick changes, so the list is not rebuilt
         h.box.setChecked(on);
+        styleRow(h, on);
         updateBar();
     }
 
@@ -808,6 +848,7 @@ public final class PickerActivity extends Activity {
         else if (tooMany) count.setText(files + " files: up to " + maxFiles + " can go at a time");
         else count.setText(selected.size() + " selected • " + Formatter.formatFileSize(this, bytes));
         done.setEnabled(!selected.isEmpty() && !tooMany);
+        done.setAlpha(done.isEnabled() ? 1f : 0.45f);
     }
 
     private void finishWithSelection() {
@@ -844,6 +885,65 @@ public final class PickerActivity extends Activity {
         return Math.round(v * getResources().getDisplayMetrics().density);
     }
 
+    /** The app's light or dark colours (styles.css :root and [data-theme='dark']), following the system theme. */
+    private void palette() {
+        boolean night = (getResources().getConfiguration().uiMode & Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES;
+        bg = night ? 0xff0c0b16 : 0xfff7f5ff;
+        panel = night ? 0xff17152a : 0xffffffff;
+        text = night ? 0xffece9f8 : 0xff1e1b2e;
+        muted = night ? 0xffa19cb8 : 0xff6b6880;
+        border = night ? 0xff2f2a48 : 0xffe7e1f4;
+        accent = night ? 0xffa78bfa : ACCENT;
+        soft = night ? 0xff261f45 : 0xffefe9fe;
+        warn = night ? 0xfffbbf24 : 0xffb45309;
+    }
+
+    /** A rounded box in a colour, with a 1 dp outline when stroke is not 0. */
+    private GradientDrawable rounded(int fill, int stroke, int radiusDp) {
+        GradientDrawable d = new GradientDrawable();
+        d.setColor(fill);
+        d.setCornerRadius(dp(radiusDp));
+        if (stroke != 0) d.setStroke(dp(1), stroke);
+        return d;
+    }
+
+    private GradientDrawable gradient(int radiusDp) {
+        GradientDrawable d = new GradientDrawable(GradientDrawable.Orientation.TL_BR, GRAD);
+        d.setCornerRadius(dp(radiusDp));
+        return d;
+    }
+
+    /** A pill button as in the app: the gradient with white text, or an accent outline. */
+    private Button pill(String label, boolean filled) {
+        Button b = new Button(this);
+        b.setText(label);
+        b.setAllCaps(false);
+        b.setTextSize(14);
+        b.setTypeface(Typeface.create("sans-serif-medium", Typeface.BOLD));
+        b.setStateListAnimator(null);
+        b.setMinWidth(0);
+        b.setMinimumWidth(0);
+        b.setMinHeight(0);
+        b.setMinimumHeight(0);
+        b.setPadding(dp(18), 0, dp(18), 0);
+        b.setTextColor(filled ? 0xffffffff : accent);
+        Drawable face = filled ? gradient(22) : rounded(0x00000000, accent, 22);
+        b.setBackground(new RippleDrawable(ColorStateList.valueOf(filled ? 0x40ffffff : (accent & 0x00ffffff) | 0x30000000), face, null));
+        if (filled) b.setElevation(dp(4));
+        return b;
+    }
+
+    private void tint(CheckBox c) {
+        c.setButtonTintList(ColorStateList.valueOf(accent));
+        c.setTextColor(text);
+    }
+
+    /** A ticked row gets the soft accent card with an accent outline; others a plain card. */
+    private void styleRow(Holder h, boolean on) {
+        Drawable face = on ? rounded(soft, accent, 16) : rounded(panel, border, 16);
+        h.row.setBackground(new RippleDrawable(ColorStateList.valueOf((accent & 0x00ffffff) | 0x26000000), face, null));
+    }
+
     private final class Rows extends BaseAdapter {
         private List<Entry> items = new ArrayList<>();
 
@@ -872,52 +972,60 @@ public final class PickerActivity extends Activity {
             Holder h;
             if (convert == null) {
                 h = new Holder();
+                // the card's gap: list rows take no margins, so each card sits in a padded frame
+                FrameLayout cell = new FrameLayout(PickerActivity.this);
+                cell.setPadding(0, dp(3), 0, dp(3));
                 LinearLayout row = new LinearLayout(PickerActivity.this);
                 row.setGravity(Gravity.CENTER_VERTICAL);
-                row.setPadding(dp(12), dp(8), dp(12), dp(8));
-                row.setMinimumHeight(dp(64));
-                TypedArray ripple = obtainStyledAttributes(new int[] {android.R.attr.selectableItemBackground});
-                row.setBackground(ripple.getDrawable(0));
-                ripple.recycle();
+                row.setPadding(dp(8), dp(8), dp(12), dp(8));
+                row.setMinimumHeight(dp(68));
                 row.setOnClickListener(v -> toggle((Holder) v.getTag()));
+                cell.addView(row);
+                h.row = row;
                 h.box = new CheckBox(PickerActivity.this);
+                h.box.setButtonTintList(ColorStateList.valueOf(accent));
                 h.box.setFocusable(false);
                 h.box.setClickable(false);
                 row.addView(h.box);
                 h.icon = new ImageView(PickerActivity.this);
                 h.icon.setScaleType(ImageView.ScaleType.CENTER_CROP);
+                h.icon.setBackground(rounded(soft, 0, 12));
+                h.icon.setClipToOutline(true);
                 LinearLayout.LayoutParams ilp = new LinearLayout.LayoutParams(dp(48), dp(48));
-                ilp.setMargins(dp(4), 0, dp(12), 0);
+                ilp.setMargins(dp(2), 0, dp(12), 0);
                 row.addView(h.icon, ilp);
                 LinearLayout texts = new LinearLayout(PickerActivity.this);
                 texts.setOrientation(LinearLayout.VERTICAL);
                 h.title = new TextView(PickerActivity.this);
                 h.title.setTextSize(15);
-                h.title.setTextColor(0xff0f172a);
+                h.title.setTextColor(text);
+                h.title.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
                 h.title.setSingleLine(true);
                 h.title.setEllipsize(TextUtils.TruncateAt.MIDDLE);
                 texts.addView(h.title);
                 h.sub = new TextView(PickerActivity.this);
                 h.sub.setTextSize(12);
-                h.sub.setTextColor(0xff64748b);
+                h.sub.setTextColor(muted);
                 h.sub.setSingleLine(true);
                 h.sub.setEllipsize(TextUtils.TruncateAt.END);
                 texts.addView(h.sub);
                 row.addView(texts, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
                 row.setTag(h);
-                convert = row;
+                cell.setTag(h);
+                convert = cell;
             } else {
                 h = (Holder) convert.getTag();
             }
             Entry e = items.get(position);
             h.entry = e;
             h.box.setChecked(selected.containsKey(e.key));
+            styleRow(h, h.box.isChecked());
             h.title.setText(e.title);
             StringBuilder sub = new StringBuilder(Formatter.formatShortFileSize(PickerActivity.this, e.size));
             if (e.date > 0) sub.append(" • ").append(dates.format(e.date));
             if (!e.detail.isEmpty()) sub.append(" • ").append(e.detail);
             h.sub.setText(sub);
-            h.sub.setTextColor(e.kind == Kind.APKS && e.notInstalled ? 0xffb45309 : 0xff64748b);
+            h.sub.setTextColor(e.kind == Kind.APKS && e.notInstalled ? warn : muted);
             icon(h.icon, e);
             return convert;
         }
@@ -925,6 +1033,7 @@ public final class PickerActivity extends Activity {
 
     private static final class Holder {
         Entry entry;
+        LinearLayout row;
         CheckBox box;
         ImageView icon;
         TextView title;
@@ -998,7 +1107,7 @@ public final class PickerActivity extends Activity {
         @Override
         public void draw(Canvas c) {
             RectF r = new RectF(getBounds());
-            float radius = r.width() * 0.18f;
+            float radius = r.width() * 0.25f;
             c.drawRoundRect(r, radius, radius, bg);
             fg.setTextSize(r.height() * (text.length() > 3 ? 0.24f : 0.3f));
             c.drawText(text, r.centerX(), r.centerY() - (fg.descent() + fg.ascent()) / 2, fg);

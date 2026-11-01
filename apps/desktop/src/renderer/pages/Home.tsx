@@ -17,7 +17,7 @@ interface Tile {
 }
 
 /** The home page: what is going on, and every feature one tap away. */
-export function Home({ state, run, go, wide }: { state: AppState; run: Run; go: Go; wide: boolean }) {
+export function Home({ state, run, go, wide, frequent = [] }: { state: AppState; run: Run; go: Go; wide: boolean; frequent?: { label: string; icon: string; onOpen: () => void }[] }) {
   const android = state.platform === 'android';
   const waiting = state.outbox.length;
   const unseen = state.received.length;
@@ -104,6 +104,21 @@ export function Home({ state, run, go, wide }: { state: AppState; run: Run; go: 
         <button className="home-notes" onClick={() => go({ sub: 'Remote' })}>
           🔔 {(state.phoneNotes ?? []).length} notification{(state.phoneNotes ?? []).length === 1 ? '' : 's'} from your phone
         </button>
+      )}
+      {frequent.length > 0 && (
+        <nav className="frequent" aria-label="Most used">
+          <span className="frequent-head">Most used</span>
+          <div className="frequent-row">
+            {frequent.map((f) => (
+              <button key={f.label} className="frequent-chip" onClick={f.onOpen}>
+                <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d={f.icon} />
+                </svg>
+                <span>{f.label}</span>
+              </button>
+            ))}
+          </div>
+        </nav>
       )}
       <div className="tiles">{tiles.slice(0, 8).map(tile)}</div>
       {wide && <Devices state={state} run={run} compact />}

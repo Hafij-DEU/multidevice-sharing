@@ -414,6 +414,8 @@ export function Remote({ state, run }: { state: AppState; run: Run }) {
         </>
       )}
 
+      {android && <QuickMedia state={state} run={run} pcs={trusted.filter((d) => d.deviceType !== 'mobile')} />}
+
       <h2>Control a device</h2>
       <Control state={state} run={run} targets={trusted.filter((d) => d.deviceType !== 'mobile')} />
 
@@ -514,6 +516,101 @@ export function Remote({ state, run }: { state: AppState; run: Run }) {
   );
 }
 
+const MEDIA_ICON = {
+  audio: 'M11 5 6 9H2v6h4l5 4V5zM15.5 8.5a5 5 0 0 1 0 7M19 5a10 10 0 0 1 0 14',
+  camera: 'M23 7l-7 5 7 5V7zM1 5h15v14H1z',
+  mic: 'M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3zM19 10v2a7 7 0 0 1-14 0v-2M12 19v3',
+  sound: 'M2 4h20v12H2zM8 20h8M12 16v4M9 10l2 2 4-4',
+} as const;
+
+function MediaTile({ icon, title, hint, on, disabled, why, onClick }: { icon: keyof typeof MEDIA_ICON; title: string; hint: string; on: boolean; disabled?: boolean; why?: string; onClick: () => void }) {
+  return (
+    <button className={`media-tile${on ? ' on' : ''}`} aria-pressed={on} disabled={disabled} title={why} onClick={onClick}>
+      <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <path d={MEDIA_ICON[icon]} />
+      </svg>
+      <span className="media-tile-title">{title}</span>
+      <span className="media-tile-hint">{on ? 'On · tap to stop' : hint}</span>
+    </button>
+  );
+}
+
+/**
+ * Phone only, first on the Remote page: one-tap tiles per nearby PC for PC sound here, webcam,
+ * microphone and phone sound on the PC. Rarer options (back camera, Bluetooth audio) sit under them.
+ */
+function QuickMedia({ state, run, pcs }: { state: AppState; run: Run; pcs: DeviceView[] }) {
+  const near = pcs.filter((d) => d.reach === 'lan' || d.reach === 'bt');
+  return (
+    <div className="quick-media">
+      <h2>Sound, camera and microphone</h2>
+      {near.length === 0 && <p className="muted">No PC nearby. Join the same Wi-Fi, a hotspot or a Bluetooth link to use the phone's camera, microphone or sound.</p>}
+      {near.map((d) => {
+        const c = state.casting ?? {};
+        // M14: Bluetooth carries sound (Opus) but not video
+        const bt = d.reach === 'bt';
+        const on = (k: 'audio' | 'camera' | 'mic') => (k === 'audio' ? c.audioFrom : k === 'camera' ? c.cameraTo : c.micTo) === d.deviceId;
+        const toggle = (k: 'audio' | 'camera' | 'mic') => void run(() => (on(k) ? window.meshdrop.streamStop(k) : window.meshdrop.streamStart!(d.deviceId, k)));
+        const soundOn = c.soundTo === d.deviceId;
+        const a2dp = c.a2dpTo === d.deviceId;
+        return (
+          <div key={d.deviceId} className="quick-pc">
+            <div className="quick-pc-name">
+              <Peer text={bt ? `${d.alias} (Bluetooth)` : d.alias} />
+            </div>
+            <div className="media-tiles">
+              <MediaTile icon="audio" title="PC sound" hint="Play it here" on={on('audio')} onClick={() => toggle('audio')} />
+              <MediaTile icon="camera" title="Webcam" hint="Phone camera on the PC" on={on('camera')} disabled={bt && !on('camera')} why={bt ? CAMERA_NEEDS_WIFI : undefined} onClick={() => toggle('camera')} />
+              <MediaTile icon="mic" title="Microphone" hint="Phone mic on the PC" on={on('mic')} onClick={() => toggle('mic')} />
+              {(!a2dp || soundOn) && (
+                <MediaTile
+                  icon="sound"
+                  title="Phone sound"
+                  hint="Play it on the PC"
+                  on={soundOn}
+                  onClick={() => void run(() => (soundOn ? window.meshdrop.streamStop('sound') : window.meshdrop.streamStart!(d.deviceId, 'sound')), soundOn ? 'Sound stopped' : 'Sound playing there')}
+                />
+              )}
+            </div>
+            <div className="row wrap quick-more">
+              {on('camera') ? (
+                <button onClick={() => void run(() => window.meshdrop.streamStart!(d.deviceId, 'camera', c.cameraBack ? 'front' : 'back'))}>
+                  Switch to {c.cameraBack ? 'front' : 'back'} camera
+                </button>
+              ) : (
+                !bt && <button onClick={() => void run(() => window.meshdrop.streamStart!(d.deviceId, 'camera', 'back'))}>Webcam with the back camera</button>
+              )}
+              {a2dp ? (
+                <>
+                  <button className="primary" onClick={() => void run(async () => {
+                    const err = problem(await window.meshdrop.appSend(d.deviceId, { kind: 'bt-audio-stop' }));
+                    if (err) throw new Error(err);
+                  }, 'Bluetooth audio stopped')}>Stop Bluetooth audio</button>
+                  <button onClick={() => void run(() => window.meshdrop.keepAliveAction!('audio-output'))}>Change audio output</button>
+                </>
+              ) : (
+                bt && (
+                  <>
+                    <button onClick={() => void run(async () => {
+                      // the PC connects the audio link (a phone app cannot); the phone then plays on it by itself
+                      const r = await window.meshdrop.appSend(d.deviceId, { kind: 'bt-audio-start' }).catch(() => undefined);
+                      if (!r || problem(r)) await window.meshdrop.keepAliveAction!('audio-output');
+                    })}>Phone sound as Bluetooth audio</button>
+                    <button onClick={() => void run(() => window.meshdrop.keepAliveAction!('bluetooth-settings'))}>Bluetooth settings</button>
+                  </>
+                )
+              )}
+            </div>
+            {a2dp && <p className="muted">This phone's sound plays on the PC as Bluetooth audio, like earbuds.</p>}
+            {bt && !a2dp && <p className="muted">Bluetooth: sound works, the camera needs Wi-Fi or a hotspot. Still on the phone speaker? Pick {d.alias} as the audio output.</p>}
+          </div>
+        );
+      })}
+      <p className="muted hint">Sound goes either way only with devices ticked on that PC ("Devices that may control this PC"). The camera and microphone show up on the PC as a webcam and a microphone for video calls.</p>
+    </div>
+  );
+}
+
 /** Phone only: forward notifications to PCs; launch Extendo for a second screen. */
 function AndroidExtras({ state, run, trusted }: { state: AppState; run: Run; trusted: DeviceView[] }) {
   const to = state.settings.notifyTo ?? [];
@@ -541,59 +638,6 @@ function AndroidExtras({ state, run, trusted }: { state: AppState; run: Run; tru
           Allow notification access
         </button>
       )}
-      <h2>Sound, camera and microphone</h2>
-      <p className="muted">On the same Wi-Fi or a Bluetooth link. Sound goes either way only with devices ticked on that PC ("Devices that may control this PC"); your camera and microphone show up on the PC as a webcam and a microphone for video calls.</p>
-      {pcs.filter((d) => d.reach === 'lan' || d.reach === 'bt').map((d) => {
-        const c = state.casting ?? {};
-        // M14: Bluetooth carries sound (Opus) but not video
-        const bt = d.reach === 'bt';
-        const on = (k: 'audio' | 'camera' | 'mic') => (k === 'audio' ? c.audioFrom : k === 'camera' ? c.cameraTo : c.micTo) === d.deviceId;
-        const toggle = (k: 'audio' | 'camera' | 'mic') => void run(() => (on(k) ? window.meshdrop.streamStop(k) : window.meshdrop.streamStart!(d.deviceId, k)));
-        return (
-          <div key={d.deviceId} className="row wrap">
-            <Peer text={bt ? `${d.alias} (Bluetooth)` : d.alias} />
-            <button aria-pressed={on('audio')} onClick={() => toggle('audio')}>{on('audio') ? 'Stop PC sound' : 'Play PC sound here'}</button>
-            {on('camera') ? (
-              <>
-                <button aria-pressed onClick={() => toggle('camera')}>Stop webcam</button>
-                <button onClick={() => void run(() => window.meshdrop.streamStart!(d.deviceId, 'camera', c.cameraBack ? 'front' : 'back'))}>
-                  Switch to {c.cameraBack ? 'front' : 'back'} camera
-                </button>
-              </>
-            ) : (
-              <>
-                <button disabled={bt} title={bt ? CAMERA_NEEDS_WIFI : undefined} onClick={() => toggle('camera')}>Use as webcam</button>
-                <button disabled={bt} title={bt ? CAMERA_NEEDS_WIFI : undefined} onClick={() => void run(() => window.meshdrop.streamStart!(d.deviceId, 'camera', 'back'))}>Webcam with the back camera</button>
-              </>
-            )}
-            <button aria-pressed={on('mic')} onClick={() => toggle('mic')}>{on('mic') ? 'Stop microphone' : 'Use as microphone'}</button>
-            {(c.a2dpTo !== d.deviceId || c.soundTo === d.deviceId) && <SoundTo state={state} run={run} to={d.deviceId} label="Play phone sound on PC" />}
-            {c.a2dpTo === d.deviceId ? (
-              <>
-                <p className="muted">This phone's sound plays on the PC as Bluetooth audio, like earbuds.</p>
-                <button className="primary" onClick={() => void run(async () => {
-                  const err = problem(await window.meshdrop.appSend(d.deviceId, { kind: 'bt-audio-stop' }));
-                  if (err) throw new Error(err);
-                }, 'Bluetooth audio stopped')}>Stop Bluetooth audio</button>
-                <button onClick={() => void run(() => window.meshdrop.keepAliveAction!('audio-output'))}>Change audio output</button>
-              </>
-            ) : (
-              bt && (
-                <>
-                  <button className="primary" onClick={() => void run(async () => {
-                    // the PC connects the audio link (a phone app cannot); the phone then plays on it by itself
-                    const r = await window.meshdrop.appSend(d.deviceId, { kind: 'bt-audio-start' }).catch(() => undefined);
-                    if (!r || problem(r)) await window.meshdrop.keepAliveAction!('audio-output');
-                  })}>Play phone sound as Bluetooth audio</button>
-                  <button onClick={() => void run(() => window.meshdrop.keepAliveAction!('bluetooth-settings'))}>Bluetooth settings</button>
-                  <p className="muted">Smoother over Bluetooth, like earbuds. Still on the phone speaker? Pick {d.alias} as the audio output, or tap it in Bluetooth settings.</p>
-                </>
-              )
-            )}
-            {bt && <p className="muted">{CAMERA_NEEDS_WIFI}</p>}
-          </div>
-        );
-      })}
       <h2>Second screen</h2>
       <p className="muted">Use this phone or tablet as a second monitor for the PC with Extendo.</p>
       <button onClick={() => void run(() => window.meshdrop.keepAliveAction!('extendo'))}>Open Extendo</button>

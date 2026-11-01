@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Dark system theme: the chooser draws the app's dark colours (PickerActivity.palette()). -->
+    <style name="Theme.MeshDropPicker" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@color/meshdrop_picker_bg</item>
+        <item name="android:statusBarColor">@color/meshdrop_picker_bg</item>
+        <item name="android:navigationBarColor">@color/meshdrop_picker_bg</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:windowLightNavigationBar">false</item>
+    </style>
+
+    <color name="meshdrop_picker_bg">#0c0b16</color>
+</resources>

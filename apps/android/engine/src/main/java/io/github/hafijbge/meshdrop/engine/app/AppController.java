@@ -1936,6 +1936,20 @@ public final class AppController {
                 return null;
             case "thumb":
                 return platform.thumbnail(str(a0));
+            case "receivedPin":
+                history.pin(((Number) a0).longValue(), str(args.get(1)), Boolean.TRUE.equals(args.get(2)));
+                changed();
+                return null;
+            case "receivedDelete": {
+                List<String> files = history.remove(((Number) a0).longValue(), str(args.get(1)));
+                if (Boolean.TRUE.equals(args.get(2))) for (String f : files) platform.deleteReceived(f);
+                changed();
+                return null;
+            }
+            case "receivedClear":
+                history.clear();
+                changed();
+                return null;
             case "join":
                 return join(str(a0));
             case "syncPut": {

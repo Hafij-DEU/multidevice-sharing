@@ -41,7 +41,7 @@
     'getState', 'pickFiles', 'pickFolder', 'pickSavePath', 'pickOpenPath', 'pickItems', 'chooseItems', 'scanQr', 'scanDocument', 'send', 'sendClipboard', 'resumeOutbox',
     'removeOutbox', 'pairProbe', 'addByAddress', 'appSend', 'ringStop', 'noteDismiss', 'handoffPull', 'watchCreate', 'watchResolve', 'watchOpen', 'watchEnd', 'streamStop', 'streamStart', 'scheduleCancel', 'saveBlob', 'scanSubnet', 'hubInit', 'setHubUrls', 'relaysSet', 'createInvite', 'join', 'revoke', 'exportRecovery',
     'importRecovery', 'setSettings', 'openInbox', 'reveal', 'registerClipboardShortcut', 'openConfigFolder', 'takeSharedItems',
-    'keepAliveAction', 'guestStart', 'guestEnd', 'guestShare', 'guestUnshare', 'guestAccept', 'guestReject', 'linkCreate', 'linkRevoke', 'openFile', 'thumb', 'unpair', 'syncPut', 'syncRemove', 'syncNow', 'backupSet', 'backupPermission',
+    'keepAliveAction', 'guestStart', 'guestEnd', 'guestShare', 'guestUnshare', 'guestAccept', 'guestReject', 'linkCreate', 'linkRevoke', 'openFile', 'thumb', 'unpair', 'receivedPin', 'receivedDelete', 'receivedClear', 'syncPut', 'syncRemove', 'syncNow', 'backupSet', 'backupPermission',
     'hotspotStart', 'hotspotJoin', 'hotspotStop',
     'qrShareStatus', 'qrShareSetEnabled', 'qrShareSend', 'qrShareReceive', 'qrShareStop', 'qrShareOpen',
     'wifiList', 'wifiSave', 'wifiDelete', 'wifiApply', 'wifiForget', 'wifiStatus', 'wifiAskLocation', 'wifiScan', 'wifiLock', 'wifiSyncNow', 'wifiCopy', 'wifiQr', 'wifiAddToSystem', 'wifiShare',

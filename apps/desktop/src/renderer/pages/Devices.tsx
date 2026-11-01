@@ -261,14 +261,16 @@ export function Devices({ state, run, compact }: { state: AppState; run: Run; co
 
       {!android && <DropZone onItems={add} />}
       <div className="actions">
-        <button className="act" onClick={() => pick('file')}>
-          <Icon d="M4 6a2 2 0 0 1 2-2h4l2 2h6a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2zM12 10v6M9 13h6" />
-          <span>Add Files</span>
-        </button>
-        {window.meshdrop.chooseItems && (
+        {/* The By Type chooser (Android) has its own Files tab and Browse…, so it takes Add Files' place. */}
+        {window.meshdrop.chooseItems ? (
           <button className="act" onClick={() => void run(async () => add(await window.meshdrop.chooseItems!()))}>
             <Icon d="M12 3l2.5 4.5L19 9l-3.5 3.5.8 5L12 15l-4.3 2.5.8-5L5 9l4.5-1.5z" />
             <span>By Type</span>
+          </button>
+        ) : (
+          <button className="act" onClick={() => pick('file')}>
+            <Icon d="M4 6a2 2 0 0 1 2-2h4l2 2h6a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2zM12 10v6M9 13h6" />
+            <span>Add Files</span>
           </button>
         )}
         <button className="act" onClick={() => pick('dir')}>

@@ -70,6 +70,8 @@ export interface TransferView {
 
 export interface ReceivedRecord {
   at: number;
+  /** Kept on top and kept by Clear history. */
+  pinned?: boolean;
   from: string;
   alias: string;
   files: string[];
@@ -563,6 +565,12 @@ export interface DesktopApi {
   reveal(path: string): Promise<void>;
   /** Unpairs a manually paired device (it shows as nearby again: Pair re-pairs it). */
   unpair(deviceId: string): Promise<void>;
+  /** Pins (or unpins) the received record `at` from `from`: it stays on top and Clear history keeps it. */
+  receivedPin(at: number, from: string, pinned: boolean): Promise<void>;
+  /** Removes the received record `at` from `from`, and with `files` its received files too. */
+  receivedDelete(at: number, from: string, files: boolean): Promise<void>;
+  /** Clear history: drops every unpinned record (the received files stay in the inbox). */
+  receivedClear(): Promise<void>;
   /** Opens a received file in its default app (Android: the same as reveal). */
   openFile(path: string): Promise<void>;
   /** A preview (data: URL) of a received image or video, or null. */
