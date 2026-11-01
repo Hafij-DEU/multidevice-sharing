@@ -1,6 +1,7 @@
 name: Release
 
-# Builds the Ubuntu .deb, the signed Android APK and the Windows 11 installer (.exe) for a v* tag,
+# Builds the Ubuntu .deb, the other Linux packages (.rpm, Arch .pkg.tar.zst, AppImage, .tar.gz), the
+# signed Android APK and the Windows 11 installer (.exe) for a v* tag,
 # and attaches them to a DRAFT release: the owner reviews and publishes it.
 # APK signing needs these repository secrets (the owner adds them once):
 #   MESHDROP_KEYSTORE_B64 (base64 of the .jks), MESHDROP_KS_PASS, MESHDROP_KEY_ALIAS, MESHDROP_KEY_PASS
@@ -28,6 +29,23 @@ jobs:
         with:
           name: deb
           path: apps/desktop/dist-deb/*.deb
+
+  linux:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: sudo apt-get update && sudo apt-get install -y rpm libarchive-tools
+      - run: pnpm install --frozen-lockfile
+      - run: bash apps/desktop/scripts/build-linux.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux
+          path: apps/desktop/dist-linux/*
 
   apk:
     runs-on: ubuntu-24.04
@@ -84,7 +102,7 @@ jobs:
           path: apps/desktop/dist-win/*.exe
 
   draft:
-    needs: [deb, apk, windows]
+    needs: [deb, linux, apk, windows]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-24.04
     steps:
@@ -96,6 +114,6 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then echo "release $GITHUB_REF_NAME exists already (made locally)"; exit 0; fi
-          find out -type f \( -name '*.deb' -o -name '*.apk' -o -name '*.exe' \) -exec sha256sum {} \; | sed 's# out/[^/]*/# #' > SHA256SUMS
+          find out -type f \( -name '*.deb' -o -name '*.rpm' -o -name '*.pkg.tar.zst' -o -name '*.AppImage' -o -name '*.tar.gz' -o -name '*.apk' -o -name '*.exe' \) -exec sha256sum {} \; | sed 's# out/[^/]*/# #' > SHA256SUMS
           gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --draft --title "MeshDrop ${GITHUB_REF_NAME#v}" --generate-notes \
-            $(find out -type f \( -name '*.deb' -o -name '*.apk' -o -name '*.exe' \)) SHA256SUMS
+            $(find out -type f \( -name '*.deb' -o -name '*.rpm' -o -name '*.pkg.tar.zst' -o -name '*.AppImage' -o -name '*.tar.gz' -o -name '*.apk' -o -name '*.exe' \)) SHA256SUMS

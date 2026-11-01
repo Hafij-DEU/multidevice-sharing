@@ -1,4 +1,5 @@
-# .deb for Ubuntu and the Windows 11 installer (.exe). Build with scripts/build-deb.sh or
+# .deb for Ubuntu, .rpm for Fedora, a package for Arch, an AppImage and a .tar.gz for any other Linux,
+# and the Windows 11 installer (.exe). Build with scripts/build-deb.sh, scripts/build-linux.sh or
 # scripts/build-win.ps1 (they run the Vite builds first and keep electron-builder's output out of
 # the repository).
 appId: io.github.hafijbge.meshdrop
@@ -28,6 +29,8 @@ extraResources:
     to: THIRD_PARTY_NOTICES.md
 linux:
   target: deb
+  # the .tar.gz (unpack and run meshdrop-desktop)
+  artifactName: meshdrop-${version}-linux-x64.${ext}
   extraResources:
     - from: build/meshdrop
       to: meshdrop
@@ -96,3 +99,43 @@ deb:
     - gstreamer1.0-plugins-good
     - gstreamer1.0-plugins-bad
     - cups-client
+# Fedora / openSUSE: the same /opt/MeshDrop layout and install scripts as the .deb.
+rpm:
+  packageName: meshdrop
+  artifactName: meshdrop-${version}-1.x86_64.rpm
+  afterInstall: build/after-install.tpl
+  afterRemove: build/after-remove.tpl
+  # the .deb's optional helpers under their Fedora names
+  fpm:
+    - --rpm-tag
+    - 'Recommends: android-tools'
+    - --rpm-tag
+    - 'Recommends: python3-gobject'
+    - --rpm-tag
+    - 'Recommends: pipewire-utils'
+    - --rpm-tag
+    - 'Recommends: gstreamer1'
+    - --rpm-tag
+    - 'Recommends: pipewire-gstreamer'
+    - --rpm-tag
+    - 'Recommends: gstreamer1-plugins-good'
+    - --rpm-tag
+    - 'Recommends: gstreamer1-plugins-bad-free'
+    - --rpm-tag
+    - 'Recommends: cups-client'
+    - --rpm-tag
+    - 'Recommends: libappindicator-gtk3'
+# Arch / Manjaro / EndeavourOS
+pacman:
+  packageName: meshdrop
+  artifactName: meshdrop-${version}-1-x86_64.pkg.tar.zst
+  afterInstall: build/after-install.tpl
+  afterRemove: build/after-remove.tpl
+  # what the bundled Electron needs (electron-builder's default list pulls in ffmpeg and more)
+  depends: [gtk3, nss, alsa-lib, libxss, libxtst, at-spi2-core, libnotify, xdg-utils]
+  fpm:
+    - --pacman-compression=zstd
+  # optdepends: scripts/build-linux.sh adds them (fpm 1.17 takes --pacman-optional-depends but never writes it)
+# Any other distribution: no install needed (no meshdrop command on PATH and no phone camera device).
+appImage:
+  artifactName: MeshDrop-${version}-x86_64.AppImage

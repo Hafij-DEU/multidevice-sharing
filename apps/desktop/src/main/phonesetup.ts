@@ -2,10 +2,27 @@
 // plugged in with USB debugging on gets every keep-alive setting and the permissions MeshDrop would ask
 // for, through adb (the phone's shell user may change them; an app cannot change them for itself).
 import { execFile } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 import { promisify } from 'node:util';
 
 const run = promisify(execFile);
 const PKG = 'io.github.hafijbge.meshdrop';
+
+/** The command that installs adb here: Windows, then the Linux family from /etc/os-release (Debian/Ubuntu by default). */
+function adbInstallHint(): string {
+  if (process.platform === 'win32') return 'winget install Google.PlatformTools';
+  let os = '';
+  try {
+    os = readFileSync('/etc/os-release', 'utf8');
+  } catch {
+    // no os-release: keep the Debian/Ubuntu hint
+  }
+  const like = (id: string) => new RegExp(`^ID(_LIKE)?="?[^\\n]*\\b${id}\\b`, 'm').test(os);
+  if (like('fedora') || like('rhel')) return 'sudo dnf install android-tools';
+  if (like('arch')) return 'sudo pacman -S android-tools';
+  if (like('suse')) return 'sudo zypper install android-tools';
+  return 'sudo apt install adb';
+}
 
 export interface PhoneSetupResult {
   serial: string;
@@ -38,8 +55,7 @@ export async function adbDevices(adb = 'adb'): Promise<{ serial: string; state: 
     out = (await run(adb, ['devices', '-l'], { timeout: 15_000 })).stdout;
   } catch (e) {
     const code = (e as NodeJS.ErrnoException).code;
-    const install = process.platform === 'win32' ? 'winget install Google.PlatformTools' : 'sudo apt install adb';
-    throw new Error(code === 'ENOENT' ? `adb is not installed on this PC. Install it once with: ${install}` : 'adb did not answer.');
+    throw new Error(code === 'ENOENT' ? `adb is not installed on this PC. Install it once with: ${adbInstallHint()}` : 'adb did not answer.');
   }
   return out
     .split('\n')

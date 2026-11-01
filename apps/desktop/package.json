@@ -16,6 +16,7 @@
     "e2e": "playwright test",
     "typecheck": "tsc -p . --noEmit",
     "dist": "bash scripts/build-deb.sh",
+    "dist:linux": "bash scripts/build-linux.sh",
     "dist:win": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-win.ps1"
   },
   "devDependencies": {
