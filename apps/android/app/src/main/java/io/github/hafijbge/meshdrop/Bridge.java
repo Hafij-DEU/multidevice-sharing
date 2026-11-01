@@ -145,6 +145,9 @@ public final class Bridge {
                 return null;
             case "wifiStatus":
                 return wifiControl.status();
+            case "wifiAskLocation":
+                wifiControl.askLocation();
+                return null;
             case "wifiScan":
                 return wifiControl.scan(args.isEmpty() || args.get(0) == null ? null : args.get(0).toString());
             case "wifiLock": // band lock set/cleared on one saved network, leaving its password untouched

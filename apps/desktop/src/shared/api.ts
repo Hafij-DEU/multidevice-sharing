@@ -410,6 +410,11 @@ export interface WifiStatusView {
   linkMbps?: number;
   /** The current AP is one MeshDrop pinned (band lock in effect). */
   locked: boolean;
+  /**
+   * Connected, but Android withheld the network's name and access point: `permission` when MeshDrop may
+   * not use Location, `location` when Location is switched off. Band, signal and speed are still filled in.
+   */
+  nameHidden?: 'permission' | 'location';
 }
 
 /** M2: one access point seen in a scan, for picking a BSSID to pin. */
@@ -558,6 +563,8 @@ export interface DesktopApi {
   /** Removes every suggestion MeshDrop registered (undoes the lock). */
   wifiForget?(): Promise<void>;
   wifiStatus?(): Promise<WifiStatusView>;
+  /** Asks Android for Location, which it requires before it names the network this device is on. */
+  wifiAskLocation?(): Promise<void>;
   /** Scans for access points (optionally one SSID) so the user can pick a BSSID to pin. */
   wifiScan?(ssid?: string): Promise<WifiScanAp[]>;
   /**

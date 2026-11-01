@@ -11,6 +11,7 @@ import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.net.MacAddress;
 import android.net.wifi.ScanResult;
+import android.net.wifi.SupplicantState;
 import android.net.wifi.WifiInfo;
 import android.net.wifi.WifiManager;
 import android.net.wifi.WifiEnterpriseConfig;
@@ -617,24 +618,42 @@ final class WifiControl {
         boolean on = wifi != null && wifi.isWifiEnabled();
         m.put("enabled", on);
         WifiInfo info = wifi == null ? null : wifi.getConnectionInfo();
-        String bssid = info == null ? null : info.getBSSID();
-        if (!on || info == null || bssid == null || "02:00:00:00:00:00".equals(bssid) || info.getFrequency() <= 0) {
+        if (!on || info == null || info.getFrequency() <= 0 || info.getSupplicantState() != SupplicantState.COMPLETED) {
             m.put("connected", false);
             m.put("locked", !lockedBssids().isEmpty());
             return m;
         }
         int freq = info.getFrequency();
-        String bl = bssid.toLowerCase(Locale.US);
         m.put("connected", true);
-        m.put("ssid", unquote(info.getSSID()));
-        m.put("bssid", bl);
         m.put("freq", (long) freq);
         m.put("band", band(freq));
         m.put("channel", (long) channel(freq));
         m.put("rssi", (long) info.getRssi());
         m.put("linkMbps", (long) info.getLinkSpeed());
+        String bssid = info.getBSSID();
+        if (bssid == null || "02:00:00:00:00:00".equals(bssid)) {
+            // Connected, but Android withheld the network's name and access point: it only reveals them to an
+            // app that may use Location while Location is switched on. Band, signal and speed are not withheld.
+            m.put("nameHidden", hasLocationPermission() ? "location" : "permission");
+            m.put("locked", false);
+            return m;
+        }
+        String bl = bssid.toLowerCase(Locale.US);
+        m.put("ssid", unquote(info.getSSID()));
+        m.put("bssid", bl);
         m.put("locked", lockedBssids().contains(bl));
         return m;
+    }
+
+    /** Asks for Location (fine and coarse together, as Android 12+ requires) so status() can name the network. */
+    void askLocation() {
+        if (hasLocationPermission()) return;
+        activity.runOnUiThread(() -> activity.requestPermissions(
+                new String[] {Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION}, 15));
+    }
+
+    private boolean hasLocationPermission() {
+        return activity.checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED;
     }
 
     @SuppressLint("MissingPermission") // checked in requireScanPermission() just above the access

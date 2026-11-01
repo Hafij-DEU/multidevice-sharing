@@ -72,6 +72,20 @@ function StatusCard({ s, onRefresh }: { s: WifiStatusView | null; onRefresh: () 
         <p className="error-text">Wi-Fi is off on this device.</p>
       ) : !s.connected ? (
         <p className="muted">Not connected to Wi-Fi.{s.locked ? ' A band lock is set and waiting for its access point.' : ''}</p>
+      ) : s.nameHidden ? (
+        <>
+          <p>
+            Connected to Wi-Fi · {s.band} GHz, channel {s.channel} · {s.rssi} dBm · {s.linkMbps} Mbps
+          </p>
+          {s.nameHidden === 'permission' ? (
+            <div className="row space">
+              <span className="muted">Android shows MeshDrop the network's name only with Location allowed.</span>
+              {api.wifiAskLocation && <button onClick={() => void api.wifiAskLocation!()}>Allow location</button>}
+            </div>
+          ) : (
+            <p className="muted">Turn on Location in Android's quick settings to see which network this is.</p>
+          )}
+        </>
       ) : (
         <p>
           On <strong>{s.ssid}</strong> · {s.band} GHz, channel {s.channel} · {s.rssi} dBm · {s.linkMbps} Mbps
@@ -448,6 +462,9 @@ function BandLockSection({ profiles, run, onChanged }: { profiles: WifiProfileVi
 
 // ---- The Wi-Fi tab -----------------------------------------------------------------------------
 
+/** Whether this run already asked for Location on the user's behalf (the button can still ask again). */
+let askedLocation = false;
+
 /** The Wi-Fi tab: the user's own saved networks, applied and synced automatically, with band lock apart. */
 export function Wifi({ state: _state, run }: { state: AppState; run: Run }) {
   const [profiles, setProfiles] = useState<WifiProfileView[] | null>(null);
@@ -464,6 +481,13 @@ export function Wifi({ state: _state, run }: { state: AppState; run: Run }) {
     void run(() => api.wifiStatus!()).then((r) => r && setStatus(r));
   }, [run]);
   useEffect(refreshStatus, [refreshStatus]);
+
+  // Android names the current network only to apps allowed Location: ask once per run, the first time it is hidden.
+  useEffect(() => {
+    if (status?.nameHidden !== 'permission' || askedLocation || !api.wifiAskLocation) return;
+    askedLocation = true;
+    void api.wifiAskLocation();
+  }, [status?.nameHidden]);
 
   // "Connect" hands off to Android's own dialog and the link comes up a few seconds later, so keep the
   // badge honest with a quiet poll while this tab is open (no toasts: a failed read just keeps the last one).
