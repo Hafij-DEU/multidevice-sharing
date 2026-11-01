@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { BgArt } from './components/BgArt.tsx';
 import type { AppState } from '../shared/api.ts';
 import { Toasts, type ToastItem } from './components/Toast.tsx';
 import { errorText } from './format.ts';
@@ -12,22 +13,15 @@ import { PairedDevices } from './pages/PairedDevices.tsx';
 import { Remote } from './pages/Remote.tsx';
 import { WatchParty } from './pages/WatchParty.tsx';
 import { Handoff } from './pages/Handoff.tsx';
-import { Settings } from './pages/Settings.tsx';
+import { About, Settings } from './pages/Settings.tsx';
 import { Sync } from './pages/Sync.tsx';
 import { Transfers } from './pages/Transfers.tsx';
 import { Wifi } from './pages/Wifi.tsx';
 import { QrShare } from './pages/QrShare.tsx';
 
 /** Home (every feature one tap away), Send, Received; the rarer pages live under More. */
-const TABS = ['Home', 'Send', 'Received', 'More'] as const;
-type Tab = (typeof TABS)[number];
-const TAB_ICON: Record<Tab, string> = {
-  Home: 'M3 11l9-7 9 7M5 10v10h5v-6h4v6h5V10',
-  Send: 'M4 12l16-8-6 16-2-7-8-1z',
-  Received: 'M12 4v11M7 10l5 5 5-5M5 20h14',
-  More: 'M5 12h.01M12 12h.01M19 12h.01',
-};
-const MORE = ['Remote', 'Continue', 'Watch party', 'Wi-Fi', 'Share to Xiaomi', 'Devices', 'Sync', 'Guests', 'Mesh', 'Transfers', 'Settings'] as const;
+type Tab = 'Home' | 'Send' | 'Received' | 'More';
+const MORE = ['Remote', 'Continue', 'Watch party', 'Wi-Fi', 'Share to Xiaomi', 'Devices', 'Sync', 'Guests', 'Mesh', 'Transfers', 'Settings', 'About'] as const;
 type Sub = (typeof MORE)[number];
 const ICON: Record<Sub, string> = {
   Remote: 'M7 3h10v18H7zM12 17h.01M10 7h4M9 11h6',
@@ -41,6 +35,7 @@ const ICON: Record<Sub, string> = {
   Mesh: 'M5 12a2 2 0 1 0 0 .01M19 5a2 2 0 1 0 0 .01M19 19a2 2 0 1 0 0 .01M7 11l10-5M7 13l10 5',
   Transfers: 'M7 4v14M3 14l4 4 4-4M17 20V6M13 10l4-4 4 4',
   Settings: 'M4 7h10M18 7h2M4 17h4M12 17h8M16 5v4M10 15v4',
+  About: 'M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18zM12 11v5M12 8h.01',
 };
 const MORE_HINT: Record<Sub, string> = {
   Remote: 'Touchpad, keyboard, slides and media for your PC; find a device; notifications',
@@ -54,12 +49,45 @@ const MORE_HINT: Record<Sub, string> = {
   Mesh: 'Link your devices so they reach each other from anywhere',
   Transfers: 'Unfinished sends and transfer history',
   Settings: 'Name, port, notifications',
+  About: 'Version, licence, source code',
 };
+/** On a wide window these sit in the sidebar, so the More page leaves them out. */
+const IN_SIDEBAR: readonly Sub[] = ['Devices', 'Transfers', 'Settings', 'About'];
+
+/** One sidebar / bottom-bar entry; `core` ones are the four a phone shows in its bottom bar. */
+interface NavItem {
+  label: string;
+  icon: string;
+  active: boolean;
+  core?: boolean;
+  onOpen: () => void;
+}
+
+const WIDE = matchMedia('(min-width: 860px)');
+/** True while the window is wide enough for the sidebar layout (PC); false on phones. */
+function useWide(): boolean {
+  const [wide, setWide] = useState(WIDE.matches);
+  useEffect(() => {
+    const on = () => setWide(WIDE.matches);
+    WIDE.addEventListener('change', on);
+    return () => WIDE.removeEventListener('change', on);
+  }, []);
+  return wide;
+}
+
+function Icon({ d, className }: { d: string; className?: string }) {
+  return (
+    <svg className={className} aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d={d} />
+    </svg>
+  );
+}
 
 /** Runs an action; shows its error (or `ok`, or a string it returns) as a toast. Resolves undefined on error. */
 export type Run = <T>(fn: () => Promise<T>, ok?: string) => Promise<T | undefined>;
 
 export function App() {
+  const wide = useWide();
   const [tab, setTab] = useState<Tab>('Home');
   const [sub, setSub] = useState<Sub | null>(null);
   const open = (t: Tab, s: Sub | null = null) => {
@@ -111,11 +139,14 @@ export function App() {
     const w = window as unknown as { __mdBack?: () => boolean };
     w.__mdBack = () => {
       const { tab: t, sub: s } = nav.current;
+      // nav.current moves at once too: a second back before the next render must see this step.
       if (s !== null) {
+        nav.current = { tab: t, sub: null };
         setSub(null);
         return true;
       }
       if (t !== 'Home') {
+        nav.current = { tab: 'Home', sub: null };
         open('Home');
         return true;
       }
@@ -125,6 +156,30 @@ export function App() {
       delete w.__mdBack;
     };
   }, []);
+
+  // Android: its engine does not ask other devices for their battery, storage and signal (the
+  // desktop's does), so the app asks: each online paired device, at most once a minute.
+  const asked = useRef(new Map<string, number>());
+  const devs = useRef(state?.devices);
+  devs.current = state?.devices;
+  useEffect(() => {
+    if (state?.platform !== 'android') return;
+    const tick = () => {
+      const now = Date.now();
+      for (const d of devs.current ?? []) {
+        if (!d.trusted || d.reach === 'offline' || d.role === 'localsend' || d.role === 'addon') {
+          asked.current.delete(d.deviceId); // asked again as soon as it is back
+          continue;
+        }
+        if (now - (asked.current.get(d.deviceId) ?? 0) < 60_000) continue;
+        asked.current.set(d.deviceId, now);
+        window.meshdrop.appSend(d.deviceId, { kind: 'status' }).catch(() => {});
+      }
+    };
+    tick();
+    const t = setInterval(tick, 10_000);
+    return () => clearInterval(t);
+  }, [state?.platform]);
 
   // Files shared into MeshDrop (Android share menu, Files → Send with MeshDrop): show the Send page.
   useEffect(() => {
@@ -148,6 +203,7 @@ export function App() {
 
   const subs = MORE.filter(
     (p) =>
+      !(wide && IN_SIDEBAR.includes(p)) &&
       !(p === 'Guests' && !state?.guest) &&
       !(p === 'Sync' && !state?.sync) &&
       !(p === 'Watch party' && !window.meshdrop.watchCreate) &&
@@ -164,22 +220,65 @@ export function App() {
         : state.receiving
           ? `Receiving as ${state.self.alias}`
           : 'Receiving paused';
+  const trusted = state ? state.devices.filter((d) => d.trusted && d.role !== 'localsend' && d.role !== 'addon') : [];
+  const online = trusted.filter((d) => d.reach !== 'offline').length;
+  const notes = (state?.phoneNotes ?? []).length;
+  const page = (s: Sub): NavItem => ({ label: s, icon: ICON[s], active: tab === 'More' && sub === s, onOpen: () => open('More', s) });
+  const navItems: NavItem[] = [
+    { label: 'Home', icon: 'M3 11l9-7 9 7M5 10v10h5v-6h4v6h5V10', active: tab === 'Home', core: true, onOpen: () => open('Home') },
+    { label: 'Send', icon: 'M4 12l16-8-6 16-2-7-8-1z', active: tab === 'Send', core: true, onOpen: () => open('Send') },
+    { label: 'Received', icon: 'M12 4v11M7 10l5 5 5-5M5 20h14', active: tab === 'Received', core: true, onOpen: () => open('Received') },
+    page('Devices'),
+    ...(state?.guest ? [{ ...page('Guests'), label: 'Room', icon: 'M16 19a4 4 0 0 0-8 0M12 12a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM20 18a3 3 0 0 0-3-3M17 11a2.5 2.5 0 1 0 0-5M4 18a3 3 0 0 1 3-3M7 11a2.5 2.5 0 1 1 0-5' }] : []),
+    page('Transfers'),
+    { label: 'More', icon: 'M5 12h.01M12 12h.01M19 12h.01', active: tab === 'More' && (sub === null || !wide || !IN_SIDEBAR.includes(sub)), core: true, onOpen: () => open('More') },
+  ];
+  const navEnd: NavItem[] = [page('Settings'), page('About')];
+  const navButton = (n: NavItem) => (
+    <button key={n.label} className={`nav-item${n.active ? ' active' : ''}${n.core ? '' : ' side-only'}`} onClick={n.onOpen} aria-current={n.active ? 'page' : undefined}>
+      <Icon d={n.icon} className={n.label === 'More' ? 'nav-icon dots' : 'nav-icon'} />
+      <span>{n.label}</span>
+    </button>
+  );
 
   return (
     <div className="app">
-      <header className="topbar">
-        <span className="brand">MeshDrop</span>
-        <nav className="tabs" aria-label="Pages">
-          {TABS.map((t) => (
-            <button key={t} className={t === tab ? 'tab active' : 'tab'} onClick={() => open(t)} aria-current={t === tab ? 'page' : undefined}>
-              <svg className="tab-icon" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={t === 'More' ? 3.5 : 2} strokeLinecap="round" strokeLinejoin="round">
-                <path d={TAB_ICON[t]} />
-              </svg>
-              <span>{t}</span>
-            </button>
-          ))}
+      <BgArt />
+      <aside className="sidebar">
+        <div className="brand">
+          <span className="logo" aria-hidden="true" />
+          MeshDrop
+        </div>
+        <nav className="nav" aria-label="Pages">
+          {navItems.map(navButton)}
+          <hr className="nav-rule side-only" />
+          {navEnd.map(navButton)}
         </nav>
-        <span className="self muted">{status}</span>
+        {state && (
+          <div className="mesh-card">
+            <Icon d="M5 12.5a10 10 0 0 1 14 0M8 15.5a6 6 0 0 1 8 0M12 19h.01" className="mesh-card-icon" />
+            <div>
+              <div className="mesh-card-title">Mesh Network</div>
+              <div className="muted">
+                {online} device{online === 1 ? '' : 's'} online
+              </div>
+              <div className="muted mesh-card-status">{status}</div>
+            </div>
+          </div>
+        )}
+      </aside>
+      <header className="appbar">
+        <span className="brand">
+          <span className="logo" aria-hidden="true" />
+          MeshDrop
+        </span>
+        <button className="icon-btn" aria-label={notes ? `${notes} notifications from your phone` : 'Notifications'} onClick={() => open('More', 'Remote')}>
+          <Icon d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9M10.3 21a1.94 1.94 0 0 0 3.4 0" />
+          {notes > 0 && <span className="icon-badge">{notes}</span>}
+        </button>
+        <button className="icon-btn" aria-label="Menu" onClick={() => open('More')}>
+          <Icon d="M12 5h.01M12 12h.01M12 19h.01" className="dots" />
+        </button>
       </header>
       <main className="content">
         {state?.error && (
@@ -190,35 +289,38 @@ export function App() {
         {!state ? (
           <p className="muted">Starting…</p>
         ) : tab === 'Home' ? (
-          <Home state={state} run={run} go={(to) => ('tab' in to ? open(to.tab) : open('More', to.sub as Sub))} />
+          <Home state={state} run={run} wide={wide} go={(to) => ('tab' in to ? open(to.tab) : open('More', to.sub as Sub))} />
         ) : tab === 'Send' ? (
           <Devices state={state} run={run} />
         ) : tab === 'Received' ? (
           <Inbox state={state} run={run} />
         ) : sub === null ? (
-          <ul className="menu">
-            {subs.map((p) => (
-              <li key={p}>
-                <button className="menu-item" onClick={() => setSub(p)}>
-                  <span className={`menu-icon icon-${p.replace(/ /g, '-')}`} aria-hidden="true">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                      <path d={ICON[p]} />
-                    </svg>
-                  </span>
-                  <span className="menu-text">
-                    <span className="menu-title">{p}</span>
-                    <span className="muted">{MORE_HINT[p]}</span>
-                  </span>
-                </button>
-              </li>
-            ))}
-          </ul>
+          <>
+            <h1 className="page-title">More</h1>
+            <ul className="menu">
+              {subs.map((p) => (
+                <li key={p}>
+                  <button className="menu-item" onClick={() => setSub(p)}>
+                    <span className={`menu-icon icon-${p.replace(/ /g, '-')}`} aria-hidden="true">
+                      <Icon d={ICON[p]} />
+                    </span>
+                    <span className="menu-text">
+                      <span className="menu-title">{p}</span>
+                      <span className="muted">{MORE_HINT[p]}</span>
+                    </span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </>
         ) : (
           <>
             <div className="subhead">
-              <button className="link" onClick={() => setSub(null)}>
-                ‹ More
-              </button>
+              {!(wide && IN_SIDEBAR.includes(sub)) && (
+                <button className="link" onClick={() => setSub(null)}>
+                  ‹ More
+                </button>
+              )}
               <h1>{sub}</h1>
             </div>
             {sub === 'Remote' ? (
@@ -241,6 +343,10 @@ export function App() {
               <Mesh state={state} run={run} />
             ) : sub === 'Transfers' ? (
               <Transfers state={state} run={run} />
+            ) : sub === 'About' ? (
+              <section className="about">
+                <About />
+              </section>
             ) : (
               <Settings key={JSON.stringify(state.settings)} state={state} run={run} />
             )}

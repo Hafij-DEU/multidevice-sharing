@@ -28,7 +28,11 @@ export function DropZone({ onItems }: { onItems: (items: SendItemInput[]) => voi
       onDragLeave={() => setOver(false)}
       onDrop={onDrop}
     >
-      Drop files or folders here
+      <svg className="drop-icon" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M7 18a4.5 4.5 0 0 1-.6-8.96A6 6 0 0 1 18 9a4 4 0 0 1 0 9M12 12v8M9 15l3-3 3 3" />
+      </svg>
+      <span className="drop-title">Drop files or folders here</span>
+      <span className="drop-sub">or choose an option below</span>
     </div>
   );
 }

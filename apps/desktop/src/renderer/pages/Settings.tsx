@@ -1,8 +1,8 @@
-import { useState } from 'react';
+import { useState, type ReactNode } from 'react';
 import type { AppState, Settings as S } from '../../shared/api.ts';
 import type { Run } from '../App.tsx';
 import { QrShareSwitch } from './QrShare.tsx';
-import { setThemeChoice, themeChoice, type ThemeChoice } from '../theme.ts';
+import { PALETTES, palette, setPalette, setThemeChoice, themeChoice, type Palette, type ThemeChoice } from '../theme.ts';
 
 const DEFAULT_BINDING = '<Primary><Alt>c';
 /** Windows: MeshDrop holds the shortcut itself (GNOME keeps it in its settings on Linux). */
@@ -11,6 +11,8 @@ const THEMES: [ThemeChoice, string][] = [
   ['system', 'System'],
   ['light', 'Light'],
   ['dark', 'Dark'],
+  ['midnight', 'Midnight'],
+  ['black', 'Black'],
 ];
 
 /** Appearance: kept on this device, applied at once. */
@@ -32,6 +34,44 @@ function Theme() {
             }}
           >
             {label}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+const PALETTE_NAME: Record<Palette, string> = {
+  aurora: 'Aurora',
+  ocean: 'Ocean',
+  sunset: 'Sunset',
+  forest: 'Forest',
+  candy: 'Candy',
+  neon: 'Neon',
+  graphite: 'Graphite',
+};
+
+/** Colours: one swatch per palette, kept on this device, applied at once. */
+function Colours() {
+  const [choice, setChoice] = useState(palette);
+  return (
+    <div className="field">
+      <span>Colours</span>
+      <div className="swatches" role="radiogroup" aria-label="Colours">
+        {PALETTES.map((p) => (
+          <button
+            key={p}
+            role="radio"
+            aria-checked={choice === p}
+            className={`swatch${choice === p ? ' active' : ''}`}
+            data-palette={p}
+            onClick={() => {
+              setPalette(p);
+              setChoice(p);
+            }}
+          >
+            <span className="swatch-chip" aria-hidden="true" />
+            {PALETTE_NAME[p]}
           </button>
         ))}
       </div>
@@ -197,7 +237,7 @@ function Hotspot({ state, run }: { state: AppState; run: Run }) {
 }
 
 /** About: who made MeshDrop and where to find them. */
-function About() {
+export function About() {
   const link = (href: string, text = href) => (
     <a href={href} target="_blank" rel="noreferrer">{text}</a>
   );
@@ -218,6 +258,36 @@ function About() {
   );
 }
 
+/** Icon paths for the setting cards (24×24, stroked). */
+const I = {
+  device: 'M7 3h10a1 1 0 0 1 1 1v16a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1zM11 18h2',
+  paint: 'M12 3a9 9 0 1 0 0 18c1 0 1.5-.8 1.5-1.6 0-1-.8-1.4-.8-2.3 0-1 .8-1.6 1.8-1.6H17a4 4 0 0 0 4-4c0-4.7-4-8.5-9-8.5zM7.5 11h.01M10 7h.01M15 7.5h.01',
+  inbox: 'M12 4v10M8 10l4 4 4-4M4 15v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3',
+  wifi: 'M2 9a15 15 0 0 1 20 0M5 12.5a10 10 0 0 1 14 0M8.5 16a5 5 0 0 1 7 0M12 19.5h.01',
+  bell: 'M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9M10.3 21a1.94 1.94 0 0 0 3.4 0',
+  power: 'M12 3v9M6.4 6.4a8 8 0 1 0 11.2 0',
+  bt: 'M7 7l10 10-5 4V3l5 4L7 17',
+  keys: 'M3 7h18v10H3zM7 11h.01M11 11h.01M15 11h.01M8 14h8',
+  gear: 'M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z',
+};
+
+/** A group of settings: a glass card with an icon header. */
+function Card({ title, icon, wide, children }: { title: string; icon: string; wide?: boolean; children: ReactNode }) {
+  return (
+    <div className={`set-card${wide ? ' wide' : ''}`}>
+      <h2 className="set-head">
+        <span className="set-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d={icon} />
+          </svg>
+        </span>
+        {title}
+      </h2>
+      {children}
+    </div>
+  );
+}
+
 export function Settings({ state, run }: { state: AppState; run: Run }) {
   const android = state.platform === 'android';
   const [draft, setDraft] = useState<S>(state.settings);
@@ -232,115 +302,146 @@ export function Settings({ state, run }: { state: AppState; run: Run }) {
     if (r) setDraft(r);
   };
 
+  const toggles = (keys: (keyof S)[], all: [keyof S, string][] = SWITCHES) =>
+    all
+      .filter(([k]) => keys.includes(k) && !(android && DESKTOP_ONLY.includes(k)))
+      .map(([k, label]) => (
+        <label key={k} className="toggle">
+          <input type="checkbox" checked={draft[k] as boolean} disabled={k === 'allBluetooth' && !draft.bluetooth} onChange={(e) => set(k, e.target.checked as never)} /> {label}
+        </label>
+      ));
+
   return (
     <section className="settings">
-      <label className="field">
-        <span>Device name</span>
-        <input aria-label="Device name" value={draft.alias} maxLength={64} onChange={(e) => set('alias', e.target.value)} />
-      </label>
-      <Theme />
-      {android ? (
-        <p className="field">
-          <span>Received files are saved in</span> <code>Download/MeshDrop</code>
-        </p>
-      ) : (
-      <label className="field">
-        <span>Save received files in</span>
-        <span className="row">
-          <input aria-label="Inbox folder" className="grow" value={draft.inbox} onChange={(e) => set('inbox', e.target.value)} />
-          <button
-            onClick={() =>
-              void run(async () => {
-                const p = await window.meshdrop.pickFolder();
-                if (p) set('inbox', p);
-              })
-            }
-          >
-            Choose…
-          </button>
-        </span>
-      </label>
-      )}
-      <label className="field">
-        <span>Port</span>
-        <input aria-label="Port" type="number" min={0} max={65535} value={draft.port} onChange={(e) => set('port', Number(e.target.value))} />
-      </label>
-      <label className="field">
-        <span>A guest link works for</span>
-        <select aria-label="Guest link length" value={draft.guestMinutes} onChange={(e) => set('guestMinutes', Number(e.target.value))}>
-          {[...new Set([15, 30, 60, 120, 240, 480, 1440, draft.guestMinutes])].sort((a, b) => a - b).map((m) => (
-            <option key={m} value={m}>
-              {m < 60 ? `${m} minutes` : m === 60 ? '1 hour' : `${m / 60} hours`}
-            </option>
-          ))}
-        </select>
-      </label>
-      {!android && (
-        <label className="row">
-          Delete received files after{' '}
-          <select aria-label="Clean-up" value={draft.cleanupDays} onChange={(e) => set('cleanupDays', Number(e.target.value))}>
-            {[...new Set([0, 7, 30, 90, 365, draft.cleanupDays])].sort((a, b) => a - b).map((d) => (
-              <option key={d} value={d}>
-                {d === 0 ? 'never' : `${d} days`}
+      <div className="set-grid">
+      <Card title="This device" icon={I.device}>
+        <label className="field">
+          <span>Device name</span>
+          <input aria-label="Device name" value={draft.alias} maxLength={64} onChange={(e) => set('alias', e.target.value)} />
+        </label>
+        <label className="field">
+          <span>Port</span>
+          <input aria-label="Port" type="number" min={0} max={65535} value={draft.port} onChange={(e) => set('port', Number(e.target.value))} />
+        </label>
+      </Card>
+      <Card title="Appearance" icon={I.paint}>
+        <Theme />
+        <Colours />
+      </Card>
+      <Card title="Receiving" icon={I.inbox}>
+        {android ? (
+          <p className="field">
+            <span>Received files are saved in</span> <code>Download/MeshDrop</code>
+          </p>
+        ) : (
+          <label className="field">
+            <span>Save received files in</span>
+            <span className="row">
+              <input aria-label="Inbox folder" className="grow" value={draft.inbox} onChange={(e) => set('inbox', e.target.value)} />
+              <button
+                onClick={() =>
+                  void run(async () => {
+                    const p = await window.meshdrop.pickFolder();
+                    if (p) set('inbox', p);
+                  })
+                }
+              >
+                Choose…
+              </button>
+            </span>
+          </label>
+        )}
+        {!android && (
+          <label className="row">
+            Delete received files after{' '}
+            <select aria-label="Clean-up" value={draft.cleanupDays} onChange={(e) => set('cleanupDays', Number(e.target.value))}>
+              {[...new Set([0, 7, 30, 90, 365, draft.cleanupDays])].sort((a, b) => a - b).map((d) => (
+                <option key={d} value={d}>
+                  {d === 0 ? 'never' : `${d} days`}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
+        {toggles(['sortInbox', 'sendReceipts', 'printFromDevices'])}
+      </Card>
+      <Card title="Network and sharing" icon={I.wifi}>
+        {toggles(['discovery'])}
+        <label className="field">
+          <span>A guest link works for</span>
+          <select aria-label="Guest link length" value={draft.guestMinutes} onChange={(e) => set('guestMinutes', Number(e.target.value))}>
+            {[...new Set([15, 30, 60, 120, 240, 480, 1440, draft.guestMinutes])].sort((a, b) => a - b).map((m) => (
+              <option key={m} value={m}>
+                {m < 60 ? `${m} minutes` : m === 60 ? '1 hour' : `${m / 60} hours`}
               </option>
             ))}
           </select>
         </label>
+      </Card>
+      <Card title="Clipboard and notifications" icon={I.bell}>
+        {toggles(['clipboardReceive', 'clipboardSync', 'notifications'])}
+      </Card>
+      {!android && (
+        <Card title="Start-up" icon={I.power}>
+          {toggles(['autostart', 'startHidden', 'closeToTray'])}
+        </Card>
       )}
-      {SWITCHES.filter(([k]) => !(android && DESKTOP_ONLY.includes(k))).map(([k, label]) => (
-        <label key={k} className="toggle">
-          <input type="checkbox" checked={draft[k] as boolean} onChange={(e) => set(k, e.target.checked as never)} /> {label}
+      <Card title="No Wi-Fi" icon={I.bt} wide>
+        {toggles(['bluetooth', 'allBluetooth', 'tetherNoData'], NO_WIFI)}
+        <label className="row">
+          Sound over Bluetooth{' '}
+          <select aria-label="Sound over Bluetooth" value={draft.btSoundKbps} onChange={(e) => set('btSoundKbps', Number(e.target.value))}>
+            {[8, 12, 16, 24, 32].map((k) => (
+              <option key={k} value={k}>
+                {k === 8 ? '8 kbit/s (fewest breaks)' : k === 32 ? '32 kbit/s (best sound)' : `${k} kbit/s`}
+              </option>
+            ))}
+          </select>
         </label>
-      ))}
-      <h2>No Wi-Fi</h2>
-      {NO_WIFI.filter(([k]) => !(android && DESKTOP_ONLY.includes(k))).map(([k, label]) => (
-        <label key={k} className="toggle">
-          <input type="checkbox" checked={draft[k] as boolean} disabled={k === 'allBluetooth' && !draft.bluetooth} onChange={(e) => set(k, e.target.checked as never)} /> {label}
-        </label>
-      ))}
-      <label className="row">
-        Sound over Bluetooth{' '}
-        <select aria-label="Sound over Bluetooth" value={draft.btSoundKbps} onChange={(e) => set('btSoundKbps', Number(e.target.value))}>
-          {[8, 12, 16, 24, 32].map((k) => (
-            <option key={k} value={k}>
-              {k === 8 ? '8 kbit/s (fewest breaks)' : k === 32 ? '32 kbit/s (best sound)' : `${k} kbit/s`}
-            </option>
-          ))}
-        </select>
-      </label>
-      <Hotspot state={state} run={run} />
-      <NoWifiHelp android={android} />
-      <div className="row">
-        <button className="primary" disabled={!dirty} onClick={() => void save()}>
-          Save
-        </button>
+        <Hotspot state={state} run={run} />
+        <NoWifiHelp android={android} />
+      </Card>
+      </div>
+      <div className={`save-bar${dirty ? ' dirty' : ''}`}>
+        <span className="muted">{dirty ? 'You have unsaved changes' : 'All changes saved'}</span>
         <button disabled={!dirty} onClick={() => setDraft(state.settings)}>
           Undo changes
         </button>
+        <button className="primary" disabled={!dirty} onClick={() => void save()}>
+          Save
+        </button>
       </div>
 
-      <QrShareSwitch run={run} />
+      <div className="set-grid">
+      <div className="set-card">
+        <QrShareSwitch run={run} />
+      </div>
 
       {android ? (
-        <KeepAlive state={state} run={run} />
+        <div className="set-card">
+          <KeepAlive state={state} run={run} />
+        </div>
       ) : (
         <>
-      <h2>Keyboard shortcut</h2>
-      <p className="muted">{WINDOWS ? 'A shortcut that opens a small window to send what is on your clipboard (while MeshDrop runs, also in the tray).' : 'Adds a GNOME shortcut that opens a small window to send what is on your clipboard.'}</p>
-      <div className="row">
-        <input aria-label="Shortcut" value={binding} onChange={(e) => setBinding(e.target.value)} />
-        <button onClick={() => setConfirm(true)}>Set up keyboard shortcut</button>
-      </div>
-
-      <h2>Advanced</h2>
-      <div className="row">
-        <button onClick={() => void run(() => window.meshdrop.openConfigFolder())}>Open config folder</button>
-      </div>
-
+          <Card title="Keyboard shortcut" icon={I.keys}>
+            <p className="muted">{WINDOWS ? 'A shortcut that opens a small window to send what is on your clipboard (while MeshDrop runs, also in the tray).' : 'Adds a GNOME shortcut that opens a small window to send what is on your clipboard.'}</p>
+            <div className="row">
+              <input aria-label="Shortcut" value={binding} onChange={(e) => setBinding(e.target.value)} />
+              <button onClick={() => setConfirm(true)}>Set up keyboard shortcut</button>
+            </div>
+          </Card>
+          <Card title="Advanced" icon={I.gear}>
+            <div className="row">
+              <button onClick={() => void run(() => window.meshdrop.openConfigFolder())}>Open config folder</button>
+            </div>
+          </Card>
         </>
       )}
 
-      <About />
+      <div className="set-card set-about">
+        <About />
+      </div>
+      </div>
 
       {confirm && (
         <div className="modal-backdrop">

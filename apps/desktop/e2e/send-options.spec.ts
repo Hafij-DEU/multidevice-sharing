@@ -10,7 +10,7 @@ test('Send page has voice notes and the burn / print / send later options', asyn
   try {
     const win = await app.firstWindow();
     await openSend(win);
-    await expect(win.getByRole('button', { name: /Voice note/ })).toBeVisible();
+    await expect(win.getByRole('button', { name: /Voice note/i })).toBeVisible();
     await win.getByRole('button', { name: /Options/ }).click();
     await expect(win.getByText('Burn after reading')).toBeVisible();
     await expect(win.getByText('Print on the PC')).toBeVisible();

@@ -109,6 +109,8 @@ function inboxCategory(name: string): string {
   return of.find(([, exts]) => exts.includes(ext))?.[0] ?? 'Other';
 }
 const STATUS_POLL_MS = 60_000;
+/** How often to look for phones not asked for their status within STATUS_POLL_MS (a phone that just came online). */
+const STATUS_CHECK_MS = 10_000;
 const RING_MAX_MS = 60_000;
 
 /** Turns the Remote page's events into input primitives (unknown keys are skipped). */
@@ -298,6 +300,8 @@ export class AppController extends EventEmitter {
   #links: LinkView[] = [];
   #phoneNotes: PhoneNote[] = [];
   #deviceStatus: Record<string, DeviceStatus> = {};
+  /** When each phone was last asked for its status, by device id. */
+  #statusAsked = new Map<string, number>();
   #ringing: NodeJS.Timeout | null = null;
   #inputError: string | undefined;
   #statusTimer: NodeJS.Timeout | null = null;
@@ -394,7 +398,7 @@ export class AppController extends EventEmitter {
     e.setAppHandler((peer, msg) => this.#onApp(peer, msg));
     e.setStreamHandler((s) => this.#onStream(s));
     if (!this.#statusTimer) {
-      this.#statusTimer = setInterval(() => void this.#pollStatus(), STATUS_POLL_MS);
+      this.#statusTimer = setInterval(() => void this.#pollStatus(), STATUS_CHECK_MS);
       this.#statusTimer.unref();
     }
     if (!this.#m11Timer) {
@@ -1590,7 +1594,14 @@ export class AppController extends EventEmitter {
     const e = this.#engine;
     if (!e || this.#stopped) return;
     for (const d of e.devices()) {
-      if (!d.trusted || d.reach === 'offline' || d.deviceType !== 'mobile') continue;
+      if (!d.trusted || d.reach === 'offline' || d.deviceType !== 'mobile') {
+        // asked again as soon as it is back
+        this.#statusAsked.delete(d.deviceId);
+        continue;
+      }
+      const now = Date.now();
+      if (now - (this.#statusAsked.get(d.deviceId) ?? 0) < STATUS_POLL_MS) continue;
+      this.#statusAsked.set(d.deviceId, now);
       await this.appSend(d.deviceId, { kind: 'status' }).catch(() => {});
     }
   }

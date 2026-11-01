@@ -2,12 +2,22 @@ import { useEffect, useRef, useState } from 'react';
 import type { AppState, SendItemInput } from '../../shared/api.ts';
 import { DeviceCard } from '../components/DeviceCard.tsx';
 import { DropZone } from '../components/DropZone.tsx';
+import { HubBanner } from '../components/HubBanner.tsx';
 import { ProgressRow } from '../components/ProgressRow.tsx';
 import { QrInvite, type Invite } from '../components/QrInvite.tsx';
 import { baseName } from '../format.ts';
 import type { Run } from '../App.tsx';
 
 const DEFAULT_PORT = 53318;
+
+function Icon({ d }: { d: string }) {
+  return (
+    <svg className="act-icon" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d={d} />
+    </svg>
+  );
+}
+const MIC = 'M12 3a3 3 0 0 1 3 3v6a3 3 0 0 1-6 0V6a3 3 0 0 1 3-3zM5 11a7 7 0 0 0 14 0M12 18v3';
 
 /** "host", "host:port", "[v6]:port" or a bare IPv6 address. */
 function parseAddress(s: string): { host: string; port: number } | null {
@@ -61,7 +71,12 @@ function VoiceNote({ run, onDone }: { run: Run; onDone: (path: string) => void }
       </button>
     );
   }
-  return <button onClick={start}>🎙 Voice note</button>;
+  return (
+    <button className="act" onClick={start}>
+      <Icon d={MIC} />
+      <span>Voice Note</span>
+    </button>
+  );
 }
 
 /**
@@ -118,7 +133,11 @@ function OneQr({ state, run }: { state: AppState; run: Run }) {
   );
 }
 
-export function Devices({ state, run }: { state: AppState; run: Run }) {
+/**
+ * The Send page. `compact` is the "Send to Devices" card on the PC's Home: devices, items and the
+ * Send button only (no shared-in items, scheduled list, history or Add a device).
+ */
+export function Devices({ state, run, compact }: { state: AppState; run: Run; compact?: boolean }) {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [all, setAll] = useState(false);
   const [items, setItems] = useState<SendItemInput[]>([]);
@@ -144,7 +163,7 @@ export function Devices({ state, run }: { state: AppState; run: Run }) {
   const android = state.platform === 'android';
   const shared = state.sharedPending ?? 0;
   useEffect(() => {
-    if (shared > 0 && window.meshdrop.takeSharedItems) {
+    if (!compact && shared > 0 && window.meshdrop.takeSharedItems) {
       void run(async () => {
         const got = await window.meshdrop.takeSharedItems!();
         const files = got.filter((g) => g.kind !== 'text');
@@ -216,17 +235,22 @@ export function Devices({ state, run }: { state: AppState; run: Run }) {
     });
 
   return (
-    <section className="send">
-      <div className="row space">
-        <h2>Send to</h2>
+    <section className={compact ? 'send compact' : 'send'}>
+      {!compact && <HubBanner state={state} />}
+      <div className="send-card">
+      <div className="row space card-head">
+        <h2>
+          <Icon d="M4 12l16-8-6 16-2-7-8-1z" />
+          Send to<span className="wide-only">Devices</span>
+        </h2>
         {trusted.length > 1 && (
           <label className="toggle">
-            <input type="checkbox" checked={all} onChange={() => setAll(!all)} /> All
+            <input type="checkbox" checked={all} onChange={() => setAll(!all)} /> <span className="wide-only">Select </span>All
           </label>
         )}
       </div>
       {trusted.length === 0 ? (
-        <p className="muted">No devices yet. Add one below.</p>
+        <p className="muted">No devices yet. {compact ? 'Add one on the Send page.' : 'Add one below.'}</p>
       ) : (
         <div className="cards">
           {trusted.map((d) => (
@@ -236,19 +260,33 @@ export function Devices({ state, run }: { state: AppState; run: Run }) {
       )}
 
       {!android && <DropZone onItems={add} />}
-      <div className="row">
-        <button onClick={() => pick('file')}>Add files</button>
-        {window.meshdrop.chooseItems && <button onClick={() => void run(async () => add(await window.meshdrop.chooseItems!()))}>Choose by type</button>}
-        <button onClick={() => pick('dir')}>Add folder</button>
-        <button onClick={() => setText(text === null ? '' : null)} aria-pressed={text !== null}>
-          Text
+      <div className="actions">
+        <button className="act" onClick={() => pick('file')}>
+          <Icon d="M4 6a2 2 0 0 1 2-2h4l2 2h6a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2zM12 10v6M9 13h6" />
+          <span>Add Files</span>
         </button>
-        <button onClick={() => void run(() => window.meshdrop.sendClipboard(all ? 'all' : targets), 'Clipboard sent')} disabled={targets.length === 0}>
-          Clipboard
+        {window.meshdrop.chooseItems && (
+          <button className="act" onClick={() => void run(async () => add(await window.meshdrop.chooseItems!()))}>
+            <Icon d="M12 3l2.5 4.5L19 9l-3.5 3.5.8 5L12 15l-4.3 2.5.8-5L5 9l4.5-1.5z" />
+            <span>By Type</span>
+          </button>
+        )}
+        <button className="act" onClick={() => pick('dir')}>
+          <Icon d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2zM15 12h4M17 10v4" />
+          <span>Add Folder</span>
+        </button>
+        <button className="act" onClick={() => setText(text === null ? '' : null)} aria-pressed={text !== null}>
+          <Icon d="M5 5h14M12 5v14M9 19h6" />
+          <span>Text</span>
+        </button>
+        <button className="act" onClick={() => void run(() => window.meshdrop.sendClipboard(all ? 'all' : targets), 'Clipboard sent')} disabled={targets.length === 0}>
+          <Icon d="M9 4h6v3H9zM7 6H5v14h14V6h-2" />
+          <span>Clipboard</span>
         </button>
         <VoiceNote run={run} onDone={(path) => add([{ kind: 'file', path }])} />
         {window.meshdrop.scanDocument && (
           <button
+            className="act"
             onClick={() =>
               void run(async () => {
                 const it = await window.meshdrop.scanDocument!();
@@ -256,12 +294,13 @@ export function Devices({ state, run }: { state: AppState; run: Run }) {
               })
             }
           >
-            📄 Scan to PDF
+            <Icon d="M7 3h7l5 5v13H7zM14 3v5h5M10 13h6M10 17h6" />
+            <span>Scan to PDF</span>
           </button>
         )}
       </div>
-      <button className="link" aria-expanded={showOpts} onClick={() => setShowOpts(!showOpts)}>
-        {showOpts ? '▾' : '▸'} Options{burn || print || later ? ' (on)' : ''}
+      <button className="link options-toggle" aria-expanded={showOpts} onClick={() => setShowOpts(!showOpts)}>
+        <span className="chev" aria-hidden="true">›</span> Options{burn || print || later ? ' (on)' : ''}
       </button>
       {showOpts && (
         <div className="send-options">
@@ -305,8 +344,9 @@ export function Devices({ state, run }: { state: AppState; run: Run }) {
           ))}
         </ul>
       )}
-      <button className="primary big" disabled={!canSend} onClick={() => void send()}>
-        Send
+      <button className="primary big send-btn" disabled={!canSend} onClick={() => void send()}>
+        <Icon d="M4 12l16-8-6 16-2-7-8-1zM12 13l8-9" />
+        <span>Send</span>
       </button>
       {text !== null && /^https?:\/\/\S+$/i.test(text.trim()) && targets.length > 0 && (
         <button
@@ -324,6 +364,9 @@ export function Devices({ state, run }: { state: AppState; run: Run }) {
         </button>
       )}
       {targets.length === 0 && trusted.length > 0 && <p className="muted hint">Pick a device above. An offline one gets it when it is back.</p>}
+      </div>
+      {!compact && (
+      <>
 
       {(state.scheduled ?? []).length > 0 && (
         <>
@@ -393,6 +436,8 @@ export function Devices({ state, run }: { state: AppState; run: Run }) {
           </button>
         </div>
       </details>
+      </>
+      )}
       {pairing && (
         <div className="modal-backdrop">
           <div role="dialog" aria-modal="true" aria-labelledby="pair-title" className="modal">

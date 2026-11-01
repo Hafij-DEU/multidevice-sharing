@@ -1,5 +1,6 @@
 import type { CSSProperties } from 'react';
 import type { DeviceStatus, DeviceView } from '../../shared/api.ts';
+import { Battery } from './HubBanner.tsx';
 import { Peer } from './Peer.tsx';
 
 const REACH: Record<DeviceView['reach'], string> = { lan: 'On this network', bt: 'Over Bluetooth', hub: 'Via hub', offline: 'Offline' };
@@ -27,7 +28,12 @@ export function DeviceCard({ d, checked, disabled, onToggle, onPair, status }: {
         <span className="device-sub" title={`${d.transport ?? ROLE[d.role]} · ${d.deviceId.slice(0, 8)}`}>
           <span className={`dot reach-${d.reach}`} aria-hidden="true" />
           {REACH[d.reach]} · {d.transport ?? ROLE[d.role]}
-          {status?.battery && d.reach !== 'offline' && ` · 🔋 ${status.battery.level}%${status.battery.charging ? '⚡' : ''}`}
+          {status?.battery && d.reach !== 'offline' && (
+            <>
+              {' · '}
+              <Battery level={status.battery.level} charging={status.battery.charging} />
+            </>
+          )}
         </span>
       </span>
       {onPair && (

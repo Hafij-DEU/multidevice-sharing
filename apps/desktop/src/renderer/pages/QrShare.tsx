@@ -4,7 +4,7 @@ import type { Run } from '../App.tsx';
 import { fmtBytes } from '../format.ts';
 
 /** Polls the Share to Xiaomi add-on while the page is open. */
-export function useQrShare(): [QrShareStatus | null, (s: QrShareStatus) => void] {
+function useQrShare(): [QrShareStatus | null, (s: QrShareStatus) => void] {
   const [st, setSt] = useState<QrShareStatus | null>(null);
   useEffect(() => {
     const api = window.meshdrop;
