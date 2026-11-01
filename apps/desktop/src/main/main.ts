@@ -1,7 +1,7 @@
 // Electron entry: the main window, the clipboard picker and the tray over one app controller.
 // Security: isolated, sandboxed renderers that can only call the DesktopApi (every argument
 // type-checked here); no navigation, no new windows.
-import { app, BrowserWindow, clipboard, dialog, globalShortcut, ipcMain, Menu, nativeImage, Notification, shell, Tray, type IpcMainInvokeEvent } from 'electron';
+import { app, BrowserWindow, clipboard, dialog, globalShortcut, ipcMain, Menu, nativeImage, Notification, safeStorage, shell, Tray, type IpcMainInvokeEvent } from 'electron';
 import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { cpSync, existsSync, mkdirSync, statSync, writeFileSync } from 'node:fs';
@@ -459,6 +459,11 @@ function wireIpc(): void {
   handle('hotspotJoin', (_e, ssid, psk, hosts, leave) =>
     ctl().hotspotJoin(str(ssid, 64), str(psk, 64), Array.isArray(hosts) ? hosts.slice(0, 4).map((h) => str(h, 64)) : [], leave === true));
   handle('hotspotStop', () => ctl().hotspotStop());
+  handle('wifiList', () => ctl().wifiList());
+  handle('wifiCopy', (_e, id) => ctl().wifiCopy(str(id, 128)));
+  handle('wifiQr', (_e, id) => ctl().wifiQr(str(id, 128)));
+  handle('wifiShare', (_e, id) => ctl().wifiShare(str(id, 128)));
+  handle('wifiSyncNow', () => ctl().wifiSyncNow());
   handle('noteDismiss', (_e, k) => ctl().noteDismiss(k === undefined ? undefined : str(k, 300)));
   handle('addByAddress', (_e, h, p, a, id) => ctl().addByAddress(str(h, 255), int(p), str(a, 64), id === undefined ? undefined : str(id, 128)));
   handle('scanSubnet', (_e) => ctl().scanSubnet());
@@ -525,6 +530,29 @@ function wireIpc(): void {
   handle('openConfigFolder', (_e) => ctl().openConfigFolder());
 }
 
+/**
+ * The at-rest seal for the Wi-Fi saved-networks store, backed by the OS keyring through Electron's
+ * safeStorage. A tag ("MDS1") prefixes the ciphertext so `open` can tell a sealed file from a plaintext
+ * one and stay compatible either way. Returns undefined when no keyring is available (an unlocked login
+ * keyring on Linux, the Keychain on macOS, DPAPI on Windows); the store then falls back to plaintext at
+ * mode 0600 — the same at-rest posture as this device's own private key and trust store.
+ */
+function buildWifiSeal(): { seal(plaintext: string): Buffer; open(data: Buffer): string } | undefined {
+  try {
+    if (!safeStorage.isEncryptionAvailable()) return undefined;
+  } catch {
+    return undefined;
+  }
+  const TAG = Buffer.from('MDS1');
+  return {
+    seal: (plaintext: string) => Buffer.concat([TAG, safeStorage.encryptString(plaintext)]),
+    open: (data: Buffer) =>
+      data.length >= TAG.length && data.subarray(0, TAG.length).equals(TAG)
+        ? safeStorage.decryptString(data.subarray(TAG.length))
+        : data.toString('utf8'),
+  };
+}
+
 async function startController(): Promise<void> {
   const history = new HistoryStore(join(HOME, 'desktop-history.json'));
   // MESHDROP_GUEST_PORT moves the LAN guest server off 53320 (e2e uses 0: any free port).
@@ -537,7 +565,8 @@ async function startController(): Promise<void> {
   const bt = WIN || TEST ? undefined : bluezPlatform({ script: app.isPackaged ? join(process.resourcesPath, 'meshdrop-bt.py') : join(__dirname, '../../build/meshdrop-bt.py') });
   // M14: hotspots and the tether guard through NetworkManager (Linux desktops)
   const net = process.platform === 'linux' && !TEST ? (onChange: () => void) => new NetMan(nmRun, onChange) : undefined;
-  controller = new AppController({ home: HOME, settings: settings!, history, platform, engineOptions, ...(bt ? { bt } : {}), ...(net ? { net } : {}) });
+  const wifiSeal = buildWifiSeal();
+  controller = new AppController({ home: HOME, settings: settings!, history, platform, engineOptions, ...(bt ? { bt } : {}), ...(net ? { net } : {}), ...(wifiSeal ? { wifiSeal } : {}) });
   if (TEST) {
     // Test-only hooks, reachable from Playwright's app.evaluate (main process), never from the page.
     (globalThis as { __meshdropTest?: unknown }).__meshdropTest = {

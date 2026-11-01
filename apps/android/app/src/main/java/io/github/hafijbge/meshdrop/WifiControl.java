@@ -3,7 +3,11 @@ package io.github.hafijbge.meshdrop;
 import android.Manifest;
 import android.annotation.SuppressLint;
 import android.app.Activity;
+import android.content.ClipData;
+import android.content.ClipDescription;
+import android.content.ClipboardManager;
 import android.content.Context;
+import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.net.MacAddress;
 import android.net.wifi.ScanResult;
@@ -12,6 +16,8 @@ import android.net.wifi.WifiManager;
 import android.net.wifi.WifiEnterpriseConfig;
 import android.net.wifi.WifiNetworkSuggestion;
 import android.os.Build;
+import android.os.PersistableBundle;
+import android.provider.Settings;
 import android.util.Xml;
 
 import io.github.hafijbge.meshdrop.engine.app.AppController;
@@ -113,20 +119,180 @@ final class WifiControl {
             p.createdAt = now;
             all.add(p);
         }
+        // The simple Add form always sends WPA2; upgrade to WPA3 when the live scan shows this SSID is
+        // SAE-only, so a WPA2 passphrase would never connect.
+        if ("wpa2".equals(security) && detectWpa3(ssid)) security = "wpa3";
+
         p.ssid = ssid;
         p.security = security;
         p.psk = (open || enterprise) ? "" : psk;
-        p.lockBssid = normBssid(str(args.get("lockBssid")));
-        p.band = str(args.get("band"));
-        p.fallback = Boolean.TRUE.equals(args.get("fallback"));
-        p.hidden = Boolean.TRUE.equals(args.get("hidden"));
+        // Only overwrite the band-lock fields when the caller actually sent them. The simple name+password
+        // form and the enterprise editor leave these out, so editing a network keeps the lock the separate
+        // band-lock section set (and vice versa).
+        if (args.containsKey("lockBssid")) p.lockBssid = normBssid(str(args.get("lockBssid")));
+        if (args.containsKey("band")) p.band = str(args.get("band"));
+        if (args.containsKey("fallback")) p.fallback = Boolean.TRUE.equals(args.get("fallback"));
+        if (args.containsKey("hidden")) p.hidden = Boolean.TRUE.equals(args.get("hidden"));
         if (args.get("priority") instanceof Number) p.priority = ((Number) args.get("priority")).intValue();
         if (enterprise) applyEnterprise(p, args, eap);
         p.updatedAt = now;
         p.deletedAt = 0; // saving revives a network even if an old tombstone shared its id
         store.save(all);
+        reapply();     // only a band-locked network is registered to connect; a normal one is joined manually
         pushToPeers(); // M5: keep the user's other devices in step
         return p.toView();
+    }
+
+    /**
+     * Sets or clears the band lock on one saved network without touching its password, security or
+     * enterprise settings. A null bssid unpins it (back to any access point). This is the separate
+     * band-lock section's only write path, so it never triggers password validation.
+     */
+    synchronized Map<String, Object> lock(String id, String bssid, String band, boolean fallback)
+            throws IOException {
+        List<WifiProfile> all = store.load();
+        WifiProfile p = require(all, id);
+        p.lockBssid = normBssid(bssid);
+        p.band = band;
+        p.fallback = fallback && p.lockBssid != null; // a fallback only means anything alongside a pin
+        p.updatedAt = System.currentTimeMillis();
+        store.save(all);
+        reapply();
+        pushToPeers();
+        return p.toView();
+    }
+
+    /** The live (non-deleted) saved profile with this id, or throws if it is no longer stored. */
+    private static WifiProfile require(List<WifiProfile> all, String id) {
+        for (WifiProfile e : all) {
+            if (e.id != null && e.id.equals(id) && !e.deleted()) return e;
+        }
+        throw new IllegalArgumentException("That network is no longer saved.");
+    }
+
+    /**
+     * Copies one saved network's passphrase to the Android clipboard so the user can paste it into
+     * Android's own Wi-Fi dialog. The passphrase is read here and placed straight on the clipboard; it
+     * never passes through the UI as a field. The clip is flagged sensitive so Android keeps it out of
+     * clipboard previews and clears it promptly.
+     */
+    synchronized void copyPassword(String id) throws IOException {
+        List<WifiProfile> all = store.load();
+        WifiProfile p = require(all, id);
+        if (p.isEnterprise()) {
+            throw new IllegalArgumentException("An eduroam / 802.1X login has no single password to copy.");
+        }
+        if (p.psk == null || p.psk.isEmpty()) {
+            throw new IllegalArgumentException("This is an open network, so it has no password.");
+        }
+        final String psk = p.psk;
+        final String ssid = p.ssid;
+        activity.runOnUiThread(() -> {
+            ClipboardManager cm = (ClipboardManager) activity.getSystemService(Context.CLIPBOARD_SERVICE);
+            if (cm == null) return;
+            ClipData clip = ClipData.newPlainText(ssid + " Wi-Fi password", psk);
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                PersistableBundle extras = new PersistableBundle();
+                extras.putBoolean(ClipDescription.EXTRA_IS_SENSITIVE, true);
+                clip.getDescription().setExtras(extras);
+            }
+            cm.setPrimaryClip(clip);
+        });
+    }
+
+    /**
+     * Hands one saved network to Android's own "Save network" dialog (Settings.ACTION_WIFI_ADD_NETWORKS).
+     * On the user's confirm it becomes a real system-saved network: it then shows in Android's Wi-Fi
+     * settings and gets Android's own Share / QR, and the system connects to it. Android shows its own
+     * confirmation dialog, so nothing is saved without the user tapping Save. Needs Android 11 (API 30).
+     */
+    synchronized void addToSystem(String id) throws IOException {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
+            throw new IllegalStateException("Adding to Android's own saved networks needs Android 11 or newer.");
+        }
+        List<WifiProfile> all = store.load();
+        WifiProfile p = require(all, id);
+        if (p.isEnterprise()) {
+            throw new IllegalArgumentException("Android cannot take an eduroam / 802.1X network through this dialog.");
+        }
+        WifiNetworkSuggestion s = build(p, null, p.priority);
+        if (s == null) throw new IllegalArgumentException("This network could not be built for Android.");
+        ArrayList<WifiNetworkSuggestion> list = new ArrayList<>();
+        list.add(s);
+        Intent intent = new Intent(Settings.ACTION_WIFI_ADD_NETWORKS);
+        intent.putParcelableArrayListExtra(Settings.EXTRA_WIFI_NETWORK_LIST, list);
+        activity.runOnUiThread(() -> activity.startActivity(intent));
+    }
+
+    /**
+     * Opens Android's share sheet (ACTION_SEND) with one saved network's details, so the user can send
+     * them to any app — a message, email or notes. The passphrase is read here and placed only into the
+     * shared text and the scannable WIFI: payload; MeshDrop sends nothing itself, the user picks the
+     * target app in Android's own chooser.
+     */
+    synchronized void share(String id) throws IOException {
+        List<WifiProfile> all = store.load();
+        WifiProfile p = require(all, id);
+        if (p.isEnterprise()) {
+            throw new IllegalArgumentException("An eduroam / 802.1X login cannot be shared this way.");
+        }
+        boolean open = "open".equals(p.security) || p.psk == null || p.psk.isEmpty();
+        StringBuilder text = new StringBuilder("Wi-Fi network: ").append(p.ssid).append('\n');
+        text.append(open ? "No password (open network)\n" : "Password: " + p.psk + "\n");
+        text.append("Or scan this QR text: ").append(wifiUri(p));
+        Intent send = new Intent(Intent.ACTION_SEND);
+        send.setType("text/plain");
+        send.putExtra(Intent.EXTRA_SUBJECT, p.ssid + " Wi-Fi");
+        send.putExtra(Intent.EXTRA_TEXT, text.toString());
+        Intent chooser = Intent.createChooser(send, "Share Wi-Fi");
+        activity.runOnUiThread(() -> activity.startActivity(chooser));
+    }
+
+    /**
+     * The Wi-Fi QR code for one saved network, as an SVG the UI shows so another phone's camera can
+     * join. The passphrase is read here and goes only into the QR payload; it never reaches the UI as a
+     * field. The same standard WIFI: payload that Android's own "Share network" QR uses.
+     */
+    synchronized String qr(String id) throws IOException {
+        List<WifiProfile> all = store.load();
+        WifiProfile p = require(all, id);
+        if (p.isEnterprise()) {
+            throw new IllegalArgumentException("A QR code cannot carry an eduroam / 802.1X login.");
+        }
+        return io.github.hafijbge.meshdrop.engine.guest.GuestPage.qrSvg(wifiUri(p));
+    }
+
+    /** A Wi-Fi QR payload (WIFI:...;;): open networks carry no password; hidden networks set H:true. */
+    private static String wifiUri(WifiProfile p) {
+        boolean open = "open".equals(p.security) || p.psk == null || p.psk.isEmpty();
+        StringBuilder b = new StringBuilder("WIFI:T:").append(open ? "nopass" : "WPA");
+        b.append(";S:").append(qrEscape(p.ssid));
+        if (!open) b.append(";P:").append(qrEscape(p.psk));
+        if (p.hidden) b.append(";H:true");
+        return b.append(";;").toString();
+    }
+
+    /** Escapes the characters a Wi-Fi QR reserves: backslash, semicolon, comma, colon and double quote. */
+    private static String qrEscape(String s) {
+        return s == null ? "" : s.replaceAll("([\\\\;,:\"])", "\\\\$1");
+    }
+
+    /** True when the live scan shows this SSID advertising WPA3 (SAE) only, so a WPA2 passphrase would fail. */
+    @SuppressLint("MissingPermission") // best-effort read; returns false when the scan is not permitted
+    @SuppressWarnings("deprecation") // ScanResult.SSID is still the only app-visible name on these APIs
+    private boolean detectWpa3(String ssid) {
+        if (wifi == null || ssid == null || ssid.isEmpty()) return false;
+        try {
+            for (ScanResult r : wifi.getScanResults()) {
+                if (!ssid.equals(r.SSID)) continue;
+                boolean sae = r.capabilities != null && r.capabilities.contains("SAE");
+                boolean psk = r.capabilities != null && r.capabilities.contains("PSK");
+                if (sae && !psk) return true; // SAE-only transitional-disabled AP: WPA3 required
+            }
+        } catch (RuntimeException ignored) {
+            // Scan not permitted or Wi-Fi off: fall back to WPA2.
+        }
+        return false;
     }
 
     /** Fills a profile's 802.1X fields from the user's input, using an imported eap-config as defaults. */
@@ -174,7 +340,10 @@ final class WifiControl {
         }
         all.removeIf(p -> p.deleted() && now - p.deletedAt > TOMBSTONE_TTL_MS);
         store.save(all);
-        if (hit) pushToPeers();
+        if (hit) {
+            reapply();     // drop the forgotten network's suggestion right away
+            pushToPeers();
+        }
     }
 
     private WifiProfile byId(String id) {
@@ -259,6 +428,7 @@ final class WifiControl {
         if (changed > 0) {
             all.removeIf(p -> p.deleted() && now - p.deletedAt > TOMBSTONE_TTL_MS); // prune old tombstones
             store.save(all);
+            reapply(); // re-register only the band-locked networks after a sync; normal ones are joined manually
         }
         return changed;
     }
@@ -341,6 +511,15 @@ final class WifiControl {
 
     // ---- M2: apply ------------------------------------------------------------------------------
 
+    /** Re-registers suggestions for every saved network, swallowing errors (storage stays the source of truth). */
+    private void reapply() {
+        try {
+            apply(java.util.Collections.emptyList());
+        } catch (RuntimeException ignored) {
+            // Applying can fail transiently (Wi-Fi off, suggestion quota); the next change or sync retries.
+        }
+    }
+
     /** Registers suggestions for the given profile ids (or all, when empty), replacing MeshDrop's set. */
     Map<String, Object> apply(List<?> ids) {
         List<WifiProfile> all = store.load();
@@ -349,6 +528,7 @@ final class WifiControl {
         boolean canLock = Build.VERSION.SDK_INT >= Build.VERSION_CODES.R;
         for (WifiProfile p : all) {
             if (p.deleted()) continue; // a tombstoned network is not suggested
+            if (p.lockBssid == null) continue; // only a band-locked network is connected through the app; the rest are joined manually
             if (ids != null && !ids.isEmpty() && !ids.contains(p.id)) continue;
             WifiNetworkSuggestion primary = build(p, p.lockBssid, p.priority);
             if (primary == null) continue;

@@ -17,6 +17,7 @@ const api = {
       'pairProbe', 'addByAddress', 'appSend', 'ringStop', 'setupPhones', 'handoffSend', 'handoffExtension', 'watchCreate', 'watchResolve', 'watchOpen', 'watchEnd', 'watchPlayLocal', 'noteDismiss', 'streamStop', 'streamStart', 'hotspotStart', 'hotspotJoin', 'hotspotStop', 'scheduleCancel', 'saveBlob', 'roomStart', 'roomEnd', 'roomPost', 'roomSave', 'scanSubnet', 'hubInit', 'setHubUrls', 'relaysSet', 'createInvite', 'join', 'revoke', 'exportRecovery',
       'importRecovery', 'setSettings', 'openInbox', 'reveal', 'openFile', 'thumb', 'unpair', 'takeSharedItems', 'registerClipboardShortcut', 'openConfigFolder',
       'guestStart', 'guestEnd', 'guestShare', 'guestUnshare', 'guestAccept', 'guestReject', 'linkCreate', 'linkRevoke', 'reachDetect', 'reachSet', 'syncPut', 'syncRemove', 'syncNow', 'openSyncFolder',
+      'wifiList', 'wifiCopy', 'wifiQr', 'wifiShare', 'wifiSyncNow',
     ].map((m) => [m, call(m)]),
   ),
 };

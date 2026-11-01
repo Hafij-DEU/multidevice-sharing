@@ -199,6 +199,7 @@ input:focus, textarea:focus, select:focus { outline: 2px solid color-mix(in srgb
 .icon-Remote { background: linear-gradient(135deg, #f43f5e, #f97316); }
 .icon-Continue { background: linear-gradient(135deg, #0ea5e9, #8b5cf6); }
 .icon-Watch-party { background: linear-gradient(135deg, #ef4444, #db2777); }
+.icon-Wi-Fi { background: linear-gradient(135deg, #14b8a6, #3b82f6); }
 .add-device summary { color: var(--accent); list-style: none; display: inline-flex; align-items: center; gap: 6px; padding: 8px 14px; border-radius: 999px; background: color-mix(in srgb, var(--accent) 10%, var(--panel)); }
 .add-device summary::-webkit-details-marker { display: none; }
 .add-device summary::before { content: '+'; font-weight: 700; }
