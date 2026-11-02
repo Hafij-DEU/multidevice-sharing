@@ -38,6 +38,8 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
 
 import org.xmlpull.v1.XmlPullParser;
 import org.xmlpull.v1.XmlPullParserException;
@@ -53,7 +55,11 @@ import org.xmlpull.v1.XmlPullParserException;
  * Every passphrase comes from the user typing it into MeshDrop's own Wi-Fi tab.
  */
 final class WifiControl {
+    /** Request code for Android's Save-network popup (Pickers uses 41–45). */
+    static final int ADD_NETWORK = 46;
     private final Activity activity;
+    /** The open Save-network popup's result: the first per-network code, or -1 when the user cancelled. */
+    private volatile CompletableFuture<Integer> adding;
     private final WifiManager wifi;
     private final WifiStore store;
     private final AppController controller;
@@ -139,7 +145,7 @@ final class WifiControl {
         p.updatedAt = now;
         p.deletedAt = 0; // saving revives a network even if an old tombstone shared its id
         store.save(all);
-        reapply();     // only a band-locked network is registered to connect; a normal one is joined manually
+        reapply();     // only a "through MeshDrop" network is suggested; a "direct" one Android owns
         pushToPeers(); // M5: keep the user's other devices in step
         return p.toView();
     }
@@ -156,6 +162,7 @@ final class WifiControl {
         p.lockBssid = normBssid(bssid);
         p.band = band;
         p.fallback = fallback && p.lockBssid != null; // a fallback only means anything alongside a pin
+        if (p.lockBssid != null && "off".equals(p.connect)) p.connect = null; // a new pin connects through MeshDrop again
         p.updatedAt = System.currentTimeMillis();
         store.save(all);
         reapply();
@@ -202,27 +209,79 @@ final class WifiControl {
     }
 
     /**
-     * Hands one saved network to Android's own "Save network" dialog (Settings.ACTION_WIFI_ADD_NETWORKS).
-     * On the user's confirm it becomes a real system-saved network: it then shows in Android's Wi-Fi
-     * settings and gets Android's own Share / QR, and the system connects to it. Android shows its own
-     * confirmation dialog, so nothing is saved without the user tapping Save. Needs Android 11 (API 30).
+     * "Connect directly": hands one saved network to Android's own Save-network popup
+     * (Settings.ACTION_WIFI_ADD_NETWORKS). On the user's Save it becomes a real system-saved network,
+     * pinned to the band-locked access point when there is one: it shows in Android's Wi-Fi settings with
+     * Forget, Share and QR, and it stays after MeshDrop is removed. MeshDrop then drops its own suggestion
+     * for it. Android shows the popup, so nothing is saved without the user tapping Save. Needs Android 11.
+     *
+     * @return "saved", "exists" (Android already had this network, so its pin was not changed) or "cancelled"
      */
-    synchronized void addToSystem(String id) throws IOException {
+    String addToSystem(String id) throws Exception {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
             throw new IllegalStateException("Adding to Android's own saved networks needs Android 11 or newer.");
         }
-        List<WifiProfile> all = store.load();
-        WifiProfile p = require(all, id);
-        if (p.isEnterprise()) {
-            throw new IllegalArgumentException("Android cannot take an eduroam / 802.1X network through this dialog.");
+        WifiNetworkSuggestion s;
+        synchronized (this) {
+            WifiProfile p = require(store.load(), id);
+            if (p.isEnterprise()) {
+                throw new IllegalArgumentException("Android cannot take an eduroam / 802.1X network through this dialog.");
+            }
+            s = build(p, p.lockBssid, p.priority); // the system copy keeps the pin: setBssid carries into its config
         }
-        WifiNetworkSuggestion s = build(p, null, p.priority);
         if (s == null) throw new IllegalArgumentException("This network could not be built for Android.");
         ArrayList<WifiNetworkSuggestion> list = new ArrayList<>();
         list.add(s);
         Intent intent = new Intent(Settings.ACTION_WIFI_ADD_NETWORKS);
         intent.putParcelableArrayListExtra(Settings.EXTRA_WIFI_NETWORK_LIST, list);
-        activity.runOnUiThread(() -> activity.startActivity(intent));
+        CompletableFuture<Integer> f = new CompletableFuture<>();
+        CompletableFuture<Integer> prev = adding;
+        adding = f;
+        if (prev != null) prev.complete(-1);
+        activity.runOnUiThread(() -> activity.startActivityForResult(intent, ADD_NETWORK));
+        Integer code = f.get(30, TimeUnit.MINUTES);
+        if (code == null || code < 0) return "cancelled";
+        if (code == Settings.ADD_WIFI_RESULT_ADD_OR_UPDATE_FAILED) {
+            throw new IllegalStateException("Android could not save this network.");
+        }
+        setConnect(id, "direct"); // Android owns it now: stop suggesting it, so its Forget works
+        return code == Settings.ADD_WIFI_RESULT_ALREADY_EXISTS ? "exists" : "saved";
+    }
+
+    /** The Save-network popup's result, routed from MainActivity. Returns false for other request codes. */
+    boolean onResult(int requestCode, int resultCode, Intent data) {
+        if (requestCode != ADD_NETWORK) return false;
+        CompletableFuture<Integer> f = adding;
+        adding = null;
+        if (f == null) return true;
+        if (resultCode != Activity.RESULT_OK) {
+            f.complete(-1);
+            return true;
+        }
+        int code = Settings.ADD_WIFI_RESULT_SUCCESS; // some builds return OK without the per-network list
+        List<Integer> codes = data == null ? null
+                : data.getIntegerArrayListExtra(Settings.EXTRA_WIFI_NETWORK_RESULT_LIST);
+        if (codes != null && !codes.isEmpty() && codes.get(0) != null) code = codes.get(0);
+        f.complete(code);
+        return true;
+    }
+
+    /**
+     * Sets how this device joins one network: "meshdrop" (an app suggestion, pinned when band-locked),
+     * "direct" (Android's own saved copy; MeshDrop suggests nothing) or "off". Device-local: it does not
+     * bump the sync timestamp and is never sent to the user's other devices.
+     */
+    synchronized Map<String, Object> setConnect(String id, String mode) throws IOException {
+        if (!"meshdrop".equals(mode) && !"direct".equals(mode) && !"off".equals(mode)) {
+            throw new IllegalArgumentException("Unknown connect mode: " + mode);
+        }
+        List<WifiProfile> all = store.load();
+        WifiProfile p = require(all, id);
+        p.connect = mode;
+        store.save(all);
+        Map<String, Object> out = apply(java.util.Collections.emptyList());
+        out.put("profile", p.toView());
+        return out;
     }
 
     /**
@@ -392,7 +451,11 @@ final class WifiControl {
     /** Every stored profile as a full map, secrets included: this travels only the pinned TLS mesh link. */
     private List<Object> exportAll() {
         List<Object> out = new ArrayList<>();
-        for (WifiProfile p : store.load()) out.add(p.toMap());
+        for (WifiProfile p : store.load()) {
+            Map<String, Object> m = p.toMap();
+            m.remove("connect"); // how this device joins is its own choice, not synced
+            out.add(m);
+        }
         return out;
     }
 
@@ -413,6 +476,7 @@ final class WifiControl {
             if (!(it instanceof Map)) continue;
             WifiProfile in = WifiProfile.fromMap((Map<?, ?>) it);
             if (in.id == null || in.id.isEmpty() || in.ssid == null) continue;
+            in.connect = null; // device-local: a network new to this device starts with no mode of its own
             WifiProfile cur = byId.get(in.id);
             long inStamp = Math.max(in.updatedAt, in.deletedAt);
             long curStamp = cur == null ? -1 : Math.max(cur.updatedAt, cur.deletedAt);
@@ -429,7 +493,7 @@ final class WifiControl {
         if (changed > 0) {
             all.removeIf(p -> p.deleted() && now - p.deletedAt > TOMBSTONE_TTL_MS); // prune old tombstones
             store.save(all);
-            reapply(); // re-register only the band-locked networks after a sync; normal ones are joined manually
+            reapply(); // re-register the "through MeshDrop" networks after a sync
         }
         return changed;
     }
@@ -529,13 +593,13 @@ final class WifiControl {
         boolean canLock = Build.VERSION.SDK_INT >= Build.VERSION_CODES.R;
         for (WifiProfile p : all) {
             if (p.deleted()) continue; // a tombstoned network is not suggested
-            if (p.lockBssid == null) continue; // only a band-locked network is connected through the app; the rest are joined manually
+            if (!"meshdrop".equals(p.connectMode())) continue; // only "through MeshDrop" networks are suggested; "direct" ones Android owns
             if (ids != null && !ids.isEmpty() && !ids.contains(p.id)) continue;
             WifiNetworkSuggestion primary = build(p, p.lockBssid, p.priority);
             if (primary == null) continue;
             suggestions.add(primary);
             profiles++;
-            if (p.fallback && p.lockBssid != null && canLock) {
+            if (p.fallback && p.lockBssid != null && canLock) { // a pinned network may roam to any AP as a backup
                 WifiNetworkSuggestion backup = build(p, null, Math.max(0, p.priority - 1));
                 if (backup != null) suggestions.add(backup);
             }

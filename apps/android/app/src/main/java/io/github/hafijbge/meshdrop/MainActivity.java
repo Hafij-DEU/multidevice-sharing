@@ -145,7 +145,9 @@ public final class MainActivity extends Activity {
 
     @Override
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
-        if (!pickers.onResult(requestCode, resultCode, data)) super.onActivityResult(requestCode, resultCode, data);
+        if (pickers.onResult(requestCode, resultCode, data)) return;
+        if (bridge != null && bridge.onActivityResult(requestCode, resultCode, data)) return;
+        super.onActivityResult(requestCode, resultCode, data);
     }
 
     @Override

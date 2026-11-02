@@ -44,7 +44,7 @@
     'keepAliveAction', 'guestStart', 'guestEnd', 'guestShare', 'guestUnshare', 'guestAccept', 'guestReject', 'linkCreate', 'linkRevoke', 'openFile', 'thumb', 'unpair', 'receivedPin', 'receivedDelete', 'receivedClear', 'syncPut', 'syncRemove', 'syncNow', 'backupSet', 'backupPermission',
     'hotspotStart', 'hotspotJoin', 'hotspotStop',
     'setLang', 'qrShareStatus', 'qrShareSetEnabled', 'qrShareSend', 'qrShareReceive', 'qrShareStop', 'qrShareOpen',
-    'wifiList', 'wifiSave', 'wifiDelete', 'wifiApply', 'wifiForget', 'wifiStatus', 'wifiAskLocation', 'wifiScan', 'wifiLock', 'wifiSyncNow', 'wifiCopy', 'wifiQr', 'wifiAddToSystem', 'wifiShare',
+    'wifiList', 'wifiSave', 'wifiDelete', 'wifiApply', 'wifiForget', 'wifiStatus', 'wifiAskLocation', 'wifiScan', 'wifiLock', 'wifiSyncNow', 'wifiCopy', 'wifiQr', 'wifiAddToSystem', 'wifiSetConnect', 'wifiShare',
   ]) {
     api[m] = call(m);
   }

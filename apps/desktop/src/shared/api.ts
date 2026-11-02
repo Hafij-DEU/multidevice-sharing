@@ -395,7 +395,15 @@ export interface WifiProfileView {
   domainSuffixMatch?: string;
   /** A CA certificate is stored (its contents are never sent to the UI). */
   hasCaCert?: boolean;
+  /**
+   * How this device joins the network (device-local, not synced): 'meshdrop' = MeshDrop's own
+   * suggestion (band lock + fallback; Android hides Forget), 'direct' = saved by Android itself
+   * (Forget works in Settings), null = neither.
+   */
+  connect?: WifiConnectMode | null;
 }
+
+export type WifiConnectMode = 'meshdrop' | 'direct';
 
 /** M1/M3: the fields the Wi-Fi tab sends to add or edit a network. */
 export interface WifiProfileInput {
@@ -625,8 +633,14 @@ export interface DesktopApi {
   wifiCopy?(id: string): Promise<void>;
   /** Returns a Wi-Fi QR (SVG string) for one saved network so another phone can scan it to join. */
   wifiQr?(id: string): Promise<string>;
-  /** Opens Android's own "Save network" dialog for one saved network; on confirm it becomes a real system network (with Android's native Share/QR). */
-  wifiAddToSystem?(id: string): Promise<void>;
+  /**
+   * "Connect directly": opens Android's own Save-network popup for one network, pinned to its band-locked
+   * AP. On Save it becomes a real system network (Forget works in Settings) and MeshDrop stops suggesting it.
+   * Resolves 'saved', 'exists' (Android already had it, pin unchanged) or 'cancelled'.
+   */
+  wifiAddToSystem?(id: string): Promise<'saved' | 'exists' | 'cancelled'>;
+  /** "Connect through MeshDrop" on ('meshdrop') or off ('off') for one network, on this device only. */
+  wifiSetConnect?(id: string, mode: 'meshdrop' | 'off'): Promise<WifiApplyResult & { profile: WifiProfileView }>;
   /** Opens Android's share sheet with one saved network's details (SSID, password, scannable payload) for any app. */
   wifiShare?(id: string): Promise<void>;
 }

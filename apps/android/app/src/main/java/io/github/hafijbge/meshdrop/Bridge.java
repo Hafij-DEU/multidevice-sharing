@@ -45,6 +45,11 @@ public final class Bridge {
         trusted = url != null && url.startsWith(WebUi.ORIGIN + "/");
     }
 
+    /** Activity results this bridge owns (Android's Save-network popup); false when not ours. */
+    boolean onActivityResult(int requestCode, int resultCode, android.content.Intent data) {
+        return wifiControl.onResult(requestCode, resultCode, data);
+    }
+
     void destroy() {
         core.controller.removeStateListener(stateListener); // the process outlives this window
         web = null;
@@ -208,9 +213,10 @@ public final class Bridge {
                 return null;
             case "wifiQr": // returns a Wi-Fi QR (SVG) for one saved network so another phone can scan to join
                 return wifiControl.qr((String) args.get(0));
-            case "wifiAddToSystem": // opens Android's own Save-network dialog so the network becomes a real system one
-                wifiControl.addToSystem((String) args.get(0));
-                return null;
+            case "wifiAddToSystem": // "connect directly": Android's own Save-network popup; returns saved/exists/cancelled
+                return wifiControl.addToSystem((String) args.get(0));
+            case "wifiSetConnect": // "connect through MeshDrop" on/off for one network, this device only
+                return wifiControl.setConnect((String) args.get(0), (String) args.get(1));
             case "wifiShare": // opens Android's share sheet with the network's details for any app
                 wifiControl.share((String) args.get(0));
                 return null;

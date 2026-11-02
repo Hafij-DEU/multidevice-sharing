@@ -307,6 +307,20 @@ function EnterpriseEditor({ draft, run, onSaved, onCancel }: { draft: EntDraft; 
 function ProfileCard({ p, run, onEdit, onChanged, connected }: { p: WifiProfileView; run: Run; onEdit: () => void; onChanged: () => void; connected?: boolean }) {
   const [confirm, setConfirm] = useState(false);
   const [qr, setQr] = useState<string | null>(null);
+
+  // Two ways to join: MeshDrop's own suggestion (band lock + fallback, but Android hides Forget), or
+  // Android's Save popup (a real system network: Forget works in Settings, pinned to the locked AP).
+  const viaMeshDrop = () =>
+    void run(() => api.wifiSetConnect!(p.id, 'meshdrop'), t('MeshDrop now connects {ssid}', { ssid: p.ssid })).then(onChanged);
+  const stopMeshDrop = () =>
+    void run(() => api.wifiSetConnect!(p.id, 'off'), t('MeshDrop no longer connects {ssid}', { ssid: p.ssid })).then(onChanged);
+  const direct = () =>
+    void run(async () => {
+      const r = await api.wifiAddToSystem!(p.id);
+      if (r === 'saved') return t("{ssid} is saved in Android. Forget it in Android's Wi-Fi settings any time.", { ssid: p.ssid });
+      if (r === 'exists') return t("Android already had {ssid} saved, so its settings did not change. To apply the pin, forget it in Android's Wi-Fi settings, then tap Connect directly again.", { ssid: p.ssid });
+      return undefined; // cancelled: nothing changed
+    }).then(onChanged);
   return (
     <section className="wifi-profile" data-ssid={p.ssid}>
       <div className="row space">
@@ -330,10 +344,27 @@ function ProfileCard({ p, run, onEdit, onChanged, connected }: { p: WifiProfileV
           {p.enterprise && p.identity ? ` · ${p.identity}` : ''}
           {p.hidden ? ` · ${t('hidden')}` : ''}
         </span>
+      </div>
+      {api.wifiSetConnect && (
+        <p className="muted hint" data-connect={p.connect ?? 'none'}>
+          {p.connect === 'meshdrop'
+            ? t("Connects through MeshDrop. Android hides Forget for it; use Stop connecting through MeshDrop here instead.")
+            : p.connect === 'direct'
+              ? t("Saved in Android. Forget it in Android's Wi-Fi settings.")
+              : t('Not connected by MeshDrop.')}
+        </p>
+      )}
+      <div className="row space">
         <span className="row">
+          {api.wifiSetConnect &&
+            (p.connect === 'meshdrop' ? (
+              <button onClick={stopMeshDrop}>{t('Stop connecting through MeshDrop')}</button>
+            ) : (
+              <button onClick={viaMeshDrop}>{t('Connect through MeshDrop')}</button>
+            ))}
           {api.wifiAddToSystem && !p.enterprise && (
-            <button onClick={() => void run(() => api.wifiAddToSystem!(p.id), t('Opening Android to save and connect…'))}>
-              {t('Connect')}
+            <button className={p.connect === 'direct' ? '' : 'primary'} onClick={direct}>
+              {t('Connect directly')}
             </button>
           )}
           {api.wifiCopy && p.hasPassword && !p.enterprise && (
@@ -434,9 +465,15 @@ function BandLockRow({ p, run, onChanged }: { p: WifiProfileView; run: Run; onCh
           )}
         </ul>
       )}
-      <label className="toggle">
-        <input type="checkbox" checked={p.fallback} disabled={!p.lockBssid} onChange={(e) => toggleFallback(e.target.checked)} /> {t('Still join on another band when this access point is out of range')}
-      </label>
+      {p.connect === 'direct' ? (
+        <p className="muted hint">
+          {t("Saved in Android, so Android keeps the pin it was saved with. To change it, forget the network in Android's Wi-Fi settings, pin here, then tap Connect directly again. Fallback works only through MeshDrop.")}
+        </p>
+      ) : (
+        <label className="toggle">
+          <input type="checkbox" checked={p.fallback} disabled={!p.lockBssid} onChange={(e) => toggleFallback(e.target.checked)} /> {t('Still join on another band when this access point is out of range')}
+        </label>
+      )}
     </section>
   );
 }
@@ -447,7 +484,7 @@ function BandLockSection({ profiles, run, onChanged }: { profiles: WifiProfileVi
   return (
     <section className="wifi-band-lock">
       <div className="banner" role="note">
-        {t("For a band lock to take effect, open Android's own Wi-Fi settings and forget that network there first. A network saved in the system beats MeshDrop's pin, so the system one would win otherwise.")}
+        {t("A pin works two ways. Through MeshDrop: forget the network in Android's Wi-Fi settings first, because a network saved in the system beats MeshDrop's pin. Directly: tap Connect directly on the saved network and Android saves it with the pin.")}
       </div>
       <p className="muted hint">
         {t('Pin a saved network to one access point so your device cannot drop to a slower band. Scan, then pick the 5 GHz (or 6 GHz) access point you want. Pinning needs Android 11 or newer.')}
@@ -631,7 +668,7 @@ export function Wifi({ state: _state, run }: { state: AppState; run: Run }) {
       </div>
       <p className="muted hint">
         {canEdit
-          ? t('Saved networks are stored and synced to your own trusted devices, passwords included, over the encrypted link. To join one, use Copy password or Show QR and connect from Android; only a band-locked network is connected by MeshDrop itself. Sync now pulls in networks you added on another device; Remove suggestions clears the band-lock connections MeshDrop registered (your saved networks stay).')
+          ? t("Saved networks are stored and synced to your own trusted devices, passwords included, over the encrypted link. Connect through MeshDrop keeps the band lock and fallback, but Android hides Forget for it, so stop it here. Connect directly saves the network in Android with the pin, and you forget it in Android's Wi-Fi settings. How each device connects stays on that device. Remove suggestions clears every connection MeshDrop registered (your saved networks stay).")
           : t('These networks sync from your phone over the encrypted link, passwords included. To join one here, use Copy password or Show QR and connect from your system Wi-Fi settings — MeshDrop does not connect for you. Sync now pulls in the latest from your other devices.')}
       </p>
       </>

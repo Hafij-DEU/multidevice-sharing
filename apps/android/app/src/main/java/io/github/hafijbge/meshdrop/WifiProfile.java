@@ -33,6 +33,11 @@ final class WifiProfile {
     /** Delete tombstone (M5): when the user removed this network, so the delete syncs to their other
      *  devices instead of the network reappearing from one that still has it. 0 while the network is live. */
     long deletedAt;
+    /** How this device joins the network, kept on this device only (never synced): "meshdrop" = an app
+     *  suggestion (band lock and fallback work, but Android hides Forget for it), "direct" = saved by
+     *  Android itself through its Save popup (Forget works in Settings, survives removing MeshDrop), or
+     *  "off" or null for neither (a pinned profile from before this setting still counts as "meshdrop"). */
+    String connect;
 
     // ---- M3: 802.1X / eduroam (only used when security == "enterprise") --------------------------
     /** EAP method: "peap", "ttls", "tls" or "pwd". */
@@ -54,6 +59,13 @@ final class WifiProfile {
 
     boolean isEnterprise() {
         return "enterprise".equals(security);
+    }
+
+    /** The effective mode: "meshdrop", "direct" or null. A pinned profile saved before this setting
+     *  existed keeps working the way it did, through a MeshDrop suggestion. */
+    String connectMode() {
+        if (connect != null) return "off".equals(connect) ? null : connect;
+        return lockBssid != null ? "meshdrop" : null;
     }
 
     /** True once the user deleted this network: kept as a tombstone only so the delete can sync. */
@@ -83,6 +95,7 @@ final class WifiProfile {
         m.put("caCertPem", caCertPem);
         m.put("domainSuffixMatch", domainSuffixMatch);
         m.put("eapXml", eapXml);
+        m.put("connect", connect);
         return m;
     }
 
@@ -108,6 +121,7 @@ final class WifiProfile {
         p.caCertPem = m.get("caCertPem") == null ? "" : str(m.get("caCertPem"));
         p.domainSuffixMatch = m.get("domainSuffixMatch") == null ? "" : str(m.get("domainSuffixMatch"));
         p.eapXml = str(m.get("eapXml"));
+        p.connect = str(m.get("connect"));
         return p;
     }
 
@@ -125,6 +139,7 @@ final class WifiProfile {
         m.put("priority", (long) priority);
         m.put("updatedAt", updatedAt);
         m.put("enterprise", isEnterprise());
+        m.put("connect", connectMode());
         if (isEnterprise()) {
             m.put("eapMethod", eapMethod);
             m.put("phase2", phase2);
