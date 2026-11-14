@@ -24,7 +24,11 @@ class Radio implements BtPlatform {
   away = false;
   quietNow = false;
   connectedCb: ((address: string) => void) | null = null;
-  constructor(readonly air: Air, readonly address: string) {
+  readonly air: Air;
+  readonly address: string;
+  constructor(air: Air, address: string) {
+    this.air = air;
+    this.address = address;
     air.radios.set(address, this);
   }
   async bonded() {
