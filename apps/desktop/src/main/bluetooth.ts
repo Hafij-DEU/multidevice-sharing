@@ -105,6 +105,9 @@ export function bluezPlatform(opts: BluezOptions): BluezPlatform {
     scanning = on;
     onScanning?.(on);
   };
+  // whether this PC plays sound to Bluetooth headphones or a speaker now (BtPlatform.quiet)
+  let busy = false;
+  let onConnected: ((address: string) => void) | null = null;
   const pending = new Map<number, Pending>();
 
   const fail = (e: Error) => {
@@ -130,7 +133,7 @@ export function bluezPlatform(opts: BluezOptions): BluezPlatform {
   };
 
   const onLine = (line: string, ready: (e?: Error) => void) => {
-    let m: { ready?: boolean; error?: string; id?: number; bonded?: BtBonded[]; ok?: boolean; audio?: BtAudioSource[]; scanning?: boolean };
+    let m: { ready?: boolean; error?: string; id?: number; bonded?: BtBonded[]; ok?: boolean; audio?: BtAudioSource[]; scanning?: boolean; busy?: boolean; connected?: string };
     try {
       m = JSON.parse(line) as typeof m;
     } catch {
@@ -140,6 +143,8 @@ export function bluezPlatform(opts: BluezOptions): BluezPlatform {
       if (m.ready) ready();
       else if (m.error) ready(new Error(m.error));
       else if (typeof m.scanning === 'boolean') setScanning(m.scanning);
+      else if (typeof m.busy === 'boolean') busy = m.busy;
+      else if (typeof m.connected === 'string') onConnected?.(m.connected.toUpperCase());
       else if (Array.isArray(m.audio)) setAudio(m.audio.filter((a) => typeof a?.address === 'string').map((a) => ({ address: a.address.toUpperCase(), name: typeof a.name === 'string' ? a.name : a.address })));
       return;
     }
@@ -268,6 +273,12 @@ export function bluezPlatform(opts: BluezOptions): BluezPlatform {
     },
     onScanning(cb) {
       onScanning = cb;
+    },
+    quiet() {
+      return proc !== null && busy;
+    },
+    onConnected(cb) {
+      onConnected = cb;
     },
     async audioStop(address) {
       await ask<unknown>({ t: 'audio-stop', address }, REPLY_TIMEOUT_MS);

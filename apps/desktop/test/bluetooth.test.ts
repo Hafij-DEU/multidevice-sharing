@@ -74,6 +74,22 @@ describe('bluezPlatform (M14)', () => {
     expect(seen).toEqual([true, false]); // stopped: no search known any more
   });
 
+  it('is quiet while this PC plays sound to Bluetooth headphones, and reports paired devices that connect', async () => {
+    const bt = bluezPlatform({ script: FAKE });
+    const connected: string[] = [];
+    bt.onConnected!((a) => connected.push(a));
+    expect(bt.quiet!()).toBe(false);
+    await bt.listen(() => undefined);
+    try {
+      await until(() => connected.length === 1);
+      expect(connected).toEqual(['EE:EE:EE:EE:EE:EE']);
+      expect(bt.quiet!()).toBe(true);
+    } finally {
+      bt.stop();
+    }
+    expect(bt.quiet!()).toBe(false); // stopped: nothing known any more
+  });
+
   it('holdA2dp connects a phone\'s Bluetooth audio for the sound, and drops it after only if it connected it', async () => {
     const calls: string[] = [];
     const bt = {

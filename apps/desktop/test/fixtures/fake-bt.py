@@ -3,7 +3,8 @@
 # Dials to "AA:AA:AA:AA:AA:AA" connect and echo; others fail. The first "bonded" request also opens
 # an incoming connection from "CC:CC:CC:CC:CC:CC" that says "hi". "DD:DD:DD:DD:DD:DD" plays its sound here
 # as Bluetooth audio until an "audio-stop" for it; an "audio-start" makes that address play here. The
-# adapter searches for devices from the start.
+# adapter searches for devices from the start. This PC plays sound to Bluetooth headphones from the
+# start (busy), and the paired phone "EE:EE:EE:EE:EE:EE" connects once.
 import json
 import socket
 import sys
@@ -36,6 +37,8 @@ def echo(u):
 out({"ready": True})
 out({"audio": [{"address": "DD:DD:DD:DD:DD:DD", "name": "Phone"}]})
 out({"scanning": True})
+out({"busy": True})
+out({"connected": "ee:ee:ee:ee:ee:ee"})
 for line in sys.stdin:
     req = json.loads(line)
     if req["t"] == "bonded":

@@ -18,6 +18,17 @@ export interface BtPlatform {
   /** Starts accepting; `onConn` gets every authenticated incoming connection. */
   listen(onConn: (conn: Duplex, address: string) => void): Promise<void>;
   stop(): void;
+  /**
+   * True while this device plays sound to Bluetooth headphones or a speaker. Paging a device that is
+   * away holds the radio for seconds; on some adapters (Intel AX201) that stalls the sound and then
+   * drops the headset. Background dials wait meanwhile; a dial the user asks for still runs.
+   */
+  quiet?(): boolean;
+  /**
+   * `cb` hears every paired MeshDrop device that connects to this one over Bluetooth (any profile).
+   * The radio link is up then, so a dial costs no paging, and a device in backoff is dialled at once.
+   */
+  onConnected?(cb: (address: string) => void): void;
 }
 
 /** Per device: Auto (LAN, else Bluetooth, else hub), Wi-Fi only, or Bluetooth only. */
@@ -51,14 +62,24 @@ export interface BtLinksOptions {
   onLan: (deviceId: string) => boolean;
   /** bt-peers.json (address -> deviceId), or undefined to keep the map in memory only. */
   file?: string;
-  /** Dial backoff per device (default 10 s doubling to 2 min). */
+  /**
+   * Dial backoff per device (default 10 s doubling to 15 min). The upper bound is also how often an
+   * unmapped paired device is probed. Each dial of a device that is away pages it for seconds, so a
+   * short bound keeps the radio busy all day for a phone that is off; a device that comes back dials
+   * this one itself, or shows up through `onConnected`.
+   */
   backoffMs?: [number, number];
+  /** Wait after `onConnected` before dialling, so a link the other side is opening can land first (default 3 s). */
+  connectedDelayMs?: number;
   /** An idle link to a device back on the LAN closes after this long (default 60 s). */
   idleMs?: number;
   /** Background policy pass interval (default 10 s); 0: only on tick(). */
   tickMs?: number;
   pingMs?: number;
 }
+
+/** 10 s doubling to 15 min (see BtLinksOptions.backoffMs). */
+export const DEFAULT_BACKOFF_MS: [number, number] = [10_000, 15 * 60_000];
 
 interface DialState { failures: number; lastFail: number; inflight?: Promise<BtLink | undefined> }
 
@@ -96,6 +117,10 @@ export class BtLinks extends EventEmitter {
 
   async start(): Promise<void> {
     await this.#o.platform.listen((conn, address) => this.#adopt(conn, address, false));
+    this.#o.platform.onConnected?.((address) => {
+      const t = setTimeout(() => void this.#connected(address), this.#o.connectedDelayMs ?? 3000);
+      t.unref();
+    });
     const every = this.#o.tickMs ?? 10_000;
     if (every > 0) {
       this.#timer = setInterval(() => void this.tick(), every);
@@ -177,7 +202,9 @@ export class BtLinks extends EventEmitter {
       this.#lanSince.set(id, since);
       if (l.streams === 0 && now - since >= idleMs && now - l.lastActive >= idleMs) l.close();
     }
-    const want = this.#o.trustedIds().filter((id) => !this.link(id) && (this.mode(id) === 'bt' || (this.mode(id) === 'auto' && !this.#o.onLan(id))));
+    // Sound to Bluetooth headphones: no paging now (see BtPlatform.quiet). Backoff state stays as it is.
+    if (this.#o.platform.quiet?.()) return;
+    const want = this.#o.trustedIds().filter((id) => this.#wants(id));
     if (want.length === 0) return;
     const jobs: Promise<unknown>[] = [];
     for (const id of want) {
@@ -190,8 +217,30 @@ export class BtLinks extends EventEmitter {
     await Promise.allSettled(jobs);
   }
 
+  /** Whether the policy wants a link to the device that is not up. */
+  #wants(id: string): boolean {
+    return !this.link(id) && (this.mode(id) === 'bt' || (this.mode(id) === 'auto' && !this.#o.onLan(id)));
+  }
+
+  /** A paired device connected to this one: dial it now (no paging needed), backoff or not. */
+  async #connected(address: string): Promise<void> {
+    if (this.#stopped || !this.#policy.bluetooth) return;
+    const a = address.toUpperCase();
+    const id = this.deviceOf(a);
+    if (!id) {
+      // not mapped yet: learn who it is now instead of at the next probe
+      this.#probed.delete(a);
+      await this.#dialAddress(a);
+      return;
+    }
+    if (!this.#o.isTrusted(id) || !this.#wants(id)) return;
+    const st = this.#dials.get(id);
+    if (st && !st.inflight) st.failures = 0;
+    await this.#dial(id);
+  }
+
   #backoff(failures: number): number {
-    const [lo, hi] = this.#o.backoffMs ?? [10_000, 120_000];
+    const [lo, hi] = this.#o.backoffMs ?? DEFAULT_BACKOFF_MS;
     return Math.min(hi, lo * 2 ** Math.max(0, failures - 1));
   }
 
@@ -202,7 +251,7 @@ export class BtLinks extends EventEmitter {
     } catch {
       return;
     }
-    const every = (this.#o.backoffMs ?? [10_000, 120_000])[1];
+    const every = (this.#o.backoffMs ?? DEFAULT_BACKOFF_MS)[1];
     for (const b of bonded) {
       if (this.#addrs.has(b.address) || now - (this.#probed.get(b.address) ?? 0) < every) continue;
       this.#probed.set(b.address, now);

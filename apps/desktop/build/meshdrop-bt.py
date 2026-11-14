@@ -17,6 +17,10 @@
 #                                            audio (A2DP), at start and on every change
 #   {"scanning":true}                        whether this PC searches for Bluetooth devices (an
 #                                            adapter's Discovering), at start and on every change
+#   {"busy":true}                            whether this PC plays sound to Bluetooth headphones or
+#                                            a speaker (an A2DP source transport), at start and on
+#                                            every change; MeshDrop pages no device meanwhile
+#   {"connected":"AA:..."}                   a paired phone or computer connected (any profile)
 # Each connection opens the unix socket and starts with one JSON line, {"address":"AA:...","dial":2}
 # ("dial" only for a connection this helper dialled), then carries the RFCOMM bytes both ways.
 # Stops when stdin closes.
@@ -65,6 +69,7 @@ dialing = {}
 conns = {}
 last_audio = None
 last_scanning = None
+last_busy = None
 
 
 def out(obj):
@@ -152,6 +157,11 @@ def objects():
     return r.unpack()[0]
 
 
+def meshdrop_kind(d):
+    # a device that offers MeshDrop, or a phone/computer that may (headphones never)
+    return UUID in [u.lower() for u in d.get("UUIDs", [])] or d.get("Icon", "").split("-")[0] in KINDS
+
+
 def bonded(req):
     try:
         found = []
@@ -159,7 +169,7 @@ def bonded(req):
             d = ifaces.get("org.bluez.Device1")
             if not d or not (d.get("Paired") or d.get("Bonded")):
                 continue
-            if UUID not in [u.lower() for u in d.get("UUIDs", [])] and d.get("Icon", "").split("-")[0] not in KINDS:
+            if not meshdrop_kind(d):
                 continue
             found.append({"address": d.get("Address", address_of(path)), "name": d.get("Alias") or d.get("Name") or d.get("Address", "")})
         out({"id": req["id"], "bonded": found})
@@ -201,13 +211,17 @@ def dial(req):
 
 
 def report_audio(*_args):
-    global last_audio
+    global last_audio, last_busy
     try:
         objs = objects()
     except GLib.Error:
         return
     found = {}
+    busy = False
     for t in (i.get("org.bluez.MediaTransport1") for i in objs.values()):
+        if t and t.get("UUID", "").lower() == A2DP_SOURCE:
+            # this PC sends sound to headphones or a speaker: paging now would stall it
+            busy = True
         if not t or t.get("UUID", "").lower() != A2DP_SINK:
             continue
         dev = t.get("Device", "")
@@ -218,6 +232,22 @@ def report_audio(*_args):
     if audio != last_audio:
         last_audio = audio
         out({"audio": audio})
+    if busy != last_busy:
+        last_busy = busy
+        out({"busy": busy})
+
+
+def on_device_changed(_conn, _sender, path, _iface, _signal, params):
+    # PropertiesChanged(interface, changed, invalidated) on a Device1
+    iface, changed, _inv = params.unpack()
+    if iface != "org.bluez.Device1" or changed.get("Connected") is not True:
+        return
+    try:
+        d = objects().get(path, {}).get("org.bluez.Device1", {})
+    except GLib.Error:
+        return
+    if (d.get("Paired") or d.get("Bonded")) and meshdrop_kind(d):
+        out({"connected": d.get("Address", address_of(path))})
 
 
 def report_scanning(*_args):
@@ -297,6 +327,8 @@ def main():
     bus.signal_subscribe("org.bluez", "org.freedesktop.DBus.Properties", "PropertiesChanged", None, "org.bluez.Adapter1",
                          Gio.DBusSignalFlags.NONE, report_scanning)
     report_scanning()
+    bus.signal_subscribe("org.bluez", "org.freedesktop.DBus.Properties", "PropertiesChanged", None, "org.bluez.Device1",
+                         Gio.DBusSignalFlags.NONE, on_device_changed)
     threading.Thread(target=read_stdin, daemon=True).start()
     loop.run()
     try:
