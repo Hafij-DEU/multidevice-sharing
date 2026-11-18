@@ -18,18 +18,16 @@ import { Handoff } from './pages/Handoff.tsx';
 import { About, Settings } from './pages/Settings.tsx';
 import { Sync } from './pages/Sync.tsx';
 import { Transfers } from './pages/Transfers.tsx';
-import { Wifi } from './pages/Wifi.tsx';
 import { QrShare } from './pages/QrShare.tsx';
 
 /** Home (every feature one tap away), Send, Received; the rarer pages live under More. */
 type Tab = 'Home' | 'Send' | 'Received' | 'More';
-const MORE = ['Remote', 'Continue', 'Watch party', 'Wi-Fi', 'Share to Xiaomi', 'Devices', 'Sync', 'Guests', 'Mesh', 'Transfers', 'Settings', 'About'] as const;
+const MORE = ['Remote', 'Continue', 'Watch party', 'Share to Xiaomi', 'Devices', 'Sync', 'Guests', 'Mesh', 'Transfers', 'Settings', 'About'] as const;
 type Sub = (typeof MORE)[number];
 const ICON: Record<Sub, string> = {
   Remote: 'M7 3h10v18H7zM12 17h.01M10 7h4M9 11h6',
   'Watch party': 'M3 5h18v12H3zM8 21h8M10 9l5 3-5 3z',
   Continue: 'M4 6h10v12H4zM17 9h3v9h-6M14 12h6M17 9l3 3-3 3',
-  'Wi-Fi': 'M5 12.5a10 10 0 0 1 14 0M8 15.5a6 6 0 0 1 8 0M12 19h.01',
   'Share to Xiaomi': 'M4 8h14M14 4l4 4-4 4M20 16H6M10 12l-4 4 4 4',
   Sync: 'M4 12a8 8 0 0 1 14-5.3M20 4v4h-4M20 12a8 8 0 0 1-14 5.3M4 20v-4h4',
   Devices: 'M4 5h10v14H4zM16 9h4v10h-4M8 16h2',
@@ -44,7 +42,6 @@ const SUB_NAME: Record<Sub, string> = {
   Remote: mark('Remote'),
   Continue: mark('Continue'),
   'Watch party': mark('Watch party'),
-  'Wi-Fi': mark('Wi-Fi'),
   'Share to Xiaomi': mark('Share to Xiaomi'),
   Devices: mark('Devices'),
   Sync: mark('Sync'),
@@ -58,7 +55,6 @@ const MORE_HINT: Record<Sub, string> = {
   Remote: mark('Touchpad, keyboard, slides and media for your PC; find a device; notifications'),
   'Watch party': mark('Watch YouTube or any video together, in step: share a 6-character code'),
   Continue: mark('Carry on with a page on another device, at the same spot'),
-  'Wi-Fi': mark('Save your own networks, lock to a band, add eduroam / 802.1X'),
   'Share to Xiaomi': mark('Send to and receive from Xiaomi phones (ShareMe)'),
   Devices: mark('Paired devices: unpair, or pair again'),
   Sync: mark('Keep one folder the same on your devices; phone photo backup'),
@@ -253,8 +249,6 @@ export function App() {
       !(p === 'Guests' && !state?.guest) &&
       !(p === 'Sync' && !state?.sync) &&
       !(p === 'Watch party' && !window.meshdrop.watchCreate) &&
-      // The desktop has no wifiSave (it is view-only) but still shows the synced networks.
-      !(p === 'Wi-Fi' && !window.meshdrop.wifiList) &&
       !(p === 'Share to Xiaomi' && !window.meshdrop.qrShareStatus),
   );
   const status = !state
@@ -388,8 +382,6 @@ export function App() {
               <Handoff state={state} run={run} />
             ) : sub === 'Watch party' ? (
               <WatchParty state={state} run={run} />
-            ) : sub === 'Wi-Fi' ? (
-              <Wifi state={state} run={run} />
             ) : sub === 'Share to Xiaomi' ? (
               <QrShare state={state} run={run} />
             ) : sub === 'Devices' ? (
