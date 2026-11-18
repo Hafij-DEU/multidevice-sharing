@@ -161,6 +161,25 @@ describe('folder sync', () => {
     A.e.syncPut({ name: 'Two', folder: join(A.folder, '..', 'Elsewhere'), partners: [] });
     expect(() => A.e.syncPut({ name: 'Shared', folder: join(A.folder, '..', 'Elsewhere'), partners: [] }, 'Two')).toThrow(/already called/);
   }, 30_000);
+
+  it('a partner that is no longer paired drops out, so ticking others still works', async () => {
+    const A = await mk('alpha');
+    const B = await mk('beta');
+    const C = await mk('gamma');
+    await A.e.pairManual('127.0.0.1', B.e.port, 'beta');
+    await A.e.pairManual('127.0.0.1', C.e.port, 'gamma');
+    const b = B.e.identity.deviceId;
+    const c = C.e.identity.deviceId;
+    await A.e.unpair(b);
+    // What a mesh revoke leaves behind: the folder still lists b, which is no longer trusted.
+    mkdirSync(join(A.folder, '..', 'sync'), { recursive: true });
+    writeFileSync(join(A.folder, '..', 'sync', 'config.json'), JSON.stringify({ folders: [{ name: 'Shared', folder: A.folder, partners: [b] }] }));
+    A.e.syncPut({ name: 'Shared', folder: A.folder, partners: [b, c] }); // the page sends every saved partner back
+    expect(A.e.syncConfig().folders[0]!.partners).toEqual([c]);
+    A.e.syncPut({ name: 'Shared', folder: A.folder, partners: [] });
+    expect(A.e.syncConfig().folders[0]!.partners).toEqual([]);
+    expect(() => A.e.syncPut({ name: 'Shared', folder: A.folder, partners: [b] })).toThrow(); // a new tick of an unknown device still fails
+  }, 30_000);
 });
 
 describe('several folders', () => {

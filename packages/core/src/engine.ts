@@ -2012,7 +2012,11 @@ export class Engine extends EventEmitter {
     if (others.some((f) => overlaps(resolve(f.folder)))) throw new Error('That folder is inside (or holds) another synced folder.');
     if (others.length >= MAX_SYNC_FOLDERS) throw new Error(`At most ${MAX_SYNC_FOLDERS} synced folders.`);
     mkdirSync(folder, { recursive: true });
-    const partners = [...new Set(c.partners.map((q) => this.resolveDeviceId(q)))];
+    // A saved partner that is no longer paired (revoked, or paired again under a new id) drops out
+    // instead of failing every later change of this folder.
+    const saved = cfg.folders.find((f) => f.name === (previousName ?? name))?.partners ?? [];
+    const trusted = new Set(this.trustedIds());
+    const partners = [...new Set(c.partners.filter((q) => trusted.has(q) || !saved.includes(q)).map((q) => this.resolveDeviceId(q)))];
     const entry: SyncFolderConfig = { name, folder, partners };
     const at = cfg.folders.findIndex((f) => f.name === (previousName ?? name));
     const folders = [...cfg.folders];

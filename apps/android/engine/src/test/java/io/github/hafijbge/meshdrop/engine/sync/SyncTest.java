@@ -4,6 +4,7 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.fail;
 
 import io.github.hafijbge.meshdrop.engine.Engine;
 import io.github.hafijbge.meshdrop.engine.EngineConfig;
@@ -35,7 +36,10 @@ public class SyncTest {
     }
 
     private Engine engine(String alias) throws Exception {
-        File home = tmp.newFolder();
+        return engine(alias, tmp.newFolder());
+    }
+
+    private Engine engine(String alias, File home) throws Exception {
         EngineConfig c = new EngineConfig(home, new PlainKeyVault(), new DirectorySink(new File(home, "inbox")));
         c.port = 0;
         c.guestPort = -1;
@@ -190,6 +194,32 @@ public class SyncTest {
         b.syncRemove("Paperwork");
         assertTrue(b.syncFolders().isEmpty());
         assertEquals("cv", read(docsB, "cv.txt"));
+    }
+
+    @Test
+    public void aPartnerNoLongerPairedDropsOutSoTickingOthersStillWorks() throws Exception {
+        File home = tmp.newFolder();
+        Engine a = engine("alpha", home);
+        Engine b = engine("beta");
+        Engine c = engine("gamma");
+        a.pairManual("127.0.0.1", b.port(), "beta");
+        a.pairManual("127.0.0.1", c.port(), "gamma");
+        String ib = b.identity().deviceId(), ic = c.identity().deviceId();
+        File docs = tmp.newFolder("Docs");
+        a.syncPut("Docs", docs.getPath(), Collections.singletonList(ib), null);
+        a.unpair(ib);
+        // What a mesh revoke leaves behind: the folder still lists b, which is no longer trusted.
+        Files.write(new File(home, "sync/config.json").toPath(), ("{\"folders\":[{\"name\":\"Docs\",\"folder\":\"" + docs.getPath() + "\",\"partners\":[\"" + ib + "\"]}]}").getBytes(StandardCharsets.UTF_8));
+        a.syncPut("Docs", docs.getPath(), Arrays.asList(ib, ic), null); // the page sends every saved partner back
+        assertEquals(Collections.singletonList(ic), a.syncFolders().get(0).partners);
+        a.syncPut("Docs", docs.getPath(), Collections.<String>emptyList(), null);
+        assertTrue(a.syncFolders().get(0).partners.isEmpty());
+        try {
+            a.syncPut("Docs", docs.getPath(), Collections.singletonList(ib), null); // a new tick of an unknown device still fails
+            fail("unknown device accepted");
+        } catch (RuntimeException expected) {
+            // ok
+        }
     }
 
     @Test

@@ -748,8 +748,13 @@ public final class Engine {
         }
         if (at < 0 && next.size() >= io.github.hafijbge.meshdrop.engine.sync.SyncState.MAX_FOLDERS) throw new IllegalArgumentException("At most " + io.github.hafijbge.meshdrop.engine.sync.SyncState.MAX_FOLDERS + " synced folders.");
         io.github.hafijbge.meshdrop.engine.sync.SyncFolder opened = cfg.syncFolders.open(f);
+        // A saved partner that is no longer paired (revoked, or paired again under a new id) drops out
+        // instead of failing every later change of this folder.
+        List<String> saved = at >= 0 ? next.get(at).partners : new ArrayList<String>();
+        List<String> trusted = trustedIds();
         List<String> ids = new ArrayList<>();
         for (String q : partners) {
+            if (saved.contains(q) && !trusted.contains(q)) continue;
             String id = resolveDeviceId(q);
             if (!ids.contains(id)) ids.add(id);
         }
