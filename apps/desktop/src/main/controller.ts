@@ -42,7 +42,7 @@ export interface Platform {
   /** A copied image: a cheap key that changes with the picture, and its PNG bytes on demand. */
   readClipboardImage?(): ClipImage | null | Promise<ClipImage | null>;
   /** Puts received files on the clipboard: one image as an image, otherwise as copied files. */
-  writeClipboardFiles?(paths: string[]): void;
+  writeClipboardFiles?(paths: string[]): void | Promise<void>;
   openPath(p: string): Promise<void>;
   revealPath(p: string): void;
   /** A small preview of an image or video as a data: URL, or null when there is none. */
@@ -832,15 +832,17 @@ export class AppController extends EventEmitter {
         if (s.notifications) this.#platform.notify(t('Printing'), ev.files.length === 1 ? t('1 file from {name}', { name: alias }) : t('{n} files from {name}', { n: ev.files.length, name: alias }));
       } else if (s.notifications) this.#platform.notify(t('Not printed'), t('{name} asked to print; printing from devices is off in Settings.', { name: alias }));
     }
-    // Clipboard text is only ever placed on the clipboard: never opened, run or interpreted.
-    if (ev.clipboard && ev.text !== undefined && s.clipboardReceive) {
+    // Clipboard text, and a plain text send (no files, not burn-after-reading), goes on the clipboard
+    // so it can be pasted at once: only ever placed there, never opened, run or interpreted.
+    const plainText = !ev.clipboard && !ev.clipboardFiles && ev.text !== undefined && ev.files.length === 0 && !ev.burn;
+    if ((ev.clipboard || plainText) && ev.text !== undefined && s.clipboardReceive) {
       this.#platform.writeClipboard(ev.text);
       this.#clipGen++;
       this.#lastClip = `t:${ev.text}`; // shared clipboard: do not send it straight back
     }
     // Copied files / an image: saved in the inbox like any file, and put on the clipboard (never opened).
     if (ev.clipboardFiles && ev.files.length > 0 && s.clipboardReceive && this.#platform.writeClipboardFiles) {
-      this.#platform.writeClipboardFiles([...ev.files]);
+      await this.#platform.writeClipboardFiles([...ev.files]);
       const gen = ++this.#clipGen;
       const sig = (await this.#clipNow())?.sig;
       if (gen === this.#clipGen) this.#lastClip = sig;
@@ -862,6 +864,10 @@ export class AppController extends EventEmitter {
       : n === 1 ? (msg ? t('1 file received with a message') : t('1 file received'))
       : msg ? t('{n} files received with a message', { n }) : t('{n} files received', { n });
     const first = ev.files[0];
+    if (plainText && s.clipboardReceive) {
+      this.#platform.notify(t('Copied text from {name}', { name: alias }), body);
+      return;
+    }
     if (ev.backup) {
       this.#platform.notify(t('Photo backup from {name}', { name: alias }), n === 1 ? t('1 photo or video saved') : t('{n} photos or videos saved', { n }), first !== undefined ? () => this.#platform.revealPath(first) : undefined);
       return;

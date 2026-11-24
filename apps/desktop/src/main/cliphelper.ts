@@ -3,7 +3,10 @@
 // a slow or stuck owner froze MeshDrop's main thread, timers and sockets with it, for seconds.
 // The helper is this same app started with MESHDROP_CLIP_HELPER=<its profile dir> and no windows; it answers one
 // JSON line per request on stdout. A read it does not answer in time gets it killed, never waited on.
-import { app, clipboard, type NativeImage } from 'electron';
+// Writes go through it too: on GNOME Wayland an unfocused window cannot set the clipboard (the write is
+// silently dropped), while the helper's X11 (XWayland) clipboard reaches every app, and GNOME keeps a
+// copy of it after the helper exits.
+import { app, clipboard, nativeImage, type NativeImage } from 'electron';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { mkdirSync } from 'node:fs';
@@ -12,32 +15,55 @@ import { createInterface } from 'node:readline';
 
 export const CLIP_HELPER_ENV = 'MESHDROP_CLIP_HELPER';
 
-export type ClipOp = { op: 'text' } | { op: 'buffer'; format: string } | { op: 'image' } | { op: 'png'; key: string };
+export type ClipOp =
+  | { op: 'text' }
+  | { op: 'buffer'; format: string }
+  | { op: 'image' }
+  | { op: 'png'; key: string }
+  | { op: 'writeText'; text: string }
+  | { op: 'writeImage'; path: string }
+  | { op: 'writeBuffer'; format: string; data: string };
 
-/** Runs in the helper: answers clipboard reads until stdin closes. */
+/** The image last returned by an 'image' read (its PNG is asked for next). */
+let last: { key: string; img: NativeImage } | null = null;
+
+/** Runs in the helper: one request against its own clipboard. */
+export function answerClip(req: ClipOp): unknown {
+  switch (req.op) {
+    case 'text':
+      return clipboard.readText();
+    case 'buffer':
+      return clipboard.readBuffer(req.format).toString('base64');
+    case 'image': {
+      if (!clipboard.availableFormats().some((f) => f.startsWith('image/'))) return null;
+      const img = clipboard.readImage();
+      if (img.isEmpty()) return null;
+      last = { key: createHash('sha1').update(img.toBitmap()).digest('hex'), img };
+      return last.key;
+    }
+    case 'png':
+      return last?.key === req.key ? last.img.toPNG().toString('base64') : null;
+    case 'writeText':
+      clipboard.writeText(req.text);
+      return true;
+    case 'writeImage': {
+      const img = nativeImage.createFromPath(req.path);
+      if (img.isEmpty()) return false;
+      clipboard.writeImage(img);
+      return true;
+    }
+    case 'writeBuffer':
+      clipboard.writeBuffer(req.format, Buffer.from(req.data, 'base64'));
+      return true;
+  }
+}
+
+/** Runs in the helper: answers clipboard requests until stdin closes. */
 export function runClipHelper(profile: string): void {
   mkdirSync(profile, { recursive: true, mode: 0o700 });
   app.setPath('userData', profile); // never the app's own Chromium profile
   app.disableHardwareAcceleration();
   app.on('window-all-closed', () => {});
-  let last: { key: string; img: NativeImage } | null = null;
-  const answer = (req: ClipOp): unknown => {
-    switch (req.op) {
-      case 'text':
-        return clipboard.readText();
-      case 'buffer':
-        return clipboard.readBuffer(req.format).toString('base64');
-      case 'image': {
-        if (!clipboard.availableFormats().some((f) => f.startsWith('image/'))) return null;
-        const img = clipboard.readImage();
-        if (img.isEmpty()) return null;
-        last = { key: createHash('sha1').update(img.toBitmap()).digest('hex'), img };
-        return last.key;
-      }
-      case 'png':
-        return last?.key === req.key ? last.img.toPNG().toString('base64') : null;
-    }
-  };
   void app.whenReady().then(() => {
     const rl = createInterface({ input: process.stdin });
     rl.on('line', (line) => {
@@ -45,7 +71,7 @@ export function runClipHelper(profile: string): void {
       try {
         const req = JSON.parse(line) as ClipOp & { id: number };
         id = req.id;
-        process.stdout.write(`${JSON.stringify({ id, ok: answer(req) })}\n`);
+        process.stdout.write(`${JSON.stringify({ id, ok: answerClip(req) })}\n`);
       } catch (x) {
         process.stdout.write(`${JSON.stringify({ id, err: x instanceof Error ? x.message : String(x) })}\n`);
       }
@@ -70,7 +96,7 @@ function helperSwitches(argv: string[], env: NodeJS.ProcessEnv, platform: NodeJS
 }
 
 /**
- * Main-process side: clipboard reads that never block this thread. Each read resolves within
+ * Main-process side: clipboard reads (and writes) that never block this thread. Each read resolves within
  * `timeoutMs` or rejects; a helper that misses it is killed (it is stuck in the owner's wait)
  * and the next read after `backoffMs` starts a fresh one. A helper that never answers at all
  * (3 starts that died) makes the reader unusable: the caller then reads in-process as before.
@@ -128,6 +154,20 @@ export class ClipReader {
     const b64 = (await this.#ask({ op: 'png', key })) as string | null;
     if (b64 === null) throw new Error('The copied image changed.');
     return Buffer.from(b64, 'base64');
+  }
+
+  /** Puts text on the clipboard (from the helper: see the top of this file). */
+  writeText(text: string): Promise<unknown> {
+    return this.#ask({ op: 'writeText', text });
+  }
+
+  /** Puts the image file at `path` on the clipboard; false when it does not load as an image. */
+  writeImage(path: string): Promise<unknown> {
+    return this.#ask({ op: 'writeImage', path });
+  }
+
+  writeBuffer(format: string, data: Buffer): Promise<unknown> {
+    return this.#ask({ op: 'writeBuffer', format, data: data.toString('base64') });
   }
 
   close(): void {

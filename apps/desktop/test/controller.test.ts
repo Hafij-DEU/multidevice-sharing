@@ -164,6 +164,23 @@ describe('AppController', () => {
     expect(C.c.state().received[0]).toMatchObject({ text: 'secret clip $(rm -rf ~)', clipboard: true });
   });
 
+  it('puts received plain text on the clipboard too (not a file message or a burn-after-reading text)', async () => {
+    const A = await make('a');
+    const B = await make('b');
+    await pair(A.c, B.c);
+    const bId = B.c.state().self.deviceId;
+    await A.c.send([bId], [{ kind: 'text', text: 'note from the phone' }]);
+    await until(() => B.c.state().received.length === 1);
+    expect(B.p.clip).toEqual(['note from the phone']);
+    expect(B.p.notes.at(-1)?.title).toBe('Copied text from ay');
+    const file = join(tmpDir(), 'f.txt');
+    writeFileSync(file, 'x');
+    await A.c.send([bId], [{ kind: 'file', path: file }, { kind: 'text', text: 'with a file' }]);
+    await A.c.send([bId], [{ kind: 'text', text: 'read once' }], { burn: true });
+    await until(() => B.c.state().received.length === 3);
+    expect(B.p.clip).toEqual(['note from the phone']);
+  });
+
   it('ignores a stale listen.pid (even with a live pid) and runs client-only next to a verified listener', async () => {
     const dead = spawnSync(process.execPath, ['-e', '0']).pid!;
     const h1 = tmpDir();

@@ -3,8 +3,17 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-vi.mock('electron', () => ({ app: {}, clipboard: {} }));
-const { ClipReader } = await import('../src/main/cliphelper.ts');
+const cb = vi.hoisted(() => ({ writes: [] as unknown[][] }));
+vi.mock('electron', () => ({
+  app: {},
+  clipboard: {
+    writeText: (t: string) => void cb.writes.push(['text', t]),
+    writeImage: (i: { path: string }) => void cb.writes.push(['image', i.path]),
+    writeBuffer: (f: string, b: Buffer) => void cb.writes.push(['buffer', f, b.toString()]),
+  },
+  nativeImage: { createFromPath: (path: string) => ({ path, isEmpty: () => !path.endsWith('.png') }) },
+}));
+const { ClipReader, answerClip } = await import('../src/main/cliphelper.ts');
 
 // Stands in for the Electron helper: same line protocol. Format 'hang' blocks it for good (a clipboard
 // owner that does not reply), 'die' exits; the helper's pid is the answer to 'text'.
@@ -17,6 +26,7 @@ rl.on('line', (line) => {
   const req = JSON.parse(line);
   if (stuck || (req.op === 'buffer' && req.format === 'hang')) return void (stuck = true);
   if (req.op === 'buffer' && req.format === 'die') process.exit(3);
+  if (req.op.startsWith('write')) return void process.stdout.write(JSON.stringify({ id: req.id, ok: req.op + ':' + (req.text ?? req.path ?? req.format + '=' + req.data) }) + '\\n');
   const ok = req.op === 'text' ? String(process.pid) : req.op === 'buffer' ? Buffer.from(req.format).toString('base64') : req.op === 'image' ? 'k1' : req.key === 'k1' ? Buffer.from('PNG').toString('base64') : null;
   process.stdout.write('chromium says hi\\n' + JSON.stringify({ id: req.id, ok }) + '\\n');
 });
@@ -191,5 +201,23 @@ describe('clipboard reads in a helper process', () => {
     const r = new ClipReader({ exe: '/nonexistent/meshdrop', args: [], profile: tmpdir() }, 2000, 0);
     readers.push(r);
     await expect(r.text()).rejects.toThrow(/could not start|exited/);
+  });
+
+  it('writes go through the helper too: on GNOME Wayland an unfocused window cannot set the clipboard', async () => {
+    const r = reader();
+    await expect(r.writeText('hi')).resolves.toBe('writeText:hi');
+    await expect(r.writeImage('/x/a.png')).resolves.toBe('writeImage:/x/a.png');
+    await expect(r.writeBuffer('x-special/gnome-copied-files', Buffer.from('copy'))).resolves.toBe(`writeBuffer:x-special/gnome-copied-files=${Buffer.from('copy').toString('base64')}`);
+  });
+});
+
+describe('the helper side', () => {
+  it('puts text, an image or a buffer on its (X11) clipboard; an image that does not load is not written', () => {
+    cb.writes.length = 0;
+    expect(answerClip({ op: 'writeText', text: 'note' })).toBe(true);
+    expect(answerClip({ op: 'writeImage', path: '/in/cat.png' })).toBe(true);
+    expect(answerClip({ op: 'writeImage', path: '/in/broken.jpg' })).toBe(false);
+    expect(answerClip({ op: 'writeBuffer', format: 'text/uri-list', data: Buffer.from('file:///a').toString('base64') })).toBe(true);
+    expect(cb.writes).toEqual([['text', 'note'], ['image', '/in/cat.png'], ['buffer', 'text/uri-list', 'file:///a']]);
   });
 });

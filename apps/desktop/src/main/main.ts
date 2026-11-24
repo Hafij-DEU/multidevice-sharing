@@ -179,7 +179,12 @@ const platform: Platform = {
     n.on('click', onClick ?? showMain); // a plain notification opens MeshDrop ("open MeshDrop to accept")
     n.show();
   },
-  writeClipboard: (text) => clipboard.writeText(text),
+  // Linux: through the helper's X11 clipboard (cliphelper.ts), since GNOME Wayland drops a write
+  // from MeshDrop while its window is not focused; in-process if the helper cannot do it.
+  writeClipboard: (text) => {
+    if (clipReader?.usable) void clipReader.writeText(text).catch(() => clipboard.writeText(text));
+    else clipboard.writeText(text);
+  },
   readClipboard: () => (clipReader?.usable ? clipReader.text() : clipboard.readText()),
   readClipboardFiles: async () => {
     if (WIN) {
@@ -219,7 +224,16 @@ const platform: Platform = {
     if (img.isEmpty()) return null;
     return { key: createHash('sha1').update(img.toBitmap()).digest('hex'), png: () => img.toPNG() };
   },
-  writeClipboardFiles: (paths) => {
+  writeClipboardFiles: async (paths) => {
+    if (clipReader?.usable) {
+      try {
+        if (paths.length === 1 && IMAGE_EXT.test(paths[0]!) && (await clipReader.writeImage(paths[0]!)) === true) return;
+        await clipReader.writeBuffer('x-special/gnome-copied-files', Buffer.from(['copy', ...paths.map((p) => pathToFileURL(p).href)].join('\n')));
+        return;
+      } catch {
+        /* the helper failed: write in-process below */
+      }
+    }
     if (paths.length === 1 && IMAGE_EXT.test(paths[0]!)) {
       const img = nativeImage.createFromPath(paths[0]!);
       if (!img.isEmpty()) {
